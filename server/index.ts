@@ -229,6 +229,69 @@ export function createServer() {
     }
   });
 
+  app.get("/api/adb/devices", async (_req, res) => {
+    try {
+      const py = spawn("adb", ["devices"], { stdio: ["pipe", "pipe", "pipe"] });
+      let out = "";
+      let responded = false;
+      py.stdout.on("data", (data) => (out += data.toString()));
+      py.on("close", () => {
+        if (responded) return;
+        responded = true;
+        const devices = out
+          .trim()
+          .split("\n")
+          .slice(1)
+          .map((line) => line.trim().split("\t"))
+          .filter(([id, state]) => Boolean(id) && state === "device")
+          .map(([id]) => id);
+        res.json({ success: true, devices });
+      });
+      py.on("error", (error) => {
+        if (responded) return;
+        responded = true;
+        res.status(503).json({ success: false, error: error.message, devices: [] });
+      });
+    } catch (error) {
+      res.status(503).json({ success: false, error: String(error), devices: [] });
+    }
+  });
+
+  app.get("/api/adb/capture", async (req, res) => {
+    const deviceId = String(req.query.deviceId || "");
+    if (!/^[A-Za-z0-9._:-]+$/.test(deviceId)) {
+      return res.status(400).json({ success: false, error: "A connected deviceId is required" });
+    }
+    try {
+      const py = spawn("adb", ["-s", deviceId, "exec-out", "screencap", "-p"], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      const chunks: Buffer[] = [];
+      let errorOutput = "";
+      let responded = false;
+      py.stdout.on("data", (data) => chunks.push(Buffer.from(data)));
+      py.stderr.on("data", (data) => (errorOutput += data.toString()));
+      py.on("close", (code) => {
+        if (responded) return;
+        responded = true;
+        if (code !== 0 || chunks.length === 0) {
+          return res.status(502).json({ success: false, error: errorOutput || "ADB capture failed" });
+        }
+        const imageData = `data:image/png;base64,${Buffer.concat(chunks).toString("base64")}`;
+        lastSyncedFrame = imageData;
+        lastSyncedTimestamp = Date.now();
+        res.json({ success: true, imageData, timestamp: lastSyncedTimestamp, source: "adb" });
+      });
+      py.on("error", (error) => {
+        if (responded) return;
+        responded = true;
+        res.status(503).json({ success: false, error: error.message });
+      });
+    } catch (error) {
+      res.status(503).json({ success: false, error: String(error) });
+    }
+  });
+
   return app;
 }
 

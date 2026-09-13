@@ -2142,7 +2142,12 @@ export default function Dashboard({
           </TabsContent>
           <TabsContent value="pack-builder" className="space-y-6">
             <ScreenshotPackBuilderStudio
-              currentLiveScreenshot={aiLiveUrl || screenshotUrl}
+              currentLiveScreenshot={activeCanvasUrl || aiLiveUrl || screenshotUrl}
+              frozenLiveSnapshot={frozenLiveSnapshot}
+              targetDevice={targetDevice}
+              deviceId={selectedAdbDevice}
+              isLive={isLiveDesktopActive}
+              onStatusChange={setWifiStatus}
             />
           </TabsContent>
           <TabsContent value="capture" className="space-y-6">

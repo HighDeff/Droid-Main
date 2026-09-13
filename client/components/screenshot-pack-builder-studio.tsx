@@ -46,6 +46,7 @@ export interface ActionFrame {
   screenshotUrl: string;
   action:
     | "click"
+    | "right_click"
     | "double_click"
     | "type"
     | "drag"
@@ -72,11 +73,23 @@ export interface AutomationPack {
 
 interface ScreenshotPackBuilderStudioProps {
   currentLiveScreenshot?: string;
+  frozenLiveSnapshot?: string | null;
+  targetDevice?: "desktop" | "android";
+  deviceId?: string | null;
+  isLive?: boolean;
+  onStatusChange?: (status: string) => void;
 }
 
 export const ScreenshotPackBuilderStudio: React.FC<
   ScreenshotPackBuilderStudioProps
-> = ({ currentLiveScreenshot }) => {
+> = ({
+  currentLiveScreenshot,
+  frozenLiveSnapshot,
+  targetDevice: targetDeviceProp = "desktop",
+  deviceId,
+  isLive = false,
+  onStatusChange,
+}) => {
   const [packName, setPackName] = useState("User_Authentication_Action_Pack");
   const [targetApp, setTargetApp] = useState("Web Portal / Desktop Client");
   const [frames, setFrames] = useState<ActionFrame[]>([
@@ -85,6 +98,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
       frameIndex: 1,
       title: "Frame 1: Focus Username Input Field",
       screenshotUrl:
+        currentLiveScreenshot ||
         "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=60",
       action: "click",
       targetCoords: { x: 420, y: 360 },
@@ -125,12 +139,25 @@ export const ScreenshotPackBuilderStudio: React.FC<
   const [statusLog, setStatusLog] = useState<string>(
     "Pack Builder ready. Click on image to position AI action targets.",
   );
-  const [targetDevice, setTargetDevice] = useState<"desktop" | "android">(
-    "desktop",
-  );
+  const targetDevice = targetDeviceProp;
   const [isAggressiveTrying, setIsAggressiveTrying] = useState<boolean>(true);
   const [improvementExplanation, setImprovementExplanation] =
     useState<string>("");
+
+  React.useEffect(() => {
+    if (currentLiveScreenshot && selectedFrameId === "f_1") {
+      setFrames((prev) =>
+        prev.map((frame) =>
+          frame.id === "f_1" ? { ...frame, screenshotUrl: currentLiveScreenshot } : frame,
+        ),
+      );
+    }
+  }, [currentLiveScreenshot, selectedFrameId]);
+
+  const updateStatus = (status: string) => {
+    setStatusLog(status);
+    onStatusChange?.(status);
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectedFrame =
@@ -214,10 +241,37 @@ export const ScreenshotPackBuilderStudio: React.FC<
   };
 
   const handleAggressiveRetry = async () => {
-    setStatusLog(
-      `⚡ Aggressive Trying Mode: Dispatching with ±10px differential on ${targetDevice.toUpperCase()}...`,
+    updateStatus(
+      `⚡ Retrying ${targetDevice.toUpperCase()} with adaptive AI recovery...`,
     );
-    await handleExecuteOnLiveScreen();
+    try {
+      const response = await fetch("/api/ai/adaptive-retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stepId: selectedFrame.id,
+          actionType: selectedFrame.action,
+          targetName: selectedFrame.title,
+          currentX: selectedFrame.targetCoords.x,
+          currentY: selectedFrame.targetCoords.y,
+          textPayload: selectedFrame.payloadText,
+        }),
+      });
+      const result = await response.json();
+      if (result.newCoordinates) {
+        setFrames((prev) =>
+          prev.map((frame) =>
+            frame.id === selectedFrameId
+              ? { ...frame, targetCoords: result.newCoordinates }
+              : frame,
+          ),
+        );
+      }
+      updateStatus(result.strategyRationale || "AI recovery target recalibrated.");
+      await handleExecuteOnLiveScreen();
+    } catch {
+      updateStatus("AI recovery failed; action was not simulated.");
+    }
   };
 
   // Snap Live Screenshot as a new Frame
@@ -244,6 +298,21 @@ export const ScreenshotPackBuilderStudio: React.FC<
     );
   };
 
+  const handleCanvasContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = Math.round(((e.clientX - rect.left) / rect.width) * 1920);
+    const y = Math.round(((e.clientY - rect.top) / rect.height) * 1080);
+    setFrames((prev) =>
+      prev.map((frame) =>
+        frame.id === selectedFrameId
+          ? { ...frame, targetCoords: { x, y }, action: "right_click" }
+          : frame,
+      ),
+    );
+    updateStatus(`Right-click action target set at (${x}, ${y}).`);
+  };
+
   // Re-pin target on click
   const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -255,41 +324,57 @@ export const ScreenshotPackBuilderStudio: React.FC<
         f.id === selectedFrameId ? { ...f, targetCoords: { x, y } } : f,
       ),
     );
-    setStatusLog(
+    updateStatus(
       `Updated Frame #${selectedFrame.frameIndex} AI action target to (${x}, ${y})`,
     );
   };
 
-  // Play Step-by-Step Demonstration
-  const handlePlayDemonstration = () => {
+  // Replay each pack frame as a real sequential device action.
+  const handlePlayDemonstration = async () => {
+    if (isPlayingDemonstration) return;
     setIsPlayingDemonstration(true);
     setActivePlayFrame(0);
-    setStatusLog("⚡ Demonstrating recorded AI Action Pack execution...");
-
-    let idx = 0;
-    const timer = setInterval(() => {
-      if (idx >= frames.length) {
-        clearInterval(timer);
-        setIsPlayingDemonstration(false);
-        setStatusLog(
-          `✓ Finished full demonstration of "${packName}" (${frames.length} frames executed).`,
-        );
-        return;
+    updateStatus(`Executing "${packName}" on ${targetDevice}...`);
+    try {
+      for (let idx = 0; idx < frames.length; idx += 1) {
+        const frame = frames[idx];
+        setSelectedFrameId(frame.id);
+        setActivePlayFrame(idx + 1);
+        updateStatus(`Executing ${idx + 1}/${frames.length}: ${frame.title}`);
+        const response = await fetch("/api/execute-task", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            targetDevice,
+            deviceId,
+            task: {
+              id: `pack_${Date.now()}_${idx}`,
+              name: frame.title,
+              description: frame.expectedOutcome,
+              action: frame.action === "type" ? "type_text" : frame.action,
+              targetPosition: frame.targetCoords,
+              textPayload: frame.payloadText,
+              delayMs: frame.dwellMs,
+            },
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || `Frame ${idx + 1} failed`);
+        }
       }
-      const fr = frames[idx];
-      setSelectedFrameId(fr.id);
-      setActivePlayFrame(idx + 1);
-      setStatusLog(
-        `[Demonstration Frame ${idx + 1}/${frames.length}] AI executing ${fr.action.toUpperCase()} at (${fr.targetCoords.x}, ${fr.targetCoords.y}). Expected: ${fr.expectedOutcome}`,
-      );
-      idx++;
-    }, 1300);
+      updateStatus(`Completed ${frames.length} real actions on ${targetDevice}.`);
+    } catch (error) {
+      updateStatus(`Pack stopped: ${error instanceof Error ? error.message : "device action failed"}`);
+    } finally {
+      setIsPlayingDemonstration(false);
+    }
   };
 
   // Dispatch Action on Live Screen via PyAutoGUI
   const handleExecuteOnLiveScreen = async () => {
-    setStatusLog(
-      `⚡ Dispatching "${selectedFrame.action.toUpperCase()}" at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}) to Live OS...`,
+    updateStatus(
+      `⚡ Dispatching "${selectedFrame.action.toUpperCase()}" at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}) to ${targetDevice}...`,
     );
     try {
       const res = await fetch("/api/execute-task", {
@@ -297,28 +382,28 @@ export const ScreenshotPackBuilderStudio: React.FC<
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           targetDevice,
+          deviceId,
           aggressiveRetry: isAggressiveTrying,
           task: {
             id: `pack_act_${Date.now()}`,
             name: selectedFrame.title,
             description: selectedFrame.expectedOutcome,
-            action: selectedFrame.action,
+            action: selectedFrame.action === "type" ? "type_text" : selectedFrame.action,
             targetPosition: selectedFrame.targetCoords,
             textPayload: selectedFrame.payloadText,
           },
         }),
       });
       const data = await res.json();
-      if (data.success) {
-        setStatusLog(
-          `✓ Action executed successfully on live OS at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}).`,
-        );
-      } else {
-        setStatusLog(`✓ Dispatched action opcode to motor agent.`);
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Device rejected the action");
       }
+      updateStatus(
+        `✓ Action executed on ${targetDevice} at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}).`,
+      );
     } catch (err) {
-      setStatusLog(
-        `✓ Simulated motor execution at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}).`,
+      updateStatus(
+        `Device execution failed: ${err instanceof Error ? err.message : "unknown error"}`,
       );
     }
   };
@@ -534,6 +619,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
             <CardContent className="p-4">
               <div
                 onClick={handleCanvasClick}
+                onContextMenu={handleCanvasContextMenu}
                 className="relative w-full aspect-video bg-slate-950 rounded-xl border border-slate-800 overflow-hidden cursor-crosshair group"
               >
                 <img
@@ -583,6 +669,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
                   {(
                     [
                       "click",
+                      "right_click",
                       "double_click",
                       "type",
                       "drag",

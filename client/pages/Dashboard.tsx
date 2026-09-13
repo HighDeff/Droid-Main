@@ -130,6 +130,7 @@ import { AutoActorEngineStudio } from "@/components/auto-actor-engine-studio";
 import { DraggableDualAiOverlay } from "@/components/draggable-dual-ai-overlay";
 import { DescriptionRefiner } from "@/components/DescriptionRefiner";
 import { AutonomousWorkflowLearnerPanel } from "@/components/autonomous-workflow-learner-panel";
+import { TabContextualSettingsBar } from "@/components/tab-contextual-settings-bar";
 export default function Dashboard({
   initialTab,
 }: { initialTab?: string } = {}) {

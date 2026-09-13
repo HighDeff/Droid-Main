@@ -2606,7 +2606,185 @@ export default function Dashboard({
               </CardContent>
             </Card>
           </TabsContent>
-          <TabsContent value="collab" className="space-y-4">
+          <TabsContent value="collab" className="space-y-4 pb-8">
+            <TabContextualSettingsBar
+              tabType="collab"
+              title="AI Collaboration Controls"
+              badge={isLiveDesktopActive ? "SCREEN LIVE" : "SCREEN IDLE"}
+              settings={[
+                {
+                  id: "movement_mode",
+                  label: "Movement Mode",
+                  type: "select",
+                  value: movementMode,
+                  options: [
+                    { label: "Exact", value: "exact" },
+                    { label: "Variation", value: "variation" },
+                    { label: "Live", value: "live" },
+                  ],
+                  description: "Choose how AI actions move to targets",
+                },
+                {
+                  id: "drift",
+                  label: "Drift Tolerance",
+                  type: "slider",
+                  value: driftPx,
+                  min: 0,
+                  max: 30,
+                  step: 1,
+                  unit: "px",
+                  description: "Allowed movement variation",
+                },
+                {
+                  id: "anti_loop",
+                  label: "Anti-Loop Protection",
+                  type: "switch",
+                  value: antiLoopEnabled,
+                  description: "Freeze repeated visual states",
+                },
+                {
+                  id: "auto_actor",
+                  label: "Auto-Actor Verification",
+                  type: "switch",
+                  value: autoActEnabled,
+                  description: "Verify the target before dispatch",
+                },
+              ]}
+              onSettingChange={(id, value) => {
+                if (id === "movement_mode") setMovementMode(value as typeof movementMode);
+                if (id === "drift") setDriftPx(value as number);
+                if (id === "anti_loop") setAntiLoopEnabled(value as boolean);
+                if (id === "auto_actor") setAutoActEnabled(value as boolean);
+              }}
+              quickActions={[
+                {
+                  label: isLiveDesktopActive ? "Stop Screen Share" : "Share Screen",
+                  action: () => window.dispatchEvent(new CustomEvent("trigger-hud-share")),
+                  variant: isLiveDesktopActive ? "secondary" : "default",
+                },
+                {
+                  label: isRecordMode ? "Stop Recording" : "Record Actions",
+                  action: () => setIsRecordMode((value) => !value),
+                  variant: "secondary",
+                },
+              ]}
+            />
+
+            <AICanvasScreenManager
+              currentLiveScreenshotUrl={screenshotUrl}
+              screenshots={[
+                { id: "live", name: "Current Live Screen", url: screenshotUrl, sourceType: "live" },
+                ...sequence
+                  .filter((s) => (s as any).referenceScreenshotUrl)
+                  .map((s) => ({
+                    id: `step_${s.id}`,
+                    name: `Step #${s.stepNumber}: ${s.name}`,
+                    url: (s as any).referenceScreenshotUrl,
+                    stepNumber: s.stepNumber,
+                    sourceType: "step" as const,
+                  })),
+                ...liveHistory30.slice(0, 8).map((url, idx) => ({
+                  id: `history_${idx}`,
+                  name: `Frame Bank #${idx + 1}`,
+                  url,
+                  sourceType: "strip" as const,
+                })),
+              ]}
+              activeCanvasSourceId={activeCanvasSourceId}
+              onSelectCanvasSource={(sourceId, url) => {
+                setActiveCanvasSourceId(sourceId);
+                setActiveCanvasUrl(url);
+              }}
+              selectedTab={currentTab}
+              onTabChange={handleTabSwitch}
+              onAddSequenceStep={handleAddSequenceStep}
+              show2ndHudOverlay={show2ndHudOverlay}
+              onToggle2ndHudOverlay={setShow2ndHudOverlay}
+              showLiveIn2ndHud={showLiveIn2ndHud}
+              onToggleLiveIn2ndHud={setShowLiveIn2ndHud}
+              autoActEnabled={autoActEnabled}
+              onToggleAutoAct={setAutoActEnabled}
+              activeSequenceStep={sequence[0]}
+              isRecordMode={isRecordMode}
+              liveMouseTrailCount={liveMouseTrail.length}
+            />
+
+            <Card className="bg-slate-900 border-cyan-500/40 shadow-2xl overflow-hidden">
+              <CardHeader className="p-3 bg-slate-950 border-b border-slate-800 flex flex-row items-center justify-between">
+                <CardTitle className="text-xs font-bold text-slate-100">
+                  <Monitor className="w-4 h-4 inline mr-2 text-cyan-400" />
+                  Live Screen Share & AI Targeting
+                </CardTitle>
+                <span className="text-[10px] font-mono text-cyan-300">
+                  {sequence.length} sequence steps • {targetDevice}
+                </span>
+              </CardHeader>
+              <CardContent className="p-2">
+                <LiveScreenHUD
+                  screenshotUrl={activeCanvasUrl || screenshotUrl}
+                  isCapturing={isCapturing}
+                  aiThinking={aiThinking}
+                  entities={[]}
+                  uiElements={perceptionReport?.elements || []}
+                  perceptionFeedback={perceptionReport ? {
+                    x: perceptionReport.feedbackPosition.x,
+                    y: perceptionReport.feedbackPosition.y,
+                    label: perceptionReport.primarySuggestion,
+                  } : null}
+                  verificationBadge={verificationBadge}
+                  recalibrationNotice={recalibrationNotice}
+                  sequence={sequence}
+                  activeStepId={activeStepId}
+                  isRecordMode={isRecordMode}
+                  onAddStep={handleAddSequenceStep}
+                  onRepositionStep={handleRepositionStep}
+                  onSelectStep={setActiveStepId}
+                  onLiveStreamChange={handleHudLiveChange}
+                  showSecondHudOverlay={show2ndHudOverlay}
+                  onToggleSecondHudOverlay={setShow2ndHudOverlay}
+                  secondHudActivePath={secondHudActivePath}
+                  selectedCanvasTitle={activeCanvasSourceId === "live" ? "Current Live Screen" : `Selected Screenshot (${activeCanvasSourceId})`}
+                  selectedTabName={currentTab}
+                  onMouseTrailChange={setLiveMouseTrail}
+                />
+              </CardContent>
+            </Card>
+
+            <ClickSequenceRegister
+              sequence={sequence}
+              activeStepId={activeStepId}
+              isRunning={isSequenceRunning}
+              isRecordMode={isRecordMode}
+              onToggleRecordMode={() => setIsRecordMode((value) => !value)}
+              onRunSequence={handleRunSequence}
+              onStopSequence={handleStopSequence}
+              onResetSequence={() => setSequence((prev) => prev.map((s) => ({ ...s, status: "pending" })))}
+              onAddStep={() => handleAddSequenceStep({ x: 960, y: 540, action: "click", name: `Step ${sequence.length + 1}` })}
+              onUpdateStep={handleUpdateStep}
+              onDeleteStep={handleDeleteStep}
+              onMoveStep={handleMoveStep}
+              onClearSequence={() => setSequence([])}
+              onSelectStep={setActiveStepId}
+            />
+
+            <DualAICopilotPanel
+              perception={perceptionReport}
+              plannerDecision={plannerDecision}
+              isAutonomousRunning={isAutonomousRunning}
+              isAnalyzing={isPerceiving}
+              userObjective={userObjective}
+              loopIntervalMs={loopIntervalMs}
+              onUserObjectiveChange={setUserObjective}
+              onLoopIntervalChange={setLoopIntervalMs}
+              onTriggerDescribe={handleTriggerDescribeScreen}
+              onTriggerPlanAndAct={handleTriggerPlanAndAct}
+              onToggleAutonomousLoop={handleToggleAutonomousLoop}
+              onSelectElementTarget={(x, y, name) => {
+                handleAddSequenceStep(x, y);
+                setAiThinking({ x, y, action: name, confidence: 0.93, isThinking: true, targetLabel: name });
+              }}
+            />
+
             <Card className="bg-gradient-to-r from-cyan-950/40 via-purple-950/40 to-slate-900 border-cyan-700/50 shadow-xl">
               <CardHeader className="p-4 bg-slate-950/60 border-b border-slate-800 flex flex-row items-center justify-between">
                 <CardTitle className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -2677,9 +2855,10 @@ export default function Dashboard({
                             },
                           ]);
                           handleAddSequenceStep({
-                            x: aiThinking?.x || 960,
-                            y: aiThinking?.y || 540,
+                            x: m ? parseInt(m[1]) : 960,
+                            y: m ? parseInt(m[2]) : 540,
                             name: `Collab: ${collabInstruction.slice(0, 24)}`,
+                            action: "click",
                           } as any);
                           setCollabInstruction("");
                         }}

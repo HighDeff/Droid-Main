@@ -49,9 +49,11 @@ export interface ActionFrame {
     | "right_click"
     | "double_click"
     | "type"
+    | "clear_and_type"
     | "tap"
     | "swipe"
     | "drag"
+    | "stream_mouse_route"
     | "scroll"
     | "hotkey"
     | "ocr_verify";
@@ -80,6 +82,7 @@ interface ScreenshotPackBuilderStudioProps {
   deviceId?: string | null;
   isLive?: boolean;
   onStatusChange?: (status: string) => void;
+  liveMouseTrail?: Array<{ x: number; y: number; time: number; isClick?: boolean }>;
 }
 
 export const ScreenshotPackBuilderStudio: React.FC<
@@ -91,6 +94,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
   deviceId,
   isLive = false,
   onStatusChange,
+  liveMouseTrail = [],
 }) => {
   const [packName, setPackName] = useState("User_Authentication_Action_Pack");
   const [targetApp, setTargetApp] = useState("Web Portal / Desktop Client");
@@ -143,6 +147,10 @@ export const ScreenshotPackBuilderStudio: React.FC<
   );
   const targetDevice = targetDeviceProp;
   const [isAggressiveTrying, setIsAggressiveTrying] = useState<boolean>(true);
+  const [isRecordingTrail, setIsRecordingTrail] = useState(false);
+  const [repeatCount, setRepeatCount] = useState(1);
+  const [autoGenerateTyping, setAutoGenerateTyping] = useState(true);
+  const [savedMethodCount, setSavedMethodCount] = useState(0);
   const [improvementExplanation, setImprovementExplanation] =
     useState<string>("");
 
@@ -277,6 +285,38 @@ export const ScreenshotPackBuilderStudio: React.FC<
   };
 
   // Snap Live Screenshot as a new Frame
+  const handleSaveMethod = () => {
+    const methods = JSON.parse(localStorage.getItem("pack_builder_methods") || "[]");
+    methods.unshift({ packName, targetDevice, frames, savedAt: new Date().toISOString() });
+    localStorage.setItem("pack_builder_methods", JSON.stringify(methods.slice(0, 20)));
+    setSavedMethodCount(methods.length);
+    updateStatus(`Saved ${packName} as reenactment method #${methods.length}.`);
+  };
+
+  const handleUseMouseTrail = () => {
+    if (liveMouseTrail.length < 2) {
+      updateStatus("Record at least two mouse points before adding a trail step.");
+      return;
+    }
+    const first = liveMouseTrail[0];
+    const last = liveMouseTrail[liveMouseTrail.length - 1];
+    const newFrame: ActionFrame = {
+      id: `trail_${Date.now()}`,
+      frameIndex: frames.length + 1,
+      title: `Frame ${frames.length + 1}: Recorded Mouse Route`,
+      screenshotUrl: currentLiveScreenshot || "",
+      action: "stream_mouse_route",
+      targetCoords: { x: first.x, y: first.y },
+      dragEndCoords: { x: last.x, y: last.y },
+      expectedOutcome: "Mouse route reaches the target section",
+      verificationGate: "Live screen matches the route destination",
+      dwellMs: 300,
+    };
+    setFrames((prev) => [...prev, newFrame]);
+    setSelectedFrameId(newFrame.id);
+    updateStatus(`Added ${liveMouseTrail.length}-point mouse trail as a replay step.`);
+  };
+
   const handleSnapLiveScreen = () => {
     if (!currentLiveScreenshot) {
       setStatusLog("⚠️ No live screenshot stream available to snap.");
@@ -385,8 +425,10 @@ export const ScreenshotPackBuilderStudio: React.FC<
     setActivePlayFrame(0);
     updateStatus(`Executing "${packName}" on ${targetDevice}...`);
     try {
-      for (let idx = 0; idx < frames.length; idx += 1) {
-        const frame = frames[idx];
+      for (let repeat = 0; repeat < repeatCount; repeat += 1) {
+        updateStatus(`Starting replay ${repeat + 1}/${repeatCount}...`);
+        for (let idx = 0; idx < frames.length; idx += 1) {
+          const frame = frames[idx];
         setSelectedFrameId(frame.id);
         setActivePlayFrame(idx + 1);
         const liveFrame = await captureLiveFrame();
@@ -394,6 +436,22 @@ export const ScreenshotPackBuilderStudio: React.FC<
           prev.map((item) => item.id === frame.id ? { ...item, screenshotUrl: liveFrame } : item),
         );
         const perception = await reviewLiveFrame(frame, liveFrame);
+        let textPayload = frame.payloadText;
+        if ((frame.action === "type" || frame.action === "clear_and_type") && !textPayload && autoGenerateTyping) {
+          updateStatus(`AI inferring the correct input for ${frame.title}...`);
+          const planResponse = await fetch("/api/ai/plan-and-act", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              perceptionReport: perception,
+              userObjective: frame.expectedOutcome,
+              executeImmediately: false,
+            }),
+          });
+          const plan = await planResponse.json();
+          textPayload = plan.decision?.nextAction?.textPayload || plan.decision?.nextAction?.text || "";
+          if (!textPayload) throw new Error(`AI could not infer text for ${frame.title}`);
+        }
         updateStatus(`Executing ${idx + 1}/${frames.length}: ${frame.title}`);
         const response = await fetch("/api/execute-task", {
           method: "POST",
@@ -408,7 +466,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
               action: frame.action === "type" ? "type_text" : frame.action === "tap" ? "click" : frame.action,
               targetPosition: frame.targetCoords,
               dragEndPosition: frame.dragEndCoords,
-              textPayload: frame.payloadText,
+              textPayload,
               delayMs: frame.dwellMs,
               perception,
             },
@@ -431,7 +489,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
               currentX: frame.targetCoords.x,
               currentY: frame.targetCoords.y,
               perception,
-              textPayload: frame.payloadText,
+              textPayload,
             }),
           });
           const retryResult = await retry.json();
@@ -442,8 +500,10 @@ export const ScreenshotPackBuilderStudio: React.FC<
           }
           updateStatus(`AI found a live mismatch and prepared an alternate route for ${frame.title}.`);
         }
+        }
       }
-      updateStatus(`Completed ${frames.length} real actions on ${targetDevice}.`);
+      handleSaveMethod();
+      updateStatus(`Completed ${frames.length} real actions x${repeatCount} on ${targetDevice}. Method saved for reenactment.`);
     } catch (error) {
       updateStatus(`Pack stopped: ${error instanceof Error ? error.message : "device action failed"}`);
     } finally {
@@ -570,6 +630,21 @@ export const ScreenshotPackBuilderStudio: React.FC<
           {
             label: "Upload Screenshot",
             action: () => fileInputRef.current?.click(),
+            variant: "secondary",
+          },
+          {
+            label: isRecordingTrail ? "Stop Mouse Trail" : "Record Mouse Trail",
+            action: () => setIsRecordingTrail((value) => !value),
+            variant: isRecordingTrail ? "default" : "secondary",
+          },
+          {
+            label: "Add Trail Step",
+            action: handleUseMouseTrail,
+            variant: "secondary",
+          },
+          {
+            label: "Save Method",
+            action: handleSaveMethod,
             variant: "secondary",
           },
           {
@@ -742,6 +817,30 @@ export const ScreenshotPackBuilderStudio: React.FC<
             </CardHeader>
 
             <CardContent className="p-4 space-y-3 font-mono text-xs">
+              <div className="flex items-center justify-between rounded border border-slate-800 bg-slate-950 p-2">
+                <span className="text-[10px] text-slate-300">Replay repeats</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={repeatCount}
+                  onChange={(e) => setRepeatCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+                  className="h-7 w-16 text-xs bg-slate-900 border-slate-700"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-[10px] text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={autoGenerateTyping}
+                  onChange={(e) => setAutoGenerateTyping(e.target.checked)}
+                />
+                Let AI infer missing typing text from the live step objective
+              </label>
+              {isRecordingTrail && (
+                <div className="rounded border border-amber-700/60 bg-amber-950/30 p-2 text-[10px] text-amber-200">
+                  Recording {liveMouseTrail.length} live mouse points. Use Add Trail Step when finished.
+                </div>
+              )}
               <div className="space-y-1">
                 <label className="text-[10px] text-slate-300 font-bold">
                   Demonstrated Action:
@@ -756,6 +855,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
                       "type",
                       "swipe",
                       "drag",
+                      "stream_mouse_route",
                       "hotkey",
                       "ocr_verify",
                     ] as const

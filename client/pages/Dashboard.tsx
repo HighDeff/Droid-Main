@@ -2147,6 +2147,7 @@ export default function Dashboard({
               targetDevice={targetDevice}
               deviceId={selectedAdbDevice}
               isLive={isLiveDesktopActive}
+              liveMouseTrail={liveMouseTrail}
               onStatusChange={setWifiStatus}
             />
           </TabsContent>

@@ -8,8 +8,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { lazy, Suspense } from "react";
 import { RouteErrorBoundary } from "@/components/route-error-boundary";
+import Dashboard from "./pages/Dashboard";
 
-const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Automation = lazy(() => import("./pages/automation/index"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const Workspace = lazy(() => import("./pages/Workspace"));

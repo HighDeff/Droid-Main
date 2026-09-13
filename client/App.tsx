@@ -8,8 +8,24 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { lazy, Suspense } from "react";
 import { RouteErrorBoundary } from "@/components/route-error-boundary";
-import Dashboard from "./pages/Dashboard";
 
+const lazyWithRetry = (importer: () => Promise<any>) =>
+  lazy(async () => {
+    try {
+      const module = await importer();
+      sessionStorage.removeItem("dashboard-bundle-retry");
+      return module;
+    } catch (error) {
+      const retryKey = "dashboard-bundle-retry";
+      if (!sessionStorage.getItem(retryKey)) {
+        sessionStorage.setItem(retryKey, "1");
+        window.location.reload();
+      }
+      throw error;
+    }
+  });
+
+const Dashboard = lazyWithRetry(() => import("./pages/Dashboard"));
 const Automation = lazy(() => import("./pages/automation/index"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const Workspace = lazy(() => import("./pages/Workspace"));

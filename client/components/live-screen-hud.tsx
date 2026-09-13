@@ -1319,20 +1319,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     }
   };
 
-  const handleContainerContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    if (draggingStepId) return;
-    if (isRecordMode) {
-      const coords = getNativeCoordinates(e);
-      const stepNumber = sequence.length + 1;
-      setPopoverName(`Step ${stepNumber} (Right Click)`);
-      setPopoverAction("right_click");
-      setPopoverText("");
-      setPopoverDelay(500);
-      setRecordingClickPos(coords);
-    }
-  };
-
   const handleCommitRecordStep = () => {
     if (!recordingClickPos) return;
     const stepNumber = sequence.length + 1;
@@ -1376,7 +1362,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         setDraggingStepId(null);
       }}
       onClick={handleContainerClick}
-      onContextMenu={handleContainerContextMenu}
     >
       <div ref={viewportRef} className="absolute inset-0">
         {/* Native WebRTC Live Real Screen Video Stream */}

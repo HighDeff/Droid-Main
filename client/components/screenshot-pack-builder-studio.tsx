@@ -151,8 +151,29 @@ export const ScreenshotPackBuilderStudio: React.FC<
   const [repeatCount, setRepeatCount] = useState(1);
   const [autoGenerateTyping, setAutoGenerateTyping] = useState(true);
   const [savedMethodCount, setSavedMethodCount] = useState(0);
+  const [savedMethods, setSavedMethods] = useState<AutomationPack[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("pack_builder_methods") || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const [selectedMethodIndex, setSelectedMethodIndex] = useState(0);
   const [improvementExplanation, setImprovementExplanation] =
     useState<string>("");
+
+  React.useEffect(() => {
+    const syncSavedMethods = (event: StorageEvent) => {
+      if (event.key !== "pack_builder_methods") return;
+      try {
+        setSavedMethods(JSON.parse(event.newValue || "[]"));
+      } catch {
+        setSavedMethods([]);
+      }
+    };
+    window.addEventListener("storage", syncSavedMethods);
+    return () => window.removeEventListener("storage", syncSavedMethods);
+  }, []);
 
   React.useEffect(() => {
     if (currentLiveScreenshot && selectedFrameId === "f_1") {
@@ -286,11 +307,36 @@ export const ScreenshotPackBuilderStudio: React.FC<
 
   // Snap Live Screenshot as a new Frame
   const handleSaveMethod = () => {
-    const methods = JSON.parse(localStorage.getItem("pack_builder_methods") || "[]");
-    methods.unshift({ packName, targetDevice, frames, savedAt: new Date().toISOString() });
-    localStorage.setItem("pack_builder_methods", JSON.stringify(methods.slice(0, 20)));
+    const method: AutomationPack = {
+      packName,
+      version: "2.0.0",
+      author: "Master AI Operator",
+      targetApp,
+      frames,
+      createdAt: new Date().toISOString(),
+    };
+    const methods = [method, ...savedMethods].slice(0, 20);
+    localStorage.setItem("pack_builder_methods", JSON.stringify(methods));
+    setSavedMethods(methods);
     setSavedMethodCount(methods.length);
+    setSelectedMethodIndex(0);
     updateStatus(`Saved ${packName} as reenactment method #${methods.length}.`);
+  };
+
+  const handleLoadMethod = (runAfterLoad = false) => {
+    const method = savedMethods[selectedMethodIndex];
+    if (!method) {
+      updateStatus("No saved pack is selected.");
+      return;
+    }
+    setPackName(method.packName);
+    setTargetApp(method.targetApp);
+    setFrames(method.frames);
+    setSelectedFrameId(method.frames[0]?.id || "");
+    updateStatus(`Loaded ${method.packName}. AI will use live review before reenactment.`);
+    if (runAfterLoad) {
+      window.setTimeout(() => handlePlayDemonstration(method.frames), 0);
+    }
   };
 
   const handleUseMouseTrail = () => {
@@ -419,7 +465,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
   };
 
   // Replay each pack frame as a real sequential device action.
-  const handlePlayDemonstration = async () => {
+  const handlePlayDemonstration = async (framesToRun = frames) => {
     if (isPlayingDemonstration) return;
     setIsPlayingDemonstration(true);
     setActivePlayFrame(0);
@@ -427,8 +473,8 @@ export const ScreenshotPackBuilderStudio: React.FC<
     try {
       for (let repeat = 0; repeat < repeatCount; repeat += 1) {
         updateStatus(`Starting replay ${repeat + 1}/${repeatCount}...`);
-        for (let idx = 0; idx < frames.length; idx += 1) {
-          const frame = frames[idx];
+        for (let idx = 0; idx < framesToRun.length; idx += 1) {
+          const frame = framesToRun[idx];
         setSelectedFrameId(frame.id);
         setActivePlayFrame(idx + 1);
         const liveFrame = await captureLiveFrame();
@@ -452,7 +498,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
           textPayload = plan.decision?.nextAction?.textPayload || plan.decision?.nextAction?.text || "";
           if (!textPayload) throw new Error(`AI could not infer text for ${frame.title}`);
         }
-        updateStatus(`Executing ${idx + 1}/${frames.length}: ${frame.title}`);
+        updateStatus(`Executing ${idx + 1}/${framesToRun.length}: ${frame.title}`);
         const response = await fetch("/api/execute-task", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -503,7 +549,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
         }
       }
       handleSaveMethod();
-      updateStatus(`Completed ${frames.length} real actions x${repeatCount} on ${targetDevice}. Method saved for reenactment.`);
+      updateStatus(`Completed ${framesToRun.length} real actions x${repeatCount} on ${targetDevice}. Method saved for reenactment.`);
     } catch (error) {
       updateStatus(`Pack stopped: ${error instanceof Error ? error.message : "device action failed"}`);
     } finally {
@@ -654,6 +700,34 @@ export const ScreenshotPackBuilderStudio: React.FC<
           },
         ]}
       />
+
+      <Card className="bg-slate-900 border-cyan-800/60 shadow-xl">
+        <CardContent className="p-3 flex flex-wrap items-center gap-2 font-mono">
+          <span className="text-xs font-bold text-cyan-300">Saved Reenactment Packs</span>
+          <select
+            value={savedMethods.length ? selectedMethodIndex : ""}
+            onChange={(e) => setSelectedMethodIndex(Number(e.target.value))}
+            className="h-8 min-w-56 rounded border border-slate-700 bg-slate-950 px-2 text-xs text-slate-200"
+          >
+            {savedMethods.length === 0 ? (
+              <option value="">No saved packs yet</option>
+            ) : (
+              savedMethods.map((method, index) => (
+                <option key={`${method.packName}-${method.createdAt}`} value={index}>
+                  {method.packName} • {method.frames.length} steps
+                </option>
+              ))
+            )}
+          </select>
+          <Button size="sm" onClick={() => handleLoadMethod(false)} disabled={!savedMethods.length} className="h-8 text-xs bg-slate-800">
+            <FolderOpen className="w-3.5 h-3.5 mr-1" /> Load Pack
+          </Button>
+          <Button size="sm" onClick={() => handleLoadMethod(true)} disabled={!savedMethods.length || isPlayingDemonstration} className="h-8 text-xs bg-cyan-700 hover:bg-cyan-600">
+            <Play className="w-3.5 h-3.5 mr-1" /> Load & Run with AI
+          </Button>
+          <span className="text-[10px] text-slate-400">{savedMethods.length} saved • {savedMethodCount ? "updated this session" : "local method library"}</span>
+        </CardContent>
+      </Card>
 
       {/* Top Pack Metadata Card */}
       <Card className="bg-slate-900 border-slate-800 shadow-xl">

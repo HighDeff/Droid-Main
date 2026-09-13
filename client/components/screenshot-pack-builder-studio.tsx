@@ -49,6 +49,8 @@ export interface ActionFrame {
     | "right_click"
     | "double_click"
     | "type"
+    | "tap"
+    | "swipe"
     | "drag"
     | "scroll"
     | "hotkey"
@@ -329,6 +331,53 @@ export const ScreenshotPackBuilderStudio: React.FC<
     );
   };
 
+  const captureLiveFrame = async () => {
+    const endpoint = targetDevice === "android"
+      ? `/api/adb/capture?deviceId=${encodeURIComponent(deviceId || "")}`
+      : "/api/capture-screen";
+    const response = await fetch(endpoint);
+    const result = await response.json();
+    if (!response.ok || !result.success || !result.imageData) {
+      throw new Error(result.error || "Live device capture unavailable");
+    }
+    return result.imageData as string;
+  };
+
+  const reviewLiveFrame = async (frame: ActionFrame, imageData: string) => {
+    updateStatus(`AI reviewing the live screen before ${frame.action}...`);
+    const response = await fetch("/api/ai/describe-screen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageData }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || "AI screen review failed");
+    }
+    return result.report;
+  };
+
+  const verifyLiveStep = async (frame: ActionFrame, imageData: string) => {
+    const response = await fetch("/api/ai/verify-step", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        imageData,
+        userObjective: frame.expectedOutcome,
+        step: {
+          id: frame.id,
+          name: frame.title,
+          action: frame.action,
+          x: frame.targetCoords.x,
+          y: frame.targetCoords.y,
+          text: frame.payloadText,
+        },
+      }),
+    });
+    const result = await response.json();
+    return result.success ? result.verification : null;
+  };
+
   // Replay each pack frame as a real sequential device action.
   const handlePlayDemonstration = async () => {
     if (isPlayingDemonstration) return;
@@ -340,6 +389,11 @@ export const ScreenshotPackBuilderStudio: React.FC<
         const frame = frames[idx];
         setSelectedFrameId(frame.id);
         setActivePlayFrame(idx + 1);
+        const liveFrame = await captureLiveFrame();
+        setFrames((prev) =>
+          prev.map((item) => item.id === frame.id ? { ...item, screenshotUrl: liveFrame } : item),
+        );
+        const perception = await reviewLiveFrame(frame, liveFrame);
         updateStatus(`Executing ${idx + 1}/${frames.length}: ${frame.title}`);
         const response = await fetch("/api/execute-task", {
           method: "POST",
@@ -351,16 +405,42 @@ export const ScreenshotPackBuilderStudio: React.FC<
               id: `pack_${Date.now()}_${idx}`,
               name: frame.title,
               description: frame.expectedOutcome,
-              action: frame.action === "type" ? "type_text" : frame.action,
+              action: frame.action === "type" ? "type_text" : frame.action === "tap" ? "click" : frame.action,
               targetPosition: frame.targetCoords,
+              dragEndPosition: frame.dragEndCoords,
               textPayload: frame.payloadText,
               delayMs: frame.dwellMs,
+              perception,
             },
           }),
         });
         const result = await response.json();
         if (!response.ok || !result.success) {
           throw new Error(result.error || `Frame ${idx + 1} failed`);
+        }
+        const afterFrame = await captureLiveFrame();
+        const verification = await verifyLiveStep(frame, afterFrame);
+        if (verification && ["missed", "obstructed", "failed"].includes(verification.status)) {
+          const retry = await fetch("/api/ai/adaptive-retry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              stepId: frame.id,
+              actionType: frame.action,
+              targetName: frame.title,
+              currentX: frame.targetCoords.x,
+              currentY: frame.targetCoords.y,
+              perception,
+              textPayload: frame.payloadText,
+            }),
+          });
+          const retryResult = await retry.json();
+          if (retryResult.newCoordinates) {
+            setFrames((prev) => prev.map((item) => item.id === frame.id
+              ? { ...item, targetCoords: retryResult.newCoordinates }
+              : item));
+          }
+          updateStatus(`AI found a live mismatch and prepared an alternate route for ${frame.title}.`);
         }
       }
       updateStatus(`Completed ${frames.length} real actions on ${targetDevice}.`);
@@ -390,6 +470,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
             description: selectedFrame.expectedOutcome,
             action: selectedFrame.action === "type" ? "type_text" : selectedFrame.action,
             targetPosition: selectedFrame.targetCoords,
+            dragEndPosition: selectedFrame.dragEndCoords,
             textPayload: selectedFrame.payloadText,
           },
         }),
@@ -671,7 +752,9 @@ export const ScreenshotPackBuilderStudio: React.FC<
                       "click",
                       "right_click",
                       "double_click",
+                      "tap",
                       "type",
+                      "swipe",
                       "drag",
                       "hotkey",
                       "ocr_verify",

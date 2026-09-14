@@ -2090,6 +2090,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 fill="#f59e0b"
                 stroke="#ffffff"
                 strokeWidth="1.5"
+                className="animate-ping"
               />
             ) : idx % 6 === 0 ? (
               <circle

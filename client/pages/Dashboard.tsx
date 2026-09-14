@@ -169,6 +169,8 @@ export default function Dashboard({
   const [driftPerStepVariate, setDriftPerStepVariate] = useState(true);
   const [driftRandomInterval, setDriftRandomInterval] = useState(true);
   const [saveScreenshotWithStep, setSaveScreenshotWithStep] = useState(true);
+  const [autoCrossReference, setAutoCrossReference] = useState(true);
+  const [continuousPerception, setContinuousPerception] = useState(true);
   const [collabInstruction, setCollabInstruction] = useState("");
   const [collabChat, setCollabChat] = useState<
     { role: "user" | "ai"; text: string }[]
@@ -478,6 +480,24 @@ export default function Dashboard({
       await new Promise((r) => setTimeout(r, stepDelay));
       if (!sequenceRunningRef.current) break;
       try {
+        let liveReview: ScreenPerceptionReport | null = null;
+        if (autoCrossReference) {
+          liveReview = await handleTriggerDescribeScreen();
+          if (liveReview?.feedbackPosition) {
+            setAiThinking({
+              x: liveReview.feedbackPosition.x,
+              y: liveReview.feedbackPosition.y,
+              action: liveReview.primarySuggestion || current.name,
+              confidence: liveReview.confidence,
+              isThinking: true,
+              targetLabel: liveReview.activeWindow,
+            });
+          }
+        }
+        setLiveMouseTrail((prev) => [
+          ...prev.slice(-119),
+          { x: current.x, y: current.y, time: Date.now(), isClick: true },
+        ]);
         let taskDescription = `Click at ${current.x}, ${current.y}`;
         if (current.action === "right_click")
           taskDescription = `Right click at ${current.x}, ${current.y}`;
@@ -495,7 +515,7 @@ export default function Dashboard({
             : baseDrift;
         const driftToSend =
           movementMode === "live" ? Math.max(variedDrift, 6) : variedDrift;
-        await fetch("/api/execute-task", {
+        const response = await fetch("/api/execute-task", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -514,9 +534,14 @@ export default function Dashboard({
               delayMs: current.delayMs,
               driftPx: driftToSend,
               variationMode: movementMode,
+              perception: liveReview,
             },
           }),
         });
+        const execution = await response.json();
+        if (!response.ok || !execution.success) {
+          throw new Error(execution.error || "Device execution failed");
+        }
         setSequence((prev) =>
           prev.map((s) =>
             s.id === current.id ? { ...s, status: "completed" } : s,
@@ -534,6 +559,14 @@ export default function Dashboard({
     setIsSequenceRunning(false);
     sequenceRunningRef.current = false;
   };
+  useEffect(() => {
+    if (!continuousPerception || !isCapturing) return;
+    const interval = window.setInterval(() => {
+      if (!isPerceiving && !isSequenceRunning) void handleTriggerDescribeScreen();
+    }, 2500);
+    return () => window.clearInterval(interval);
+  }, [continuousPerception, isCapturing, isPerceiving, isSequenceRunning]);
+
   const handleStopSequence = () => {
     sequenceRunningRef.current = false;
     setIsSequenceRunning(false);
@@ -629,6 +662,15 @@ export default function Dashboard({
       const data = await res.json();
       if (data.success && data.report) {
         setPerceptionReport(data.report);
+        setExecutionHistory((prev) => [
+          {
+            stepName: `AI #1: ${data.report.activeWindow || "Live screen"}`,
+            status: "perceived",
+            timestamp: Date.now(),
+            thought: `${data.report.primarySuggestion || "Monitoring"} • ${data.report.screenDescription || ""}`,
+          },
+          ...prev,
+        ].slice(0, 30));
         setVerificationBadge({
           status: "verified",
           message: `Perceived: ${data.report.screenDescription.slice(0, 40)}...`,
@@ -1390,6 +1432,24 @@ export default function Dashboard({
                   </button>
                 ))}
               </div>
+              <label className="flex items-center gap-2 text-xs font-mono font-bold text-slate-100 hover:text-white cursor-pointer select-none bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={autoCrossReference}
+                  onChange={(e) => setAutoCrossReference(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded text-cyan-500 accent-cyan-500"
+                />
+                <span>Auto cross-reference replay</span>
+              </label>
+              <label className="flex items-center gap-2 text-xs font-mono font-bold text-slate-100 hover:text-white cursor-pointer select-none bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={continuousPerception}
+                  onChange={(e) => setContinuousPerception(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded text-cyan-500 accent-cyan-500"
+                />
+                <span>Continuous AI #1 logs</span>
+              </label>
               <label className="flex items-center gap-2 text-xs font-mono font-bold text-slate-100 hover:text-white cursor-pointer select-none bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
                 <input
                   type="checkbox"

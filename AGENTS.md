@@ -9,6 +9,7 @@
 ## Setup quirks
 - **`npm install --legacy-peer-deps` is required.** `@vitejs/plugin-react@6` declares `peer vite@^8` but the project pins `vite@^7`. The project actually uses `@vitejs/plugin-react-swc` (not plugin-react), so the conflict is harmless but npm refuses to install without `--legacy-peer-deps`. A committed `.npmrc` now sets `legacy-peer-deps=true`, so a plain `npm install` also works.
 - `node_modules` is a named Docker volume (not bind-mounted) to keep host/container platform binaries separate.
+- The `node:22-slim` image has no `python3`/X11, so the pyautogui bridge returns its designed simulated fallbacks (`{ success: true, simulated: true }`). Handlers that `spawn` a child process must guard their response so the `error` (ENOENT) and `close` events can't both call `res.json` — a double response raises `ERR_HTTP_HEADERS_SENT`, which the startup script's `uncaughtException` handler turns into a full process exit. See `handleInteractiveDeviceAction` in `server/routes/pyautogui-bridge.ts` for the `sendOnce` guard pattern.
 
 ## Secrets
 - `GEMINI_API_KEY` — **optional at boot.** The app falls back to heuristic mock responses without it, but all AI features (screen analysis, task planning, description refinement) require a real key. Get one at https://aistudio.google.com/apikey.

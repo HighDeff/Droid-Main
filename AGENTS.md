@@ -11,6 +11,10 @@
 - `node_modules` is a named Docker volume (not bind-mounted) to keep host/container platform binaries separate.
 - The `node:22-slim` image has no `python3`/X11, so the pyautogui bridge returns its designed simulated fallbacks (`{ success: true, simulated: true }`). Handlers that `spawn` a child process must guard their response so the `error` (ENOENT) and `close` events can't both call `res.json` — a double response raises `ERR_HTTP_HEADERS_SENT`, which the startup script's `uncaughtException` handler turns into a full process exit. See `handleInteractiveDeviceAction` in `server/routes/pyautogui-bridge.ts` for the `sendOnce` guard pattern.
 
+## AI provider configuration
+- The AI vision/planner engines (`server/ai-perception-engine.ts`, `server/ai-planner-engine.ts`, `server/routes/analyze-screenshot.ts`) take their Ollama-compatible endpoint from the request body or the `OLLAMA_ENDPOINT` env var (see `server/ai-endpoint.ts`). Nothing is hardcoded.
+- With `OLLAMA_ENDPOINT` unset, perception uses the app's Gemini provider (`detectScreenElementsAndSteps`) and the planner uses its deterministic fallback, so the AI pipeline works without any remote host.
+
 ## Secrets
 - `GEMINI_API_KEY` — **optional at boot.** The app falls back to heuristic mock responses without it, but all AI features (screen analysis, task planning, description refinement) require a real key. Get one at https://aistudio.google.com/apikey.
 - Firebase config is hardcoded in `firebase-applet-config.json` (used only by the `/drive` route). No secret needed.

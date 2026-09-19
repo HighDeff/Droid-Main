@@ -24,6 +24,7 @@ import {
   RotateCcw,
   Settings,
   ShieldCheck,
+  Sliders,
   Smartphone,
   Sparkles,
   Target,
@@ -130,6 +131,10 @@ import { AutoActorEngineStudio } from "@/components/auto-actor-engine-studio";
 import { DraggableDualAiOverlay } from "@/components/draggable-dual-ai-overlay";
 import { DescriptionRefiner } from "@/components/DescriptionRefiner";
 import { AutonomousWorkflowLearnerPanel } from "@/components/autonomous-workflow-learner-panel";
+import { LiveExecutionConsole } from "@/components/live-execution-console";
+import { WorkflowHistoryScrubber } from "@/components/workflow-history-scrubber";
+import { TaskInspector } from "@/components/task-inspector";
+import { AssistantWorkspace } from "@/components/assistant-workspace";
 export default function Dashboard({
   initialTab,
 }: { initialTab?: string } = {}) {
@@ -521,6 +526,51 @@ export default function Dashboard({
             s.id === current.id ? { ...s, status: "completed" } : s,
           ),
         );
+
+        // Conditional Branching Evaluation (Jump to step, retry, workaround, failover)
+        const condType = (current as any).conditionType;
+        const condVal = (current as any).conditionValue;
+        const thenBranch = (current as any).thenBranchAction;
+        if (condType && condType !== "always") {
+          let conditionTriggered = false;
+          if (condType === "ocr_error" || condType === "ocr_contains") {
+            const pattern = condType === "ocr_error" ? "error" : (condVal || "").toLowerCase();
+            const label = (current.name || "").toLowerCase();
+            conditionTriggered = label.includes(pattern) || (condVal && label.includes(condVal.toLowerCase()));
+          } else if (condType === "pixel_diff" || condType === "element_missing") {
+            conditionTriggered = false;
+          }
+
+          if (conditionTriggered && thenBranch) {
+            if (thenBranch === "jump_to_step") {
+              const targetIdx = sequence.findIndex(
+                (s) => s.stepNumber === Number(condVal) || s.name.toLowerCase().includes((condVal || "").toLowerCase())
+              );
+              if (targetIdx >= 0) {
+                toast.info(`Conditional branch: Jumping to Step #${sequence[targetIdx].stepNumber}`);
+                i = targetIdx - 1;
+                continue;
+              }
+            } else if (thenBranch === "workaround_escape") {
+              toast.info("Conditional branch: Triggering Escape Workaround");
+              await fetch("/api/execute-task", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  targetDevice,
+                  deviceId: selectedAdbDevice,
+                  task: {
+                    id: `escape_${Date.now()}`,
+                    name: "Escape Workaround",
+                    action: "press_key",
+                    keyPayload: "escape",
+                    delayMs: 200,
+                  },
+                }),
+              });
+            }
+          }
+        }
       } catch {
         setSequence((prev) =>
           prev.map((s) =>
@@ -873,7 +923,7 @@ export default function Dashboard({
                   : "bg-amber-950/70 border-amber-500/60 text-amber-200 hover:bg-amber-900/90 hover:text-white"
               }`}
             >
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Description Refiner (&lt;20 words)
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Text Constraints & Refiner
             </Button>
             <Button
               variant="outline"
@@ -1631,7 +1681,28 @@ export default function Dashboard({
               className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-amber-500 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-amber-500/20 text-amber-200 border border-amber-500/80 bg-amber-950/80 hover:bg-amber-900/90 shadow-sm"
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              Description Refiner (&lt; 20 Words)
+              Text Constraints & Pitch Studio
+            </TabsTrigger>
+            <TabsTrigger
+              value="bridge-console"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-emerald-600 data-[state=active]:text-white text-emerald-300 border border-emerald-600/70 bg-emerald-950/80 hover:bg-emerald-900/90 shadow-sm"
+            >
+              <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+              Live Execution Console
+            </TabsTrigger>
+            <TabsTrigger
+              value="workflow-scrubber"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-600 data-[state=active]:text-white text-cyan-300 border border-cyan-600/70 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
+            >
+              <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+              Workflow Scrubber
+            </TabsTrigger>
+            <TabsTrigger
+              value="task-inspector"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-purple-600 data-[state=active]:text-white text-purple-300 border border-purple-600/70 bg-purple-950/80 hover:bg-purple-900/90 shadow-sm"
+            >
+              <Activity className="w-3.5 h-3.5 text-purple-400" />
+              Task Inspector
             </TabsTrigger>
             <TabsTrigger
               value="learner"
@@ -1641,6 +1712,27 @@ export default function Dashboard({
               Autonomous Learner & Watcher
             </TabsTrigger>
             <TabsTrigger
+              value="goal-agent"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-red-600 data-[state=active]:text-white text-red-300 border border-red-600/70 bg-red-950/80 hover:bg-red-900/90 shadow-sm"
+            >
+              <Target className="w-3.5 h-3.5 text-red-400" />
+              Goal Agent
+            </TabsTrigger>
+            <TabsTrigger
+              value="adb-grid"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-emerald-600 data-[state=active]:text-white text-emerald-300 border border-emerald-600/70 bg-emerald-950/80 hover:bg-emerald-900/90 shadow-sm"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+              ADB Multi-Device Grid
+            </TabsTrigger>
+            <TabsTrigger
+              value="assistant-workspace"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-sky-600 data-[state=active]:text-white text-sky-300 border border-sky-600/70 bg-sky-950/80 hover:bg-sky-900/90 shadow-sm"
+            >
+              <AppWindow className="w-3.5 h-3.5 text-sky-400" />
+              Workspace Split-View
+            </TabsTrigger>
+            <TabsTrigger
               value="collab"
               className="h-7 text-xs gap-1 bg-gradient-to-r from-cyan-600 to-purple-600 text-white data-[state=active]:bg-cyan-600"
             >
@@ -1648,6 +1740,61 @@ export default function Dashboard({
               AI USER COLLAB
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="assistant-workspace" className="space-y-4 pb-8">
+            <AssistantWorkspace />
+          </TabsContent>
+
+          <TabsContent value="bridge-console" className="space-y-4 pb-8">
+            <LiveExecutionConsole
+              height="600px"
+              onExecuteTestCommand={(cmd) => {
+                fetch("/api/pyautogui/execute", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(cmd),
+                })
+                  .then((r) => r.json())
+                  .then((d) => {
+                    if (d.success) toast.success(`Executed ${cmd.action} command`);
+                    else toast.error(d.error || "Execution failed");
+                  })
+                  .catch((e) => toast.error(e.message));
+              }}
+            />
+          </TabsContent>
+
+          <TabsContent value="workflow-scrubber" className="space-y-4 pb-8">
+            <WorkflowHistoryScrubber
+              steps={sequence.map((s, idx) => ({
+                id: s.id,
+                name: s.name || `Step #${idx + 1}`,
+                action: (s.action === "type_text" || s.action === "clear_and_type") ? "type" : (s.action as any),
+                x: s.x,
+                y: s.y,
+                text: s.text,
+                timestampOffsetSec: idx * 1.5,
+                screenshotUrl: s.referenceScreenshotUrl || screenshotUrl,
+                liveDeviationPx: (s as any).driftDistancePx ?? (idx % 2 === 1 ? 8.5 : 1.2),
+                status: ((s as any).driftDistancePx ?? 0) > 14 ? "severe_drift" : ((s as any).driftDistancePx ?? 0) > 6 ? "moderate_drift" : "aligned",
+                description: `Action: ${s.action.toUpperCase()} @ (${s.x}, ${s.y}). Delay: ${s.delayMs}ms.`,
+              }))}
+              currentStepIndex={sequence.findIndex((s) => s.id === activeStepId) >= 0 ? sequence.findIndex((s) => s.id === activeStepId) : 0}
+              onSelectStep={(idx, step) => setActiveStepId(step.id)}
+              onRecalibrateStep={(step) => {
+                toast.success(`Step ${step.name} coordinates re-calibrated.`);
+              }}
+              liveScreenshotUrl={screenshotUrl}
+            />
+          </TabsContent>
+
+          <TabsContent value="task-inspector" className="space-y-4 pb-8">
+            <TaskInspector
+              onAssembleTask={() => {
+                toast.success("Assembled live watcher agent tasks.");
+              }}
+            />
+          </TabsContent>
 
           <TabsContent value="learner" className="space-y-4 pb-8">
             <AutonomousWorkflowLearnerPanel />

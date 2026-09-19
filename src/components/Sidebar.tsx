@@ -10,6 +10,7 @@ import {
   Table,
   Cloud,
   PieChart,
+  BarChart3,
 } from 'lucide-react';
 import { ActiveSection, StorageQuota } from '../types/drive';
 import { formatBytes } from '../utils/fileUtils';
@@ -161,7 +162,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }`}
           >
             <PieChart className="w-4 h-4 text-purple-500" />
-            <span>Analytics</span>
+            <span>Storage Analytics</span>
+          </button>
+
+          <button
+            id="nav-item-execution-analytics"
+            onClick={() => onSelectSection('execution-analytics')}
+            className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors text-left ${
+              activeSection === 'execution-analytics'
+                ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-semibold shadow-xs'
+                : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/60 hover:text-zinc-900 dark:hover:text-zinc-100'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4 text-cyan-500" />
+            <span>Execution Analytics</span>
           </button>
         </nav>
       </div>

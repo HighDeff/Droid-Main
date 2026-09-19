@@ -7,6 +7,9 @@ import {
   RefreshCw,
   LogOut,
   ChevronDown,
+  Eye,
+  Zap,
+  Sliders,
 } from 'lucide-react';
 import { ViewMode } from '../types/drive';
 import { User } from 'firebase/auth';
@@ -22,6 +25,11 @@ interface HeaderProps {
   isRefreshing: boolean;
   user: User | null;
   onSignOut: () => void;
+  onToggleOverseer?: () => void;
+  isOverseerOpen?: boolean;
+  onOpenOrchestrator?: () => void;
+  onOpenSettingsModal?: () => void;
+  freeRoamMode?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -35,6 +43,11 @@ export const Header: React.FC<HeaderProps> = ({
   isRefreshing,
   user,
   onSignOut,
+  onToggleOverseer,
+  isOverseerOpen = false,
+  onOpenOrchestrator,
+  onOpenSettingsModal,
+  freeRoamMode = false,
 }) => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
 
@@ -97,6 +110,48 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Controls & Profile */}
       <div className="flex items-center space-x-2 shrink-0">
+        {/* Autonomous Orchestrator Button */}
+        <button
+          id="btn-header-open-orchestrator"
+          onClick={onOpenOrchestrator}
+          title="Open Autonomous Workflow Orchestrator"
+          className="px-3 py-1.5 rounded-xl bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-xs font-semibold flex items-center space-x-1.5 transition-all shadow-2xs"
+        >
+          <Zap className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+          <span className="hidden md:inline">Orchestrator</span>
+          {freeRoamMode && (
+            <span className="w-2 h-2 rounded-full bg-purple-500 animate-ping" />
+          )}
+        </button>
+
+        {/* Overseer AI Toggle Button */}
+        <button
+          id="btn-header-toggle-overseer"
+          onClick={onToggleOverseer}
+          title="Toggle Overseer AI Screen Monitor & Learning Ledger"
+          className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center space-x-1.5 transition-all shadow-2xs ${
+            isOverseerOpen
+              ? 'bg-purple-600 text-white border-purple-600 shadow-purple-500/20 shadow-xs'
+              : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200/80 dark:border-zinc-700/80 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+          }`}
+        >
+          <div className="relative">
+            <Eye className="w-3.5 h-3.5" />
+            <span className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+          </div>
+          <span className="hidden md:inline">Overseer AI</span>
+        </button>
+
+        {/* Auto-Deploy Settings Button */}
+        <button
+          id="btn-header-open-settings"
+          onClick={onOpenSettingsModal}
+          title="Auto-Deploy, Emergency Triggers & Free Roam Settings"
+          className="p-2 rounded-xl text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+        >
+          <Sliders className="w-4 h-4" />
+        </button>
+
         {/* Refresh Button */}
         <button
           id="btn-refresh-drive"

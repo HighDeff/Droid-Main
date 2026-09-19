@@ -27,5 +27,6 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": ["**/*.spec.ts", "node_modules", "dist"]
 }

@@ -41,7 +41,7 @@ export interface DriveAbout {
 
 export type ViewMode = 'grid' | 'list';
 
-export type ActiveSection = 'my-drive' | 'starred' | 'trash' | 'analytics';
+export type ActiveSection = 'my-drive' | 'starred' | 'trash' | 'analytics' | 'execution-analytics';
 
 export type FileFilter = 'all' | 'folders' | 'documents' | 'spreadsheets' | 'presentations' | 'pdfs' | 'media';
 

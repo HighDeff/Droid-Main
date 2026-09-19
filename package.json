@@ -11,18 +11,23 @@
     ]
   },
   "scripts": {
-    "dev": "tsx scripts/start-dev.ts",
-    "dev:vite": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build",
+    "dev": "vite",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "vite build",
+    "build:server": "vite build --config vite.config.server.ts",
+    "start": "node dist/server/node-build.mjs",
     "lint": "tsc --noEmit",
+    "typecheck": "tsc",
     "preview": "vite preview --port=3000 --host=0.0.0.0",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "format.fix": "prettier --write ."
   },
   "dependencies": {
     "@google/genai": "^2.22.0",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "firebase": "^12.19.0",
+    "jspdf": "^4.2.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -65,7 +70,6 @@
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",
     "@types/three": "^0.176.0",
-    "@vitejs/plugin-react": "^6.1.1",
     "@vitejs/plugin-react-swc": "^4.0.0",
     "autoprefixer": "^10.4.21",
     "class-variance-authority": "^0.7.1",

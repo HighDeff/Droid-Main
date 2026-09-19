@@ -69,6 +69,19 @@ export const handleExecuteTask: RequestHandler = async (req, res) => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
+    // Send formatted execution payload to Python subprocess stdin
+    const inputPayload = JSON.stringify({
+      task: rawTask,
+      targetDevice,
+      action,
+      targetPosition: targetPos,
+      routePoints,
+      textPayload,
+      keyPayload,
+    });
+    python.stdin.write(inputPayload);
+    python.stdin.end();
+
     let outputBuffer = "";
     let errorBuffer = "";
     let responseSent = false;

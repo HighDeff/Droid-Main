@@ -156,6 +156,27 @@ class AudioSynthesizer {
     osc.start();
     osc.stop(this.ctx.currentTime + 0.2);
   }
+
+  // Audio helper aliases
+  public playLaserShot() {
+    this.playWaypointSound();
+  }
+
+  public playActionCue() {
+    this.playClickSound();
+  }
+
+  public playShutterSound() {
+    this.playKeypressSound();
+  }
+
+  public playAlarmSound() {
+    this.playWarningSound();
+  }
+
+  public playSuccessChime() {
+    this.playSuccessSound();
+  }
 }
 
 export const audioSynthesizer = new AudioSynthesizer();

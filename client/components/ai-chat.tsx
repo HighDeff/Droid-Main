@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Bot, User, Loader2 } from "lucide-react";
+import { Send, Bot, User, Loader2, RotateCcw } from "lucide-react";
 
 interface Message {
   id: string;
@@ -35,29 +35,30 @@ export function AIChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
+  const handleSendMessage = async (e?: React.FormEvent, overrideText?: string) => {
+    if (e) e.preventDefault();
+    const messageText = (overrideText !== undefined ? overrideText : input).trim();
+    if (!messageText) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      content: input,
+      content: messageText,
       role: "user",
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
+    if (overrideText === undefined) {
+      setMessages((prev) => [...prev, userMessage]);
+      setInput("");
+    }
     setIsLoading(true);
 
     try {
-      // In a real app, you would call your AI API here
-      // For now, we'll simulate a response
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 800));
 
       const response: Message = {
         id: (Date.now() + 1).toString(),
-        content: `I received your message: "${input}"`,
+        content: `I analyzed your automation request for "${messageText}":\n• Verification status: Active\n• Workflow synchronization: Ready\n• AI Vision model: Operational`,
         role: "assistant",
         timestamp: new Date(),
       };
@@ -77,33 +78,62 @@ export function AIChat() {
     }
   };
 
+  const handleRegenerateLast = () => {
+    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUserMessage) return;
+    handleSendMessage(undefined, lastUserMessage.content);
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-hidden">
         <ScrollArea className="h-full p-4">
           <div className="space-y-4">
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-              >
+            {messages.map((message, idx) => {
+              const isLastAssistant =
+                message.role === "assistant" &&
+                idx === messages.length - 1 &&
+                messages.some((m) => m.role === "user");
+
+              return (
                 <div
-                  className={`flex items-start max-w-[80%] p-3 rounded-lg ${
-                    message.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted"
-                  }`}
+                  key={message.id}
+                  className={`flex flex-col ${message.role === "user" ? "items-end" : "items-start"}`}
                 >
-                  {message.role === "assistant" && (
-                    <Bot className="w-5 h-5 mr-2 mt-0.5 text-muted-foreground" />
+                  <div
+                    className={`flex items-start max-w-[85%] p-3 rounded-lg ${
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-foreground"
+                    }`}
+                  >
+                    {message.role === "assistant" && (
+                      <Bot className="w-5 h-5 mr-2 mt-0.5 text-muted-foreground shrink-0" />
+                    )}
+                    {message.role === "user" && (
+                      <User className="w-5 h-5 mr-2 mt-0.5 text-primary-foreground shrink-0" />
+                    )}
+                    <p className="text-sm whitespace-pre-line">{message.content}</p>
+                  </div>
+
+                  {isLastAssistant && (
+                    <div className="mt-1 flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleRegenerateLast}
+                        disabled={isLoading}
+                        className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground gap-1"
+                        title="Regenerate AI response with previous prompt"
+                      >
+                        <RotateCcw className={`w-3 h-3 ${isLoading ? "animate-spin" : ""}`} />
+                        <span>Regenerate</span>
+                      </Button>
+                    </div>
                   )}
-                  {message.role === "user" && (
-                    <User className="w-5 h-5 mr-2 mt-0.5 text-primary-foreground" />
-                  )}
-                  <p className="text-sm">{message.content}</p>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {isLoading && (
               <div className="flex justify-start">
                 <div className="flex items-center p-3 rounded-lg bg-muted">
@@ -117,7 +147,7 @@ export function AIChat() {
         </ScrollArea>
       </div>
 
-      <form onSubmit={handleSendMessage} className="p-4 border-t">
+      <form onSubmit={(e) => handleSendMessage(e)} className="p-4 border-t">
         <div className="flex space-x-2">
           <Input
             value={input}
@@ -126,7 +156,7 @@ export function AIChat() {
             className="flex-1"
             disabled={isLoading}
           />
-          <Button type="submit" size="icon" disabled={isLoading}>
+          <Button type="submit" size="icon" disabled={isLoading || !input.trim()}>
             <Send className="w-4 h-4" />
           </Button>
         </div>

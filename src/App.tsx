@@ -42,6 +42,13 @@ import { ConfirmationModal } from './components/ConfirmationModal';
 import { BulkActionBar } from './components/BulkActionBar';
 import { AuthScreen } from './components/AuthScreen';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
+import { ExecutionAnalyticsTab } from './components/ExecutionAnalyticsTab';
+import { DiffFramesTestModal } from './components/DiffFramesTestModal';
+import { AutoDeploySettingsModal } from './components/AutoDeploySettingsModal';
+import { OverseerAIPanel } from './components/OverseerAIPanel';
+import { AutonomousWorkflowModal } from './components/AutonomousWorkflowModal';
+import { AutoDeployEngine, DEFAULT_AUTO_DEPLOY_SETTINGS } from './services/autoDeployEngine';
+import { AutoDeploySettings, OverseerLearnedNote, OverseerNudge } from './types/automation';
 import { isFolder } from './utils/fileUtils';
 import { AlertCircle, CheckCircle2, UploadCloud } from 'lucide-react';
 
@@ -144,11 +151,51 @@ export default function App() {
   // Multi-select state
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
 
+  // Diff Frame Tester Modal State
+  const [isDiffModalOpen, setIsDiffModalOpen] = useState(false);
+  const [diffTestFile, setDiffTestFile] = useState<DriveFile | null>(null);
+
+  // Auto-Deploy & Overseer AI State
+  const [autoDeployEngine] = useState(() => new AutoDeployEngine());
+  const [autoDeploySettings, setAutoDeploySettings] = useState<AutoDeploySettings>(
+    () => autoDeployEngine.getSettings()
+  );
+  const [learnedNotes, setLearnedNotes] = useState<OverseerLearnedNote[]>(
+    () => autoDeployEngine.getLearnedNotes()
+  );
+  const [isOverseerOpen, setIsOverseerOpen] = useState(false);
+  const [isOrchestratorOpen, setIsOrchestratorOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+
+  const handleUpdateAutoDeploySettings = (newSettings: Partial<AutoDeploySettings>) => {
+    const updated = autoDeployEngine.updateSettings(newSettings);
+    setAutoDeploySettings(updated);
+  };
+
+  const handleExecuteNudgeAction = (nudge: OverseerNudge) => {
+    if (nudge.targetTab) {
+      setActiveSection(nudge.targetTab);
+    }
+    if (nudge.suggestedAction?.step) {
+      showToast(`Overseer Auto-Executed: "${nudge.suggestedAction.step.title}"`);
+    }
+  };
+
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => {
       setToastMessage(null);
     }, 4000);
+  };
+
+  const handleSwipeAction = (direction: 'up' | 'down' | 'left' | 'right', file: DriveFile) => {
+    const dirArrow = direction === 'up' ? '⬆️' : direction === 'down' ? '⬇️' : direction === 'left' ? '⬅️' : '➡️';
+    showToast(`Swipe ${direction.toUpperCase()} ${dirArrow} executed on: ${file.name}`);
+  };
+
+  const handleOpenDiffFrameTester = (file?: DriveFile) => {
+    setDiffTestFile(file || null);
+    setIsDiffModalOpen(true);
   };
 
   // Auth initialization
@@ -660,6 +707,11 @@ export default function App() {
         isRefreshing={isRefreshing}
         user={user}
         onSignOut={handleSignOut}
+        onToggleOverseer={() => setIsOverseerOpen(!isOverseerOpen)}
+        isOverseerOpen={isOverseerOpen}
+        onOpenOrchestrator={() => setIsOrchestratorOpen(true)}
+        onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
+        freeRoamMode={autoDeploySettings.freeRoamMode}
       />
 
       {/* Main Workspace Layout */}
@@ -756,8 +808,14 @@ export default function App() {
             </div>
           )}
 
-          {/* Conditional View: Analytics vs File Workspace */}
-          {activeSection === 'analytics' ? (
+          {/* Conditional View: Analytics vs Execution Analytics vs File Workspace */}
+          {activeSection === 'execution-analytics' ? (
+            <ExecutionAnalyticsTab
+              onSelectWorkflow={() => {
+                handleSelectSection('my-drive');
+              }}
+            />
+          ) : activeSection === 'analytics' ? (
             <AnalyticsPanel
               storageQuota={about?.storageQuota}
               files={files}
@@ -815,6 +873,9 @@ export default function App() {
                   }
                   onDeleteFile={handleInitiateDelete}
                   onRestoreFile={handleRestoreFile}
+                  onShowToast={showToast}
+                  onSwipeAction={handleSwipeAction}
+                  onOpenDiffFrameTester={handleOpenDiffFrameTester}
                 />
               ) : (
                 <FileList
@@ -837,6 +898,9 @@ export default function App() {
                   }
                   onDeleteFile={handleInitiateDelete}
                   onRestoreFile={handleRestoreFile}
+                  onShowToast={showToast}
+                  onSwipeAction={handleSwipeAction}
+                  onOpenDiffFrameTester={handleOpenDiffFrameTester}
                 />
               )}
             </>
@@ -905,6 +969,56 @@ export default function App() {
         onBulkRestore={handleBulkRestore}
         onBulkStar={handleBulkStar}
         isLoading={isDestructiveLoading}
+      />
+
+      {/* 6. Diff Frames & Movement Testbench Modal */}
+      <DiffFramesTestModal
+        isOpen={isDiffModalOpen}
+        onClose={() => setIsDiffModalOpen(false)}
+        file={diffTestFile}
+        targetCoords={{ x: 960, y: 540 }}
+        onApplyRepositionedCoords={(newCoords) => {
+          showToast(`Applied re-anchored target coordinates: (${newCoords.x}, ${newCoords.y})`);
+        }}
+      />
+
+      {/* 7. Auto-Deploy & Orchestration Settings Modal */}
+      <AutoDeploySettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        settings={autoDeploySettings}
+        onSaveSettings={(newSettings) => {
+          handleUpdateAutoDeploySettings(newSettings);
+          showToast('Updated Auto-Deploy and Autonomous Roam settings.');
+        }}
+      />
+
+      {/* 8. Overseer AI Floating Monitor & Learning Ledger */}
+      <OverseerAIPanel
+        isOpen={isOverseerOpen}
+        onClose={() => setIsOverseerOpen(false)}
+        activeSection={activeSection}
+        onSwitchSection={handleSelectSection}
+        learnedNotes={learnedNotes}
+        settings={autoDeploySettings}
+        onUpdateSettings={handleUpdateAutoDeploySettings}
+        onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
+        onOpenWorkflowOrchestrator={() => setIsOrchestratorOpen(true)}
+        onExecuteNudgeAction={handleExecuteNudgeAction}
+      />
+
+      {/* 9. Autonomous Workflow Orchestrator Modal */}
+      <AutonomousWorkflowModal
+        isOpen={isOrchestratorOpen}
+        onClose={() => setIsOrchestratorOpen(false)}
+        activeSection={activeSection}
+        onSwitchSection={handleSelectSection}
+        engine={autoDeployEngine}
+        settings={autoDeploySettings}
+        onUpdateSettings={handleUpdateAutoDeploySettings}
+        onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
+        files={files}
+        onShowToast={showToast}
       />
 
       {/* Toast Notification */}

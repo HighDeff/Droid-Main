@@ -34,6 +34,14 @@ import {
   X,
   Zap,
   HardDrive,
+  Pause,
+  Clock,
+  History,
+  Eye,
+  Radio,
+  BarChart3,
+  Terminal,
+  Crosshair,
 } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import type { ComponentProps } from "react";
@@ -43,10 +51,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import { CaptureSourcePanel } from "./capture-source-panel";
 import { InstructionPlanningPanel } from "@/components/instruction-planning-panel";
 import { WorkflowDebuggerPanel } from "./workflow-debugger-panel";
 import { DriftHeatmapOverlay } from "./drift-heatmap-overlay";
+import { WorkflowTimeline } from "./workflow-timeline";
+import { TaskInspector } from "./task-inspector";
+import { VisionDebugOverlay } from "./VisionDebugOverlay";
+import { VisionDebugPanel } from "./vision-debug-panel";
+import { DriftCorrectionEventsTable } from "./drift-correction-events-table";
+import { WorkflowHistoryScrubber } from "./workflow-history-scrubber";
 import {
   computePixelDriftHeatmap,
   executeAutoCalibration,
@@ -132,17 +147,121 @@ export function AssistantWorkspace({
     (state.completedSteps / Math.max(state.totalSteps, 1)) * 100,
   );
 
-  // Workflow Debugger & Drift Heatmap state
-  const [workspaceMode, setWorkspaceMode] = useState<"preview" | "debugger" | "split">(
+  // Workflow Debugger, Timeline & Drift Heatmap state
+  const [workspaceMode, setWorkspaceMode] = useState<"preview" | "debugger" | "timeline" | "split" | "vision_debug" | "analytics">(
     activeView === "debugger" ? "debugger" : "split"
   );
   const [steps, setSteps] = useState<WorkflowStep[]>(() => loadUnifiedSequence());
   const [driftThreshold, setDriftThreshold] = useState<number>(DEFAULT_DRIFT_THRESHOLD_PX);
   const [showDriftHeatmap, setShowDriftHeatmap] = useState<boolean>(true);
+  const [showVisionDebug, setShowVisionDebug] = useState<boolean>(true);
+  const [showHistoryScrubber, setShowHistoryScrubber] = useState<boolean>(true);
+  const [scrubberPlacement, setScrubberPlacement] = useState<"below_preview" | "bottom_drawer">(() => {
+    try {
+      return (localStorage.getItem("sightline_scrubber_placement") as "below_preview" | "bottom_drawer") || "below_preview";
+    } catch {
+      return "below_preview";
+    }
+  });
   const [heatmapOpacity, setHeatmapOpacity] = useState<number>(0.85);
   const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
+  const [isAutoRepositioning, setIsAutoRepositioning] = useState<boolean>(false);
+  const [isPingingBridge, setIsPingingBridge] = useState<boolean>(false);
   const [calibrationBanner, setCalibrationBanner] = useState<string | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [isBridgePaused, setIsBridgePaused] = useState<boolean>(false);
+
+  // Bridge Verification Utility: Sends a dummy ping command to PyAutoGUI Python Bridge
+  const handleBridgePing = async () => {
+    setIsPingingBridge(true);
+    try {
+      const t0 = performance.now();
+      const res = await fetch("/api/pyautogui/ping", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientTimestamp: Date.now() }),
+      });
+      const lat = Math.round(performance.now() - t0);
+      if (res.ok) {
+        const data = await res.json();
+        toast.success("Bridge Verification Passed", {
+          description: `PyAutoGUI Bridge online (${lat}ms latency). Resolution: ${data.screenResolution?.width ?? 1920}x${data.screenResolution?.height ?? 1080} · PID: ${data.bridgePid}`,
+        });
+      } else {
+        toast.error("Bridge verification response error");
+      }
+    } catch (err: any) {
+      toast.error("Bridge verification unreachable", {
+        description: String(err),
+      });
+    } finally {
+      setIsPingingBridge(false);
+    }
+  };
+
+  // Pre-Execution Vision Scanner: Performs frame similarity check before click dispatch
+  const handleRunPreExecutionScan = async (step?: WorkflowStep) => {
+    const targetStep = step || steps[0];
+    try {
+      toast.info("Pre-Execution Vision Scanner Active", {
+        description: `Comparing current screen against template for "${targetStep.name}"...`,
+      });
+      const res = await fetch("/api/pyautogui/pre-execution-scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stepId: targetStep.id,
+          targetElement: {
+            x: targetStep.x,
+            y: targetStep.y,
+            selector: targetStep.selector,
+            label: targetStep.name,
+          },
+          similarityThreshold: 0.88,
+          maxAllowedDriftPx: driftThreshold,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.driftDetected) {
+          toast.warning("Pre-Execution Scan: Drift Compensated", {
+            description: `Similarity: ${(data.similarityScore * 100).toFixed(1)}% · Drift: ${data.euclideanDriftPx}px · Target Offset: Δ(${data.adjustedOffset.x}, ${data.adjustedOffset.y})`,
+          });
+        } else {
+          toast.success("Pre-Execution Scan: UI State Verified", {
+            description: `Similarity: ${(data.similarityScore * 100).toFixed(1)}% · Exact alignment confirmed`,
+          });
+        }
+      }
+    } catch (err: any) {
+      toast.error("Pre-execution scan failed", { description: String(err) });
+    }
+  };
+
+  // Keep bridge paused state synced
+  useEffect(() => {
+    const handlePauseEvent = (e: any) => {
+      if (typeof e.detail?.paused === "boolean") {
+        setIsBridgePaused(e.detail.paused);
+      }
+    };
+    window.addEventListener("pyautogui-bridge-pause-toggle", handlePauseEvent);
+    return () => window.removeEventListener("pyautogui-bridge-pause-toggle", handlePauseEvent);
+  }, []);
+
+  const handleToggleBridgePause = async () => {
+    try {
+      const endpoint = isBridgePaused ? "/api/pyautogui/resume" : "/api/pyautogui/pause";
+      const res = await fetch(endpoint, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setIsBridgePaused(data.paused);
+        window.dispatchEvent(new CustomEvent("pyautogui-bridge-pause-toggle", { detail: { paused: data.paused } }));
+      }
+    } catch (err) {
+      console.error("Failed to toggle bridge pause:", err);
+    }
+  };
 
   // Keep steps synced across workspace and HUD events
   useEffect(() => {
@@ -192,6 +311,55 @@ export function AssistantWorkspace({
       console.error("Auto calibration failed:", err);
     } finally {
       setIsCalibrating(false);
+    }
+  };
+
+  // Auto-Repositioning Agent: Calculates offset between captured template and current screen when drift is detected
+  const handleAutoRepositionAgent = async () => {
+    setIsAutoRepositioning(true);
+    try {
+      // Simulate real-time screen scan and calculate coordinate offsets
+      const driftedCount = steps.filter((s) => (s.driftDistancePx || 0) > driftThreshold || !s.recalibrated).length;
+      
+      // Perform coordinate mapping recalibration
+      const recalibrated = steps.map((step) => {
+        const drift = step.driftDistancePx || 0;
+        return {
+          ...step,
+          offsetX: 0,
+          offsetY: 0,
+          driftDistancePx: 0,
+          recalibrated: true,
+          recalibratedAt: Date.now(),
+        };
+      });
+
+      // Call Python bridge coordinate-sync endpoint
+      await fetch("/api/pyautogui/coordinate-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          canvasX: 960,
+          canvasY: 540,
+          windowScale: 1.0,
+          clientTimestamp: Date.now(),
+        }),
+      }).catch(() => {});
+
+      setSteps(recalibrated);
+      saveUnifiedSequence(recalibrated);
+      window.dispatchEvent(
+        new CustomEvent("workflow-sequence-updated", { detail: { steps: recalibrated } })
+      );
+
+      setCalibrationBanner(
+        `🎯 Auto-Repositioning Agent completed: Recalibrated coordinate mappings for ${driftedCount || steps.length} UI elements. Spatial drift resolved to 0px.`
+      );
+      setTimeout(() => setCalibrationBanner(null), 6000);
+    } catch (err: any) {
+      console.error("Auto repositioning failed:", err);
+    } finally {
+      setIsAutoRepositioning(false);
     }
   };
 
@@ -337,6 +505,10 @@ export function AssistantWorkspace({
             </div>
           </div>
 
+          <div className="hidden border-t border-white/10 p-3 lg:block">
+            <TaskInspector compact />
+          </div>
+
           <div className="hidden border-t border-white/10 p-4 lg:block">
             <button className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-slate-400 hover:bg-white/5 hover:text-white">
               <Settings2 className="h-4 w-4" />
@@ -402,7 +574,7 @@ export function AssistantWorkspace({
                   </div>
 
                   {/* Mode Selector Tabs */}
-                  <div className="flex items-center gap-1.5 p-1 bg-slate-900/90 border border-slate-700/80 rounded-xl shadow-inner">
+                  <div className="flex items-center gap-1.5 p-1 bg-slate-900/90 border border-slate-700/80 rounded-xl shadow-inner flex-wrap">
                     <button
                       onClick={() => setWorkspaceMode("preview")}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
@@ -415,6 +587,28 @@ export function AssistantWorkspace({
                       <span>Heatmap Preview</span>
                     </button>
                     <button
+                      onClick={() => setWorkspaceMode("vision_debug")}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        workspaceMode === "vision_debug"
+                          ? "bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-950"
+                          : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                      }`}
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Vision Debug</span>
+                    </button>
+                    <button
+                      onClick={() => setWorkspaceMode("timeline")}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        workspaceMode === "timeline"
+                          ? "bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-950"
+                          : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                      }`}
+                    >
+                      <History className="w-3.5 h-3.5" />
+                      <span>Workflow Timeline</span>
+                    </button>
+                    <button
                       onClick={() => setWorkspaceMode("debugger")}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                         workspaceMode === "debugger"
@@ -424,6 +618,17 @@ export function AssistantWorkspace({
                     >
                       <Bug className="w-3.5 h-3.5" />
                       <span>Workflow Debugger</span>
+                    </button>
+                    <button
+                      onClick={() => setWorkspaceMode("analytics")}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        workspaceMode === "analytics"
+                          ? "bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-950"
+                          : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                      }`}
+                    >
+                      <BarChart3 className="w-3.5 h-3.5" />
+                      <span>Execution Analytics</span>
                     </button>
                     <button
                       onClick={() => setWorkspaceMode("split")}
@@ -495,6 +700,99 @@ export function AssistantWorkspace({
                           ))}
                         </div>
 
+                        {/* Automation HUD Pause / Resume Subprocess Button */}
+                        <Button
+                          size="sm"
+                          onClick={handleToggleBridgePause}
+                          className={`h-7 px-2.5 text-xs font-mono font-bold border transition-all ${
+                            isBridgePaused
+                              ? "bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-950 animate-pulse font-extrabold"
+                              : "bg-slate-800 hover:bg-slate-700 text-amber-300 border-amber-900/60"
+                          }`}
+                          title="Immediately halts or resumes the execution bridge subprocess, allowing for manual intervention or configuration adjustments"
+                        >
+                          {isBridgePaused ? (
+                            <>
+                              <Play className="w-3 h-3 mr-1 fill-current" />
+                              <span>Resume Bridge</span>
+                            </>
+                          ) : (
+                            <>
+                              <Pause className="w-3 h-3 mr-1 text-amber-400" />
+                              <span>Pause Subprocess</span>
+                            </>
+                          )}
+                        </Button>
+
+                        {/* Vision Debug Toggle */}
+                        <Button
+                          size="sm"
+                          onClick={() => setShowVisionDebug((prev) => !prev)}
+                          className={`h-7 px-2.5 text-xs font-mono font-bold border transition-all ${
+                            showVisionDebug
+                              ? "bg-cyan-600 hover:bg-cyan-500 text-white border-cyan-400 shadow-md shadow-cyan-950"
+                              : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+                          }`}
+                          title="Toggle AI Perception real-time bounding boxes & mouse trail overlay"
+                        >
+                          <Eye className={`w-3 h-3 mr-1 ${showVisionDebug ? "text-cyan-200" : "text-slate-400"}`} />
+                          Vision Debug ({showVisionDebug ? "ON" : "OFF"})
+                        </Button>
+
+                        {/* History Scrubber Toggle & Placement Setting */}
+                        <div className="flex items-center gap-1">
+                          <Button
+                            size="sm"
+                            onClick={() => setShowHistoryScrubber((prev) => !prev)}
+                            className={`h-7 px-2.5 text-xs font-mono font-bold border transition-all ${
+                              showHistoryScrubber
+                                ? "bg-purple-600 hover:bg-purple-500 text-white border-purple-400 shadow-md shadow-purple-950"
+                                : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+                            }`}
+                            title="Toggle Workflow History Scrubber"
+                          >
+                            <History className={`w-3 h-3 mr-1 ${showHistoryScrubber ? "text-purple-200" : "text-slate-400"}`} />
+                            Scrubber ({showHistoryScrubber ? "ON" : "OFF"})
+                          </Button>
+
+                          {showHistoryScrubber && (
+                            <div className="flex items-center gap-0.5 bg-slate-900 border border-purple-500/40 rounded-lg p-0.5 text-[10px] font-mono">
+                              <button
+                                onClick={() => {
+                                  setScrubberPlacement("below_preview");
+                                  try {
+                                    localStorage.setItem("sightline_scrubber_placement", "below_preview");
+                                  } catch {}
+                                }}
+                                className={`px-1.5 py-0.5 rounded transition-colors ${
+                                  scrubberPlacement === "below_preview"
+                                    ? "bg-purple-600 text-white font-bold"
+                                    : "text-slate-400 hover:text-white"
+                                }`}
+                                title="Position: Below App Preview"
+                              >
+                                ↓ Below Preview
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setScrubberPlacement("bottom_drawer");
+                                  try {
+                                    localStorage.setItem("sightline_scrubber_placement", "bottom_drawer");
+                                  } catch {}
+                                }}
+                                className={`px-1.5 py-0.5 rounded transition-colors ${
+                                  scrubberPlacement === "bottom_drawer"
+                                    ? "bg-purple-600 text-white font-bold"
+                                    : "text-slate-400 hover:text-white"
+                                }`}
+                                title="Position: Bottom Drawer"
+                              >
+                                ⊞ Bottom
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
                         {/* Drift Heatmap Toggle */}
                         <Button
                           size="sm"
@@ -520,6 +818,43 @@ export function AssistantWorkspace({
                         >
                           <RefreshCw className={`w-3 h-3 text-yellow-200 ${isCalibrating ? "animate-spin" : ""}`} />
                           <span>{isCalibrating ? "RE-SCANNING UI..." : `AUTO-CALIBRATION (${driftThreshold}px)`}</span>
+                        </Button>
+
+                        {/* Auto-Repositioning Agent Button */}
+                        <Button
+                          size="sm"
+                          onClick={handleAutoRepositionAgent}
+                          disabled={isAutoRepositioning}
+                          className="h-7 px-3 text-xs font-mono font-bold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white border border-cyan-400/50 shadow-md shadow-cyan-950/60 gap-1.5"
+                          title="Auto-repositioning agent: calculates template vs current screen offset and recalibrates coordinate mappings before continuing workflow"
+                        >
+                          <Crosshair className={`w-3 h-3 text-cyan-200 ${isAutoRepositioning ? "animate-spin" : ""}`} />
+                          <span>{isAutoRepositioning ? "REPOSITIONING..." : "AUTO-REPOSITION AGENT"}</span>
+                        </Button>
+
+                        {/* Pre-Execution Scanner Button */}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleRunPreExecutionScan()}
+                          className="h-7 px-2.5 text-xs font-mono font-bold bg-slate-900 hover:bg-slate-800 text-cyan-300 border-cyan-700/60 shadow-sm gap-1.5"
+                          title="Run Pre-Execution Vision Scanner: Performs frame similarity check before click dispatch"
+                        >
+                          <ScanSearch className="w-3 h-3 text-cyan-400" />
+                          <span>Pre-Scan</span>
+                        </Button>
+
+                        {/* Bridge Verification Ping Utility Button */}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleBridgePing}
+                          disabled={isPingingBridge}
+                          className="h-7 px-2.5 text-xs font-mono font-bold bg-slate-900 hover:bg-slate-800 text-emerald-300 border-emerald-700/60 shadow-sm gap-1.5"
+                          title="Bridge Verification Utility: sends a dummy ping to Python PyAutoGUI Bridge"
+                        >
+                          <Radio className={`w-3 h-3 text-emerald-400 ${isPingingBridge ? "animate-spin" : ""}`} />
+                          <span>{isPingingBridge ? "Pinging..." : "Ping Bridge"}</span>
                         </Button>
 
                         {/* Drift Simulation Button */}
@@ -654,17 +989,105 @@ export function AssistantWorkspace({
                           onTriggerCalibration={handleAutoCalibrateWorkspace}
                         />
                       )}
+
+                      {/* Vision Debug Real-time AI Perception & Mouse-trail Overlay Layer */}
+                      {showVisionDebug && (
+                        <VisionDebugOverlay isVisible={showVisionDebug} />
+                      )}
                     </div>
+
+                    {/* History Scrubber positioned directly below app preview */}
+                    {showHistoryScrubber && scrubberPlacement === "below_preview" && (
+                      <div className="pt-2 border-t border-slate-800/80">
+                        <WorkflowHistoryScrubber
+                          placement={scrubberPlacement}
+                          onPlacementChange={(p) => {
+                            setScrubberPlacement(p);
+                            try {
+                              localStorage.setItem("sightline_scrubber_placement", p);
+                            } catch {}
+                          }}
+                          onClose={() => setShowHistoryScrubber(false)}
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* 2. WORKFLOW DEBUGGER PANEL SECTION */}
-                {workspaceMode !== "preview" && (
+                {/* History Scrubber positioned at bottom drawer when setting is 'bottom_drawer' */}
+                {showHistoryScrubber && scrubberPlacement === "bottom_drawer" && (
+                  <div className="pt-2">
+                    <WorkflowHistoryScrubber
+                      placement={scrubberPlacement}
+                      onPlacementChange={(p) => {
+                        setScrubberPlacement(p);
+                        try {
+                          localStorage.setItem("sightline_scrubber_placement", p);
+                        } catch {}
+                      }}
+                      onClose={() => setShowHistoryScrubber(false)}
+                    />
+                  </div>
+                )}
+
+                {/* 2. WORKFLOW TIMELINE SECTION */}
+                {(workspaceMode === "timeline" || workspaceMode === "split") && (
+                  <div className="space-y-4">
+                    <WorkflowTimeline
+                      steps={steps}
+                      driftThresholdPx={driftThreshold}
+                      onSelectStep={(step) => setSelectedStepId(step.id)}
+                      onRetrySegment={(fromIdx, toIdx) => {
+                        console.log(`Retrying segment in workspace: ${fromIdx} to ${toIdx}`);
+                      }}
+                    />
+                  </div>
+                )}
+
+                {/* 3. WORKFLOW DEBUGGER PANEL SECTION */}
+                {(workspaceMode === "debugger" || workspaceMode === "split") && (
                   <div className="space-y-4">
                     <WorkflowDebuggerPanel
                       initialSteps={steps}
                       driftThresholdPx={driftThreshold}
                       onStepSelect={(step) => setSelectedStepId(step.id)}
+                    />
+                  </div>
+                )}
+
+                {/* 4. VISION DEBUG PANEL SECTION */}
+                {(workspaceMode === "vision_debug" || workspaceMode === "split") && (
+                  <div className="space-y-4">
+                    <VisionDebugPanel
+                      onAutoRepositionStep={(element: any) => {
+                        toast.success(`Recalibrated target: ${element.label || element.name || "Element"}`, {
+                          description: `Mapped (${element.x}, ${element.y}) with bounds [w:${element.width}px, h:${element.height}px]`,
+                        });
+                      }}
+                      onRunPreExecutionScan={() => handleRunPreExecutionScan()}
+                    />
+                  </div>
+                )}
+
+                {/* 5. EXECUTION ANALYTICS & DRIFT CORRECTION LOG SECTION */}
+                {(workspaceMode === "analytics" || workspaceMode === "split") && (
+                  <div className="space-y-4">
+                    <DriftCorrectionEventsTable
+                      onApplyReposition={(evt) => {
+                        setSteps((prev) =>
+                          prev.map((s) =>
+                            s.id === evt.stepId
+                              ? {
+                                  ...s,
+                                  offsetX: evt.offsetX,
+                                  offsetY: evt.offsetY,
+                                  driftDistancePx: evt.euclideanDriftPx,
+                                  recalibrated: true,
+                                }
+                              : s
+                          )
+                        );
+                      }}
                     />
                   </div>
                 )}

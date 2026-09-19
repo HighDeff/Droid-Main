@@ -1,18 +1,16 @@
-import React, { useState } from 'react';
+import React, { useMemo } from 'react';
+import { motion } from 'framer-motion';
 import {
   Folder,
   Star,
   MoreVertical,
-  ExternalLink,
-  Eye,
-  Edit2,
-  Trash2,
-  RotateCcw,
-  Download,
 } from 'lucide-react';
 import { DriveFile, ActiveSection } from '../types/drive';
 import { FileIcon } from './FileIcon';
 import { formatBytes, formatDate, isFolder, getFileCategory } from '../utils/fileUtils';
+import { useContextMenu } from '../hooks/useContextMenu';
+import { ActionRegistry } from '../services/actionRegistry';
+import { ContextMenuOverlay } from './ContextMenuOverlay';
 
 interface FileGridProps {
   files: DriveFile[];
@@ -25,6 +23,9 @@ interface FileGridProps {
   onRenameFile: (file: DriveFile) => void;
   onDeleteFile: (file: DriveFile) => void;
   onRestoreFile?: (file: DriveFile) => void;
+  onShowToast?: (message: string, type?: 'success' | 'error') => void;
+  onSwipeAction?: (direction: 'up' | 'down' | 'left' | 'right', file: DriveFile) => void;
+  onOpenDiffFrameTester?: (file?: DriveFile) => void;
 }
 
 export const FileGrid: React.FC<FileGridProps> = ({
@@ -38,8 +39,39 @@ export const FileGrid: React.FC<FileGridProps> = ({
   onRenameFile,
   onDeleteFile,
   onRestoreFile,
+  onShowToast,
+  onSwipeAction,
+  onOpenDiffFrameTester,
 }) => {
-  const [activeMenuFileId, setActiveMenuFileId] = useState<string | null>(null);
+  const { contextMenu, pulsingFileId, handleContextMenu, closeContextMenu } = useContextMenu();
+
+  const actionRegistry = useMemo(() => {
+    return new ActionRegistry({
+      activeSection,
+      onOpenFile,
+      onPreviewFile,
+      onToggleStar,
+      onRenameFile,
+      onDeleteFile,
+      onRestoreFile,
+      onToggleSelectFile,
+      onShowToast,
+      onSwipeAction,
+      onOpenDiffFrameTester,
+    });
+  }, [
+    activeSection,
+    onOpenFile,
+    onPreviewFile,
+    onToggleStar,
+    onRenameFile,
+    onDeleteFile,
+    onRestoreFile,
+    onToggleSelectFile,
+    onShowToast,
+    onSwipeAction,
+    onOpenDiffFrameTester,
+  ]);
 
   if (files.length === 0) {
     return (
@@ -54,7 +86,16 @@ export const FileGrid: React.FC<FileGridProps> = ({
   const regularFiles = files.filter((f) => !isFolder(f));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 relative select-none">
+      {/* Custom Context Menu Overlay at Mouse Coordinates */}
+      <ContextMenuOverlay
+        isOpen={contextMenu.isOpen}
+        position={contextMenu.position}
+        file={contextMenu.file}
+        actionRegistry={actionRegistry}
+        onClose={closeContextMenu}
+      />
+
       {/* Folders Section */}
       {folders.length > 0 && (
         <div className="space-y-3">
@@ -63,13 +104,26 @@ export const FileGrid: React.FC<FileGridProps> = ({
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
             {folders.map((folder) => {
-              const isMenuOpen = activeMenuFileId === folder.id;
               const isSelected = selectedFileIds.includes(folder.id);
+              const isPulsing = pulsingFileId === folder.id;
 
               return (
-                <div
+                <motion.div
                   key={folder.id}
                   id={`folder-card-${folder.id}`}
+                  animate={
+                    isPulsing
+                      ? {
+                          scale: [1, 1.03, 1],
+                          boxShadow: [
+                            '0 0 0 0 rgba(59, 130, 246, 0)',
+                            '0 0 0 4px rgba(59, 130, 246, 0.35)',
+                            '0 0 0 0 rgba(59, 130, 246, 0)',
+                          ],
+                        }
+                      : { scale: 1 }
+                  }
+                  transition={{ duration: 0.35, ease: 'easeOut' }}
                   onClick={(e) => {
                     if (e.shiftKey || e.ctrlKey || e.metaKey) {
                       onToggleSelectFile?.(folder.id, e);
@@ -77,6 +131,7 @@ export const FileGrid: React.FC<FileGridProps> = ({
                       onOpenFile(folder);
                     }
                   }}
+                  onContextMenu={(e) => handleContextMenu(e, folder)}
                   className={`group relative flex items-center justify-between p-3.5 rounded-2xl shadow-2xs transition-all cursor-pointer ${
                     isSelected
                       ? 'bg-blue-50/80 dark:bg-blue-950/40 border-2 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
@@ -112,86 +167,26 @@ export const FileGrid: React.FC<FileGridProps> = ({
                   <div className="flex items-center space-x-1 shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
                     {activeSection !== 'trash' && (
                       <button
-                        id={`btn-star-${folder.id}`}
+                        id={`btn-star-folder-${folder.id}`}
                         onClick={() => onToggleStar(folder)}
-                        className="p-1 text-zinc-300 dark:text-zinc-600 hover:text-amber-400 dark:hover:text-amber-400 transition-colors opacity-0 group-hover:opacity-100"
+                        className={`p-1 rounded-md text-zinc-300 dark:text-zinc-600 hover:text-amber-400 transition-colors ${
+                          folder.starred ? 'text-amber-400' : 'opacity-0 group-hover:opacity-100'
+                        }`}
                       >
-                        <Star
-                          className={`w-3.5 h-3.5 ${
-                            folder.starred ? 'fill-amber-400 text-amber-400 opacity-100' : ''
-                          }`}
-                        />
+                        <Star className={`w-3.5 h-3.5 ${folder.starred ? 'fill-amber-400 text-amber-400' : ''}`} />
                       </button>
                     )}
 
                     <button
                       id={`btn-folder-menu-${folder.id}`}
-                      onClick={() => setActiveMenuFileId(isMenuOpen ? null : folder.id)}
-                      className="p-1 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                      onClick={(e) => handleContextMenu(e, folder)}
+                      className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                      title="More actions"
                     >
                       <MoreVertical className="w-3.5 h-3.5" />
                     </button>
                   </div>
-
-                  {/* Context dropdown */}
-                  {isMenuOpen && (
-                    <div
-                      id={`menu-dropdown-${folder.id}`}
-                      className="absolute right-2 top-10 w-44 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1 z-40 text-xs animate-in fade-in zoom-in-95 duration-100"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        onClick={() => {
-                          setActiveMenuFileId(null);
-                          onPreviewFile(folder);
-                        }}
-                        className="w-full flex items-center space-x-2 px-3 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left"
-                      >
-                        <Eye className="w-3.5 h-3.5 text-blue-500" />
-                        <span>Folder details</span>
-                      </button>
-
-                      {activeSection !== 'trash' && (
-                        <button
-                          onClick={() => {
-                            setActiveMenuFileId(null);
-                            onRenameFile(folder);
-                          }}
-                          className="w-full flex items-center space-x-2 px-3 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left"
-                        >
-                          <Edit2 className="w-3.5 h-3.5 text-amber-500" />
-                          <span>Rename</span>
-                        </button>
-                      )}
-
-                      {activeSection === 'trash' && onRestoreFile && (
-                        <button
-                          onClick={() => {
-                            setActiveMenuFileId(null);
-                            onRestoreFile(folder);
-                          }}
-                          className="w-full flex items-center space-x-2 px-3 py-2 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-left"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>Restore folder</span>
-                        </button>
-                      )}
-
-                      <div className="h-px bg-zinc-100 dark:bg-zinc-800 my-1" />
-
-                      <button
-                        onClick={() => {
-                          setActiveMenuFileId(null);
-                          onDeleteFile(folder);
-                        }}
-                        className="w-full flex items-center space-x-2 px-3 py-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 text-left"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>{activeSection === 'trash' ? 'Delete forever' : 'Move to trash'}</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+                </motion.div>
               );
             })}
           </div>
@@ -201,21 +196,32 @@ export const FileGrid: React.FC<FileGridProps> = ({
       {/* Files Section */}
       {regularFiles.length > 0 && (
         <div className="space-y-3">
-          {folders.length > 0 && (
-            <h3 className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
-              Files ({regularFiles.length})
-            </h3>
-          )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
+          <h3 className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+            Files ({regularFiles.length})
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
             {regularFiles.map((file) => {
-              const category = getFileCategory(file.mimeType);
-              const isMenuOpen = activeMenuFileId === file.id;
               const isSelected = selectedFileIds.includes(file.id);
+              const isPulsing = pulsingFileId === file.id;
+              const category = getFileCategory(file.mimeType);
 
               return (
-                <div
+                <motion.div
                   key={file.id}
                   id={`file-card-${file.id}`}
+                  animate={
+                    isPulsing
+                      ? {
+                          scale: [1, 1.03, 1],
+                          boxShadow: [
+                            '0 0 0 0 rgba(59, 130, 246, 0)',
+                            '0 0 0 4px rgba(59, 130, 246, 0.35)',
+                            '0 0 0 0 rgba(59, 130, 246, 0)',
+                          ],
+                        }
+                      : { scale: 1 }
+                  }
+                  transition={{ duration: 0.35, ease: 'easeOut' }}
                   onClick={(e) => {
                     if (e.shiftKey || e.ctrlKey || e.metaKey) {
                       onToggleSelectFile?.(file.id, e);
@@ -223,15 +229,16 @@ export const FileGrid: React.FC<FileGridProps> = ({
                       onPreviewFile(file);
                     }
                   }}
-                  className={`group relative flex flex-col justify-between rounded-2xl shadow-2xs transition-all cursor-pointer overflow-hidden ${
+                  onContextMenu={(e) => handleContextMenu(e, file)}
+                  className={`group relative rounded-2xl overflow-hidden shadow-2xs transition-all cursor-pointer flex flex-col justify-between ${
                     isSelected
                       ? 'bg-blue-50/80 dark:bg-blue-950/40 border-2 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
                       : 'bg-white dark:bg-zinc-800/80 hover:bg-zinc-50 dark:hover:bg-zinc-700/60 border border-zinc-200/80 dark:border-zinc-700/70 hover:shadow-xs'
                   }`}
                 >
-                  {/* Card Preview / Thumbnail area */}
-                  <div className="h-28 bg-zinc-50 dark:bg-zinc-900/60 border-b border-zinc-100 dark:border-zinc-700/40 flex items-center justify-center p-3 relative">
-                    {/* Top-left corner Checkbox for File Card */}
+                  {/* Thumbnail / Category Header Box */}
+                  <div className="h-28 w-full bg-zinc-50 dark:bg-zinc-900/60 flex items-center justify-center relative overflow-hidden border-b border-zinc-100 dark:border-zinc-700/50">
+                    {/* Checkbox overlay */}
                     <div
                       className={`absolute top-2 left-2 z-10 transition-opacity ${
                         isSelected || selectedFileIds.length > 0
@@ -240,29 +247,31 @@ export const FileGrid: React.FC<FileGridProps> = ({
                       }`}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <div className="bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xs p-1 rounded-lg border border-zinc-200/60 dark:border-zinc-700/60 shadow-2xs flex items-center justify-center">
-                        <input
-                          id={`checkbox-file-${file.id}`}
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={(e) => onToggleSelectFile?.(file.id, e as unknown as React.MouseEvent)}
-                          className="w-4 h-4 rounded-sm text-blue-600 bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 focus:ring-blue-500 cursor-pointer"
-                          title={isSelected ? 'Deselect file' : 'Select file'}
-                        />
-                      </div>
+                      <input
+                        id={`checkbox-file-${file.id}`}
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) => onToggleSelectFile?.(file.id, e as unknown as React.MouseEvent)}
+                        className="w-4 h-4 rounded-sm text-blue-600 bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 focus:ring-blue-500 cursor-pointer"
+                        title={isSelected ? 'Deselect file' : 'Select file'}
+                      />
                     </div>
 
                     {file.thumbnailLink ? (
                       <img
                         src={file.thumbnailLink}
                         alt={file.name}
-                        className="h-full w-full object-contain rounded-lg"
                         referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          // Hide broken thumbnail image and show fallback icon
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
                       />
                     ) : (
-                      <div className="flex flex-col items-center space-y-1">
-                        <FileIcon mimeType={file.mimeType} className="w-10 h-10" />
-                        <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${category.bgColor}`}>
+                      <div className="flex flex-col items-center justify-center space-y-1.5 opacity-60">
+                        <FileIcon mimeType={file.mimeType} className="w-8 h-8" />
+                        <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-zinc-400">
                           {category.label}
                         </span>
                       </div>
@@ -284,8 +293,9 @@ export const FileGrid: React.FC<FileGridProps> = ({
 
                       <button
                         id={`btn-card-menu-${file.id}`}
-                        onClick={() => setActiveMenuFileId(isMenuOpen ? null : file.id)}
+                        onClick={(e) => handleContextMenu(e, file)}
                         className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                        title="More actions"
                       >
                         <MoreVertical className="w-3.5 h-3.5" />
                       </button>
@@ -306,93 +316,7 @@ export const FileGrid: React.FC<FileGridProps> = ({
                       <span>{formatDate(file.modifiedTime)}</span>
                     </div>
                   </div>
-
-                  {/* Context dropdown menu */}
-                  {isMenuOpen && (
-                    <div
-                      id={`card-dropdown-menu-${file.id}`}
-                      className="absolute right-2 top-10 w-44 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-xl py-1 z-40 text-xs animate-in fade-in zoom-in-95 duration-100"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        onClick={() => {
-                          setActiveMenuFileId(null);
-                          onPreviewFile(file);
-                        }}
-                        className="w-full flex items-center space-x-2 px-3 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left"
-                      >
-                        <Eye className="w-3.5 h-3.5 text-blue-500" />
-                        <span>Preview file</span>
-                      </button>
-
-                      {file.webViewLink && (
-                        <a
-                          href={file.webViewLink}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={() => setActiveMenuFileId(null)}
-                          className="w-full flex items-center space-x-2 px-3 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5 text-zinc-400" />
-                          <span>Open in Drive</span>
-                        </a>
-                      )}
-
-                      {activeSection !== 'trash' && (
-                        <>
-                          <button
-                            onClick={() => {
-                              setActiveMenuFileId(null);
-                              onRenameFile(file);
-                            }}
-                            className="w-full flex items-center space-x-2 px-3 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left"
-                          >
-                            <Edit2 className="w-3.5 h-3.5 text-amber-500" />
-                            <span>Rename</span>
-                          </button>
-
-                          {file.webContentLink && (
-                            <a
-                              href={file.webContentLink}
-                              download
-                              onClick={() => setActiveMenuFileId(null)}
-                              className="w-full flex items-center space-x-2 px-3 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left"
-                            >
-                              <Download className="w-3.5 h-3.5 text-emerald-500" />
-                              <span>Download</span>
-                            </a>
-                          )}
-                        </>
-                      )}
-
-                      {activeSection === 'trash' && onRestoreFile && (
-                        <button
-                          onClick={() => {
-                            setActiveMenuFileId(null);
-                            onRestoreFile(file);
-                          }}
-                          className="w-full flex items-center space-x-2 px-3 py-2 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-left"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>Restore file</span>
-                        </button>
-                      )}
-
-                      <div className="h-px bg-zinc-100 dark:bg-zinc-800 my-1" />
-
-                      <button
-                        onClick={() => {
-                          setActiveMenuFileId(null);
-                          onDeleteFile(file);
-                        }}
-                        className="w-full flex items-center space-x-2 px-3 py-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 text-left"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>{activeSection === 'trash' ? 'Delete forever' : 'Move to trash'}</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+                </motion.div>
               );
             })}
           </div>

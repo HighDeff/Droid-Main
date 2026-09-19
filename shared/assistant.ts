@@ -1,3 +1,25 @@
+export type AssistantSessionStatus =
+  | "active"
+  | "paused"
+  | "completed"
+  | "archived";
+export type AssistantItemStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "blocked";
+export type ProgressKind =
+  | "progress"
+  | "accomplishment"
+  | "obstacle"
+  | "suggestion";
+export type PlanApprovalState =
+  | "proposed"
+  | "needs_clarification"
+  | "approved"
+  | "rejected";
+export type PlanStepStatus = "proposed" | "edited" | "approved";
+export type PlanRiskLevel = "low" | "medium" | "high";
 export type TimingHint = "now" | "soon" | "scheduled" | "when_ready";
 
 export type WaitConditionType =
@@ -7,79 +29,470 @@ export type WaitConditionType =
   | "next_control"
   | "timer"
   | "page_load_stable";
+export type WaitConditionStatus = "pending" | "met" | "blocked" | "timed_out";
 
-export interface WaitCondition {
+export interface WaitConditionBase {
   id: string;
-  sessionId: string;
   type: WaitConditionType;
   label: string;
-  value?: string;
-  timeoutMs?: number;
-  threshold?: number;
-  pollIntervalMs?: number;
-  confidenceThreshold?: number;
-  approved?: boolean;
-  status?: "pending" | "satisfied" | "failed" | "timed_out";
-  createdAt?: string;
-  satisfiedAt?: string;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  confidenceThreshold: number;
+  approved: boolean;
+}
+
+export interface VisibleTextWaitCondition extends WaitConditionBase {
+  type: "visible_text";
+  text: string;
+  caseSensitive?: boolean;
+}
+
+export interface RegionWaitCondition extends WaitConditionBase {
+  type: "region";
+  region: RegionOfInterest;
+}
+
+export interface ControlWaitCondition extends WaitConditionBase {
+  type: "close_control" | "next_control";
+  controlLabel?: string;
+}
+
+export interface TimerWaitCondition extends WaitConditionBase {
+  type: "timer";
+  durationMs: number;
+}
+
+export interface PageLoadStableWaitCondition extends WaitConditionBase {
+  type: "page_load_stable";
+  stableForMs: number;
+}
+
+export type WaitCondition =
+  | VisibleTextWaitCondition
+  | RegionWaitCondition
+  | ControlWaitCondition
+  | TimerWaitCondition
+  | PageLoadStableWaitCondition;
+
+export interface WaitConditionObservation {
+  visibleText?: string;
+  regions?: RegionOfInterest[];
+  controls?: Array<{
+    type: "close" | "next";
+    label?: string;
+    confidence: number;
+  }>;
+  pageLoadStable?: boolean;
+  timerElapsedMs?: number;
 }
 
 export interface WaitConditionStatusEvent {
   id: string;
   conditionId: string;
-  status: "pending" | "satisfied" | "failed" | "timed_out";
-  timestamp: string;
-  detail?: string;
-  message?: string;
-  suggestion?: string;
-}
-
-export interface PlannedStep {
-  id: string;
-  order: number;
-  title: string;
-  description?: string;
-  action: string;
-  confidence?: number;
-  target?: { x: number; y: number };
-  selector?: string;
-  timing?: TimingHint;
-  status?: "pending" | "in_progress" | "completed" | "failed" | "edited" | string;
-  waitConditions?: WaitCondition[];
-}
-
-export interface AssistantPlan {
-  id: string;
   sessionId: string;
-  title: string;
-  goal: string;
-  instruction?: string | { id: string; sessionId: string; text: string; createdAt: string; [key: string]: any };
-  timing?: TimingHint;
+  status: WaitConditionStatus;
+  message: string;
+  suggestion?: string;
   confidence?: number;
-  risks?: any[];
-  approvalState?: "pending" | "approved" | "rejected" | string;
-  steps: PlannedStep[];
-  sourceCaptureIds?: string[];
-  status: "draft" | "approved" | "executing" | "completed" | "failed";
-  createdAt: string;
-  updatedAt: string;
+  timestamp: string;
+}
+
+export type AllowlistedActionType =
+  | "click"
+  | "type"
+  | "key"
+  | "wait"
+  | "screenshot"
+  | "navigate-shortcut";
+
+export interface ClickAction {
+  type: "click";
+  x: number;
+  y: number;
+  button?: "left" | "right";
+}
+
+export interface TypeAction {
+  type: "type";
+  text: string;
+}
+
+export interface KeyAction {
+  type: "key";
+  key: string;
+}
+
+export interface WaitAction {
+  type: "wait";
+  durationMs: number;
+}
+
+export interface ScreenshotAction {
+  type: "screenshot";
+  label?: string;
+}
+
+export interface NavigateShortcutAction {
+  type: "navigate-shortcut";
+  shortcut: "back" | "forward" | "home" | "refresh";
+}
+
+export type AllowlistedAction =
+  | ClickAction
+  | TypeAction
+  | KeyAction
+  | WaitAction
+  | ScreenshotAction
+  | NavigateShortcutAction;
+
+export type ExecutionStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "awaiting_approval"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export type ExecutionEventStatus =
+  | "started"
+  | "completed"
+  | "failed"
+  | "info"
+  | "capture"
+  | "analysis"
+  | "verification"
+  | "retry"
+  | "alternate"
+  | "approval";
+
+export type VerificationKind =
+  | "region-present"
+  | "text-present"
+  | "element-present"
+  | "confidence-threshold";
+
+export interface StepVerification {
+  kind: VerificationKind;
+  region?: RegionOfInterest;
+  text?: string;
+  elementLabel?: string;
+  minConfidence?: number;
+}
+
+export interface RetryPolicy {
+  maxAttempts: number;
+  backoffMs?: number;
+  alternateStepId?: string;
+}
+
+export interface AdaptiveExecutionPolicy {
+  captureBefore?: boolean;
+  verification?: StepVerification;
+  retry?: RetryPolicy;
+}
+
+export interface ExecutionEvidence {
+  id: string;
+  stepId: string;
+  attempt: number;
+  capturedAt: string;
+  capture?: CapturedFrameReference;
+  analysis?: FrameAnalysis;
+  verification: {
+    status: "passed" | "failed" | "uncertain";
+    reason: string;
+    confidence?: number;
+  };
+}
+
+export interface ExecutionTimelineEvent {
+  id: string;
+  timestamp: string;
+  status: ExecutionEventStatus;
+  message: string;
+  stepId?: string;
+  result?: unknown;
+  evidenceId?: string;
+}
+
+export interface ActionExecutionResult {
+  actionType: AllowlistedActionType;
+  success: boolean;
+  message: string;
+  data?: Record<string, unknown>;
 }
 
 export interface AssistantExecution {
   id: string;
   planId: string;
   sessionId: string;
-  status: "running" | "paused" | "completed" | "cancelled" | "failed";
-  currentStepIndex: number;
-  currentStep?: number;
-  totalSteps?: number;
-  pendingApproval?: any;
-  timeline?: any[];
-  evidence?: any[];
-  startedAt: string;
+  status: ExecutionStatus;
+  currentStep: number;
+  totalSteps: number;
+  startedAt?: string;
   completedAt?: string;
   error?: string;
-  logs?: string[];
+  timeline: ExecutionTimelineEvent[];
+  results: ActionExecutionResult[];
+  evidence: ExecutionEvidence[];
+  pendingApproval?: {
+    stepId: string;
+    reason: string;
+    alternateStepId?: string;
+    retryStep?: boolean;
+  };
+}
+
+export interface AssistantProject {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AssistantSubtask {
+  id: string;
+  title: string;
+  status: AssistantItemStatus;
+  notes?: string;
+}
+
+export interface AssistantTask {
+  id: string;
+  title: string;
+  status: AssistantItemStatus;
+  subtasks: AssistantSubtask[];
+  notes?: string;
+}
+
+export interface AssistantGoal {
+  id: string;
+  title: string;
+  status: AssistantItemStatus;
+  tasks: AssistantTask[];
+  notes?: string;
+}
+
+export interface AssistantSession {
+  id: string;
+  project: AssistantProject;
+  status: AssistantSessionStatus;
+  goals: AssistantGoal[];
+  savedStateIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RegionOfInterest {
+  id: string;
+  label?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence?: number;
+}
+
+export interface Annotation {
+  id: string;
+  text: string;
+  type?: string;
+  region?: RegionOfInterest;
+}
+
+export interface ScreenshotCapture {
+  id: string;
+  sessionId: string;
+  imageData: string;
+  source?: string;
+  capturedAt: string;
+  annotations: Annotation[];
+}
+
+export type AnalysisStatus =
+  | "queued"
+  | "processing"
+  | "completed"
+  | "fallback"
+  | "failed";
+
+export type AnalysisProvider =
+  | "tesseract"
+  | "remote-ocr"
+  | "local-ocr"
+  | "deterministic-fallback";
+
+export interface CapturedFrameReference {
+  captureId?: string;
+  sessionId?: string;
+  imageRef?: string;
+  imageData?: string;
+}
+
+export interface OCRTextBlock {
+  id: string;
+  text: string;
+  confidence: number;
+  region?: RegionOfInterest;
+}
+
+export interface DetectedUIElement {
+  id: string;
+  type: string;
+  label?: string;
+  confidence: number;
+  region: RegionOfInterest;
+}
+
+export interface FrameAnalysis {
+  id: string;
+  captureId?: string;
+  sessionId?: string;
+  source?: string;
+  status: AnalysisStatus;
+  provider: AnalysisProvider;
+  confidence: number;
+  ocrText: OCRTextBlock[];
+  detectedElements: DetectedUIElement[];
+  regionsOfInterest: RegionOfInterest[];
+  notes: string[];
+  analyzedAt: string;
+}
+
+export interface UserInstruction {
+  id: string;
+  sessionId: string;
+  text: string;
+  priority?: number;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface InstructionClarification {
+  id: string;
+  question: string;
+  reason: string;
+  required: boolean;
+  answer?: string;
+}
+
+export interface PlanPrerequisite {
+  id: string;
+  description: string;
+  satisfied: boolean;
+  source?: string;
+}
+
+export interface PlannedStep {
+  id: string;
+  order: number;
+  title: string;
+  description: string;
+  status: PlanStepStatus;
+  timing: TimingHint;
+  confidence: number;
+  prerequisites: string[];
+  risks: string[];
+  action?: AllowlistedAction;
+  adaptive?: AdaptiveExecutionPolicy;
+  waitConditions?: WaitCondition[];
+}
+
+export interface PlanRisk {
+  id: string;
+  description: string;
+  level: PlanRiskLevel;
+  mitigation?: string;
+}
+
+export interface AssistantPlan {
+  id: string;
+  sessionId: string;
+  instruction: UserInstruction;
+  sourceCaptureIds: string[];
+  sourceNoteIds: string[];
+  clarifications: InstructionClarification[];
+  steps: PlannedStep[];
+  prerequisites: PlanPrerequisite[];
+  risks: PlanRisk[];
+  timing: TimingHint;
+  confidence: number;
+  approvalState: PlanApprovalState;
+  createdAt: string;
+  updatedAt: string;
+  approvedAt?: string;
+  rejectedAt?: string;
+  metadata?: {
+    learnedMethod?: {
+      successRate: number;
+      adaptationNotes: string;
+      lastSuccessfulAt: string;
+    };
+    totalSuccessfulRuns?: number;
+    [key: string]: unknown;
+  };
+}
+
+export interface OperationPack {
+  id: string;
+  sessionId: string;
+  name: string;
+  description?: string;
+  operations: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProgressEntry {
+  id: string;
+  sessionId: string;
+  kind: ProgressKind;
+  message: string;
+  relatedGoalId?: string;
+  createdAt: string;
+}
+
+export interface SavedState {
+  id: string;
+  sessionId: string;
+  label: string;
+  snapshot: Record<string, unknown>;
+  createdAt: string;
+}
+
+export type WorkflowStatus = "active" | "paused" | "completed" | "archived";
+export type WorkflowResumeMode = "manual" | "scheduled";
+
+export interface WorkflowSchedule {
+  enabled: boolean;
+  nextRunAt?: string;
+  timezone?: string;
+}
+
+export interface PauseResumePolicy {
+  pauseOnError: boolean;
+  allowResume: boolean;
+  resumeMode: WorkflowResumeMode;
+}
+
+export interface WorkflowTaskProgress {
+  taskId: string;
+  title: string;
+  status: AssistantItemStatus;
+  completed: number;
+  total: number;
+}
+
+export interface WorkflowGoalProgress {
+  goalId: string;
+  title: string;
+  status: AssistantItemStatus;
+  completed: number;
+  total: number;
+  tasks: WorkflowTaskProgress[];
 }
 
 export interface AssistantWorkflow {
@@ -87,139 +500,36 @@ export interface AssistantWorkflow {
   sessionId: string;
   name: string;
   description?: string;
-  status?: string;
-  repeatCount?: number;
-  schedule?: any;
-  checkpointIds?: string[];
-  operationPackIds?: string[];
-  pauseResumePolicy?: any;
-  goals?: any;
-  steps: PlannedStep[];
+  status: WorkflowStatus;
+  operationPackIds: string[];
+  checkpointIds: string[];
+  repeatCount: number;
+  schedule: WorkflowSchedule;
+  pauseResumePolicy: PauseResumePolicy;
+  goals: WorkflowGoalProgress[];
   createdAt: string;
   updatedAt: string;
-  executionCount?: number;
-  successRate?: number;
 }
 
-export interface AssistantSession {
-  id: string;
-  name?: string;
-  project?: string | { id: string; name: string; createdAt?: string; updatedAt?: string; [key: string]: any };
-  status?: string;
-  goals?: string[];
-  savedStateIds?: string[];
-  createdAt: string;
-  updatedAt: string;
-  source?: any;
-}
+export type CaptureSourceKind = "desktop" | "android";
+export type CaptureSourceConnectionState =
+  | "connected"
+  | "disconnected"
+  | "error";
 
 export interface CaptureSource {
   id: string;
+  kind: CaptureSourceKind;
   name: string;
-  type: "desktop" | "android" | "browser" | "window";
-  kind?: string;
   detail?: string;
-  connected: boolean;
-  connectionState?: "connected" | "connecting" | "disconnected" | "failed" | string;
+  connectionState: CaptureSourceConnectionState;
   lastFrameAt?: string;
   error?: string;
-  resolution?: { width: number; height: number };
-  lastActive?: string;
+  deviceId?: string;
 }
 
-export interface FrameAnalysis {
-  id: string;
-  captureId?: string;
-  sessionId?: string;
-  timestamp: string;
-  analyzedAt?: string;
-  provider?: string;
-  status?: string;
-  summary: string;
-  confidence: number;
-  ocrText?: string | string[];
-  notes?: string | string[];
-  regionsOfInterest?: any[];
-  uiElements?: Array<{
-    id: string;
-    name: string;
-    type: string;
-    confidence: number;
-    boundingBox?: { x: number; y: number; width: number; height: number };
-  }>;
-  detectedElements?: any[];
-  textExtracted?: string[];
-  suggestedActions?: Array<{
-    id: string;
-    action: string;
-    target?: { x: number; y: number };
-    confidence: number;
-  }>;
-}
-
-export interface UserInstruction {
-  id: string;
-  sessionId: string;
-  text: string;
-  createdAt: string;
-  timing?: TimingHint;
-}
-
-export interface OperationPack {
-  id: string;
-  sessionId: string;
-  title: string;
-  operations: any[];
-  createdAt: string;
-}
-
-export interface ProgressEntry {
-  id: string;
-  sessionId: string;
-  stepId?: string;
-  message: string;
-  timestamp: string;
-  percentage?: number;
-}
-
-export interface SavedState {
-  id: string;
-  sessionId: string;
-  data: any;
-  timestamp: string;
-}
-
-export interface ScreenshotCapture {
-  id: string;
-  sessionId: string;
+export interface CaptureSourceFrame {
+  sourceId: string;
   imageData: string;
   capturedAt: string;
-  dimensions?: { width: number; height: number };
-  annotations?: Annotation[];
-}
-
-export interface Annotation {
-  id: string;
-  captureId: string;
-  x: number;
-  y: number;
-  label: string;
-  confidence?: number;
-}
-
-export type AllowlistedAction =
-  | { type: "click"; x: number; y: number; button?: number | string; [key: string]: any }
-  | { type: "tap"; x: number; y: number; [key: string]: any }
-  | { type: "type"; text: string; [key: string]: any }
-  | { type: "key"; key: string; [key: string]: any }
-  | { type: "scroll"; deltaX?: number; deltaY?: number; [key: string]: any }
-  | { type: "swipe"; fromX: number; fromY: number; toX: number; toY: number; durationMs?: number; [key: string]: any };
-
-export interface ActionExecutionResult {
-  success: boolean;
-  actionId?: string;
-  actionType?: string;
-  message?: string;
-  error?: string;
-  timestamp?: string;
 }

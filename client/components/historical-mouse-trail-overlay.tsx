@@ -194,15 +194,17 @@ export const HistoricalMouseTrailOverlay: React.FC<HistoricalMouseTrailOverlayPr
                 className="filter drop-shadow-[0_0_6px_rgba(34,211,238,0.6)]"
               />
 
-              {/* Waypoints */}
+              {/* Waypoints & Click Contacts with Blinking Animation */}
               {pts.map((p, pIdx) => {
                 const cx = `${(p.x / nativeWidth) * 100}%`;
                 const cy = `${(p.y / nativeHeight) * 100}%`;
                 if (p.isClick) {
                   return (
-                    <g key={pIdx}>
-                      <circle cx={cx} cy={cy} r="7" fill={session.color} stroke="#ffffff" strokeWidth="2" />
-                      <circle cx={cx} cy={cy} r="14" fill="none" stroke={session.color} strokeWidth="1" strokeDasharray="3 3" />
+                    <g key={pIdx} className="click-blink-active">
+                      {/* Blinking outer pulse ring */}
+                      <circle cx={cx} cy={cy} r="18" fill="none" stroke={session.color} strokeWidth="1.5" strokeDasharray="4 3" opacity="0.8" />
+                      <circle cx={cx} cy={cy} r="12" fill={session.color} fillOpacity="0.25" stroke={session.color} strokeWidth="2" />
+                      <circle cx={cx} cy={cy} r="6" fill="#ffffff" stroke={session.color} strokeWidth="2.5" />
                     </g>
                   );
                 }
@@ -228,15 +230,25 @@ export const HistoricalMouseTrailOverlay: React.FC<HistoricalMouseTrailOverlayPr
             />
             {currentLiveTrail.map((p, idx) =>
               p.isClick ? (
-                <circle
-                  key={idx}
-                  cx={`${(p.x / nativeWidth) * 100}%`}
-                  cy={`${(p.y / nativeHeight) * 100}%`}
-                  r="8"
-                  fill="#ec4899"
-                  stroke="#ffffff"
-                  strokeWidth="2"
-                />
+                <g key={idx} className="click-blink-active">
+                  <circle
+                    cx={`${(p.x / nativeWidth) * 100}%`}
+                    cy={`${(p.y / nativeHeight) * 100}%`}
+                    r="16"
+                    fill="none"
+                    stroke="#ec4899"
+                    strokeWidth="2"
+                    strokeDasharray="3 3"
+                  />
+                  <circle
+                    cx={`${(p.x / nativeWidth) * 100}%`}
+                    cy={`${(p.y / nativeHeight) * 100}%`}
+                    r="8"
+                    fill="#ec4899"
+                    stroke="#ffffff"
+                    strokeWidth="2.5"
+                  />
+                </g>
               ) : null
             )}
           </g>

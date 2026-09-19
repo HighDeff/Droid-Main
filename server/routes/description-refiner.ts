@@ -32,10 +32,14 @@ export function ensureUnderWordLimit(text: string, limit: number = 20): { text: 
 export interface RefinedResult {
   refinedDescription: string;
   wordCount: number;
+  charCount: number;
+  targetWordLimit: number;
+  constraintMode: string;
   keyPropositions: string[];
   rationale: string;
-  variations: Array<{ text: string; wordCount: number; style: string }>;
+  variations: Array<{ text: string; wordCount: number; charCount: number; style: string }>;
   originalWordCount: number;
+  originalCharCount: number;
   source: "gemini" | "heuristic-engine";
 }
 
@@ -45,10 +49,12 @@ export interface RefinedResult {
 export function heuristicRefineDescription(
   rawText: string,
   targetLimit: number = 20,
-  tone: string = "high-impact"
+  tone: string = "high-impact",
+  constraintMode: string = "twitter_brevity"
 ): RefinedResult {
   const cleanRaw = rawText.trim();
   const originalWordCount = countWords(cleanRaw);
+  const originalCharCount = cleanRaw.length;
 
   // Common fluff prefixes to strip
   const fluffPatterns = [
@@ -96,7 +102,7 @@ export function heuristicRefineDescription(
   // Build variations
   let baseSentence = stripped;
   const sentenceEndMatch = baseSentence.match(/^([^.!?]+[.!?])/);
-  if (sentenceEndMatch && countWords(sentenceEndMatch[1]) <= targetLimit && countWords(sentenceEndMatch[1]) >= 6) {
+  if (sentenceEndMatch && countWords(sentenceEndMatch[1]) <= targetLimit && countWords(sentenceEndMatch[1]) >= 4) {
     baseSentence = sentenceEndMatch[1].trim();
   }
 
@@ -117,20 +123,24 @@ export function heuristicRefineDescription(
   return {
     refinedDescription: bounded.text,
     wordCount: bounded.wordCount,
+    charCount: bounded.text.length,
+    targetWordLimit: targetLimit,
+    constraintMode,
     keyPropositions: props.slice(0, 3),
-    rationale: `Removed introductory fillers, consolidated core action verbs, and distilled key value propositions strictly under ${targetLimit} words.`,
+    rationale: `Applied '${constraintMode}' constraint: distilled core action verbs and value propositions strictly under ${targetLimit} words (${bounded.text.length} characters).`,
     variations: [
-      { text: actionVariationText.text, wordCount: actionVariationText.wordCount, style: "Action-Driven" },
-      { text: outcomeVariationText.text, wordCount: outcomeVariationText.wordCount, style: "Outcome-Focused" },
+      { text: actionVariationText.text, wordCount: actionVariationText.wordCount, charCount: actionVariationText.text.length, style: "Action-Driven" },
+      { text: outcomeVariationText.text, wordCount: outcomeVariationText.wordCount, charCount: outcomeVariationText.text.length, style: "Outcome-Focused" },
     ],
     originalWordCount,
+    originalCharCount,
     source: "heuristic-engine",
   };
 }
 
 export async function handleRefineDescription(req: Request, res: Response) {
   try {
-    const { description, targetWords = 20, tone = "high-impact" } = req.body;
+    const { description, targetWords = 20, tone = "high-impact", constraintMode = "twitter_brevity" } = req.body;
 
     if (!description || typeof description !== "string" || !description.trim()) {
       return res.status(400).json({
@@ -140,21 +150,35 @@ export async function handleRefineDescription(req: Request, res: Response) {
     }
 
     const rawText = description.trim();
-    const wordLimit = Math.min(Math.max(Number(targetWords) || 20, 5), 20); // strictly capped at 20 words
+    // Support custom word constraints from 4 up to 80 words (e.g. 12 for Twitter, 30 for App Store)
+    const wordLimit = Math.min(Math.max(Number(targetWords) || 20, 4), 80);
     const originalWordCount = countWords(rawText);
+    const originalCharCount = rawText.length;
 
     const client = getGenAiClient();
 
+    let constraintDescription = `STRICTLY UNDER ${wordLimit} WORDS`;
+    if (constraintMode === "twitter_brevity" || wordLimit <= 12) {
+      constraintDescription = `STRICTLY UNDER ${wordLimit} WORDS (Twitter/X-style extreme brevity, punchy and shareable, ideally under 100 characters)`;
+    } else if (constraintMode === "app_store_short" || (wordLimit >= 25 && wordLimit <= 35)) {
+      constraintDescription = `STRICTLY UNDER ${wordLimit} WORDS (App Store / Google Play short promo description, high clarity on user benefits and app functionality, fitting under 170-250 characters)`;
+    } else if (constraintMode === "tagline" || wordLimit <= 8) {
+      constraintDescription = `STRICTLY UNDER ${wordLimit} WORDS (Hero Tagline & Subtitle, ultra-concise hook)`;
+    }
+
     if (client) {
       try {
-        const prompt = `You are an elite product copywriter and app store strategist.
-Rewrite the following rough app description into a punchy, crystal-clear description that is STRICTLY UNDER ${wordLimit} WORDS (ideally 10 to 18 words).
+        const prompt = `You are an elite product copywriter, App Store copy strategist, and social media copy editor.
+Rewrite the following rough app description into a punchy, crystal-clear description that is ${constraintDescription}.
 It MUST maintain the application's core value propositions, target audience, and primary functionality without marketing fluff.
 
 Rough app description:
 "${rawText}"
 
 Tone: ${tone}
+Constraint Mode: ${constraintMode}
+Max Word Limit: ${wordLimit}
+
 Strict constraints:
 1. Output MUST be strictly under ${wordLimit} words. NEVER exceed ${wordLimit} words.
 2. Maintain core value propositions accurately.
@@ -164,7 +188,7 @@ Respond ONLY with a valid JSON object matching this exact TypeScript structure:
 {
   "refinedDescription": "string (strictly <= ${wordLimit} words)",
   "keyPropositions": ["string", "string"],
-  "rationale": "string (brief note on how value was preserved)",
+  "rationale": "string (brief note on how constraint and value were balanced)",
   "variations": [
     { "text": "string (strictly <= ${wordLimit} words)", "style": "Action-Driven" },
     { "text": "string (strictly <= ${wordLimit} words)", "style": "Minimalist" }
@@ -189,6 +213,7 @@ Respond ONLY with a valid JSON object matching this exact TypeScript structure:
             return {
               text: safe.text,
               wordCount: safe.wordCount,
+              charCount: safe.text.length,
               style: v.style || "Alternative",
             };
           });
@@ -197,10 +222,14 @@ Respond ONLY with a valid JSON object matching this exact TypeScript structure:
             success: true,
             refinedDescription: safeRefined.text,
             wordCount: safeRefined.wordCount,
+            charCount: safeRefined.text.length,
+            targetWordLimit: wordLimit,
+            constraintMode,
             keyPropositions: Array.isArray(parsed.keyPropositions) ? parsed.keyPropositions : ["Core Automation", "Vision Hub"],
-            rationale: parsed.rationale || `Refined to ${safeRefined.wordCount} words while preserving key capabilities.`,
+            rationale: parsed.rationale || `Refined to ${safeRefined.wordCount} words (${safeRefined.text.length} chars) matching the ${constraintMode} constraint.`,
             variations: safeVariations,
             originalWordCount,
+            originalCharCount,
             source: "gemini",
           });
         }
@@ -210,7 +239,7 @@ Respond ONLY with a valid JSON object matching this exact TypeScript structure:
     }
 
     // Heuristic fallback
-    const result = heuristicRefineDescription(rawText, wordLimit, tone);
+    const result = heuristicRefineDescription(rawText, wordLimit, tone, constraintMode);
     return res.json({
       success: true,
       ...result,
@@ -252,3 +281,182 @@ export function handleGetSamplePresets(_req: Request, res: Response) {
     ],
   });
 }
+
+export interface BulkItemResult {
+  id: string;
+  keyword: string;
+  name: string;
+  description: string;
+  wordCount: number;
+  charCount: number;
+  keyPropositions: string[];
+  constraintMode: string;
+  targetWords: number;
+  badge?: string;
+  category?: string;
+}
+
+export async function handleBulkGenerateNamesDescriptions(req: Request, res: Response) {
+  try {
+    const {
+      keywords,
+      rawInput = "",
+      targetWords = 18,
+      constraintMode = "twitter_brevity",
+      tone = "high-impact",
+      namingStyle = "modern-saas",
+    } = req.body;
+
+    // Parse input keywords (from array or comma/newline delimited text)
+    let keywordList: string[] = [];
+    if (Array.isArray(keywords) && keywords.length > 0) {
+      keywordList = keywords.map((k) => String(k).trim()).filter(Boolean);
+    } else if (typeof rawInput === "string" && rawInput.trim()) {
+      keywordList = rawInput
+        .split(/[\n,;]+/)
+        .map((k) => k.trim().replace(/^[-*•0-9.)\s]+/, "").trim())
+        .filter(Boolean);
+    }
+
+    if (keywordList.length === 0) {
+      keywordList = [
+        "AI Game Vision Bot",
+        "Cloud Observability Hub",
+        "Multiplayer Canvas",
+        "Autonomous Mouse Orchestrator",
+        "Crypto Portfolio Tracker",
+      ];
+    }
+
+    // Limit to max 25 keywords per batch for performance
+    const activeKeywords = keywordList.slice(0, 25);
+    const wordLimit = Math.min(Math.max(Number(targetWords) || 18, 4), 80);
+
+    const client = getGenAiClient();
+    if (client) {
+      try {
+        const prompt = `You are a world-class product strategist, creative naming director, and App Store copywriter.
+Generate high-converting, professional Product Name and Description pairs for each of the following ${activeKeywords.length} topics/keywords:
+
+${activeKeywords.map((k, idx) => `${idx + 1}. "${k}"`).join("\n")}
+
+CONSTRAINTS:
+- Constraint Mode: ${constraintMode}
+- Strict Word Limit: Every description MUST BE STRICTLY <= ${wordLimit} WORDS. Never exceed ${wordLimit} words.
+- Tone: ${tone}
+- Naming Style: ${namingStyle} (e.g. punchy, memorable, 1-3 words, no generic clichés)
+- Each item MUST include:
+  1. "keyword": matching input
+  2. "name": distinctive, brandable product name
+  3. "description": ultra-clear, punchy summary strictly under ${wordLimit} words
+  4. "keyPropositions": array of 2 short core value hooks (e.g. ["Sub-10ms Latency", "Neural Vision"])
+  5. "category": short category tag (e.g. "DevOps", "Gaming AI", "FinTech", "Creative")
+
+Respond ONLY with a valid JSON array of objects matching this exact structure:
+[
+  {
+    "keyword": "AI Game Vision Bot",
+    "name": "DroidVision",
+    "description": "Autonomous game vision control hub with precision pyautogui mouse execution.",
+    "keyPropositions": ["Screen Perception", "Zero-Lag Control"],
+    "category": "Gaming AI"
+  }
+]`;
+
+        const aiResponse = await client.models.generateContent({
+          model: "gemini-3.8-flash",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.4,
+          },
+        });
+
+        const text = aiResponse.text?.trim();
+        if (text) {
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const results: BulkItemResult[] = parsed.map((item: any, idx: number) => {
+              const bounded = ensureUnderWordLimit(item.description || item.keyword, wordLimit);
+              return {
+                id: `bulk_${Date.now()}_${idx}`,
+                keyword: item.keyword || activeKeywords[idx] || `Item #${idx + 1}`,
+                name: item.name || `Smart ${activeKeywords[idx]}`,
+                description: bounded.text,
+                wordCount: bounded.wordCount,
+                charCount: bounded.text.length,
+                keyPropositions: Array.isArray(item.keyPropositions) ? item.keyPropositions : ["Core Automation", "Fast Integration"],
+                constraintMode,
+                targetWords: wordLimit,
+                category: item.category || "General Utility",
+              };
+            });
+
+            return res.json({
+              success: true,
+              total: results.length,
+              source: "gemini-3.8-flash",
+              constraintMode,
+              targetWords: wordLimit,
+              items: results,
+            });
+          }
+        }
+      } catch (geminiError) {
+        console.warn("[Bulk Generator] Gemini API error, falling back to heuristic engine:", geminiError);
+      }
+    }
+
+    // Heuristic Bulk Generation Fallback
+    const heuristicResults: BulkItemResult[] = activeKeywords.map((keyword, idx) => {
+      const cleanKey = keyword.trim();
+      // Generate clean name
+      const nameParts = cleanKey.split(/\s+/);
+      let brandName = cleanKey;
+      if (nameParts.length === 1) {
+        brandName = `${cleanKey.charAt(0).toUpperCase() + cleanKey.slice(1)}Flow`;
+      } else if (nameParts.length <= 3) {
+        brandName = nameParts.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("");
+      } else {
+        brandName = nameParts.slice(0, 2).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("") + " Studio";
+      }
+
+      const refined = heuristicRefineDescription(
+        `A high-performance ${cleanKey} system designed to streamline real-time operations, automate repetitive tasks, and boost team productivity.`,
+        wordLimit,
+        tone,
+        constraintMode
+      );
+
+      return {
+        id: `bulk_h_${Date.now()}_${idx}`,
+        keyword: cleanKey,
+        name: brandName,
+        description: refined.refinedDescription,
+        wordCount: refined.wordCount,
+        charCount: refined.charCount,
+        keyPropositions: refined.keyPropositions,
+        constraintMode,
+        targetWords: wordLimit,
+        category: "Product Suite",
+      };
+    });
+
+    return res.json({
+      success: true,
+      total: heuristicResults.length,
+      source: "heuristic-engine",
+      constraintMode,
+      targetWords: wordLimit,
+      items: heuristicResults,
+    });
+  } catch (error) {
+    console.error("[Bulk Generator] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error generating bulk items",
+      details: String(error),
+    });
+  }
+}
+

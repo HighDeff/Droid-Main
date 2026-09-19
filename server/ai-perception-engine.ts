@@ -4,6 +4,9 @@
  * detects UI elements with precise (X,Y,W,H) bounding boxes, and provides focus positioning.
  */
 
+import { resolveAiEndpoint } from "./ai-endpoint";
+import { detectScreenElementsAndSteps } from "./ai-gemini-service";
+
 export interface DetectedUIElement {
   id: string;
   name: string;
@@ -43,9 +46,16 @@ export class QwenVisionPerceptionEngine {
 
   async analyzeScreen(
     imageData: string,
-    endpoint = "https://remote.quantumpass.io/ollama/api/chat",
+    endpoint?: string,
     model = "qwen2.5vl:7b",
   ): Promise<ScreenPerceptionReport> {
+    const resolvedEndpoint = resolveAiEndpoint(endpoint);
+    if (!resolvedEndpoint) {
+      // No remote vision endpoint configured: use the app's local AI provider
+      // instead of failing against a hardcoded host.
+      return this.analyzeWithLocalProvider(imageData);
+    }
+
     const base64Image = imageData.includes(",")
       ? imageData.split(",")[1]
       : imageData;
@@ -91,7 +101,7 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
         format: "json",
       };
 
-      const response = await fetch(endpoint, {
+      const response = await fetch(resolvedEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -160,13 +170,82 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
       this.lastDescription = report.screenDescription;
       return report;
     } catch (err) {
-      console.error(
+      console.warn(
         "Qwen Vision perception failed, providing structured fallback:",
         err,
       );
       return this.generateFallbackReport(
         err instanceof Error ? err.message : String(err),
       );
+    }
+  }
+
+  /**
+   * Perception via the app's configured AI provider (Gemini). Falls back to the
+   * heuristic report internally when no API key is configured.
+   */
+  private async analyzeWithLocalProvider(
+    imageData: string,
+  ): Promise<ScreenPerceptionReport> {
+    const analysis = await detectScreenElementsAndSteps({ imageData });
+
+    const elements: DetectedUIElement[] = (analysis.elements || []).map(
+      (el, idx) => ({
+        id: el.id || `elem_${idx + 1}`,
+        name: el.name || `Element ${idx + 1}`,
+        type: this.normalizeElementType(el.type),
+        boundingBox: {
+          x: el.x,
+          y: el.y,
+          width: el.width || 80,
+          height: el.height || 35,
+        },
+        center: { x: el.x, y: el.y },
+        confidence:
+          typeof el.confidence === "number" ? el.confidence : 0.85,
+        interactive: true,
+        textValue: el.suggestedTextPayload || "",
+      }),
+    );
+
+    const focus = analysis.primaryActionTarget;
+    const report: ScreenPerceptionReport = {
+      timestamp: Date.now(),
+      screenDescription:
+        analysis.summary || "Active workspace display with interactive elements.",
+      activeWindow: "Active Application",
+      visualStateChange: this.lastDescription ? "State updated" : "Initial frame",
+      elements: elements.length > 0 ? elements : this.generateDefaultElements(),
+      feedbackPosition: focus
+        ? { x: focus.x, y: focus.y }
+        : { x: 960, y: 540 },
+      primarySuggestion: focus?.label
+        ? `Focus ${focus.label}`
+        : "Inspect interactive targets and execute planned sequence.",
+      confidence: 0.85,
+    };
+
+    this.lastDescription = report.screenDescription;
+    return report;
+  }
+
+  private normalizeElementType(type: string): DetectedUIElement["type"] {
+    switch (type) {
+      case "button":
+      case "input":
+      case "icon":
+      case "text":
+      case "toggle":
+      case "checkbox":
+        return type;
+      case "tab":
+      case "link":
+        return "button";
+      case "dropdown":
+      case "scroll_area":
+        return "input";
+      default:
+        return "other";
     }
   }
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import { gameStateManager } from "../state-manager";
 import { autoTaskGenerator } from "../auto-task-generator";
 import { multiAgentExecutor } from "../multi-agent-executor";
+import { resolveAiEndpoint } from "../ai-endpoint";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,9 +56,10 @@ export const handleAnalyzeScreenshot: RequestHandler = async (req, res) => {
     // Step 4: Execute high-priority tasks via multi-agent system
     const executionResults = multiAgentExecutor.processAndExecuteTasks();
 
-    // Step 5: Analyze with Ollama for natural language understanding (with offline fallback)
-    const ollamaEndpoint =
-      endpoint || "https://remote.quantumpass.io/ollama/api/chat";
+    // Step 5: Analyze with the configured AI endpoint for natural language
+    // understanding (with offline fallback). No endpoint is hardcoded: it comes
+    // from the request or the OLLAMA_ENDPOINT environment variable.
+    const ollamaEndpoint = resolveAiEndpoint(endpoint);
     const base64Image = imageData.includes(",")
       ? imageData.split(",")[1]
       : imageData;
@@ -68,7 +70,23 @@ export const handleAnalyzeScreenshot: RequestHandler = async (req, res) => {
     let confidence = 0.85;
     let ollamaOnline = false;
 
-    try {
+    const applyHeuristicFallback = () => {
+      if (entityResult.entities && entityResult.entities.length > 0) {
+        const top = entityResult.entities[0];
+        detection = `Detected ${entityResult.entities.length} interactive element(s), top: ${top.name || top.type} at (${top.position?.x || 960}, ${top.position?.y || 540})`;
+        suggestion = `Target ${top.name || "primary element"} at (${top.position?.x || 960}, ${top.position?.y || 540})`;
+        confidence = 0.82;
+      } else {
+        detection =
+          "Workspace active - heuristic scan complete, 1920x1080 grid ready";
+        suggestion = "Click central focus or record a new action sequence";
+        confidence = 0.78;
+      }
+    };
+
+    if (!ollamaEndpoint) {
+      applyHeuristicFallback();
+    } else try {
       const payload = {
         model: "qwen2.5vl:7b",
         messages: [
@@ -106,20 +124,10 @@ export const handleAnalyzeScreenshot: RequestHandler = async (req, res) => {
     } catch (ollamaErr) {
       // Offline fallback: generate heuristic detection from entities & game state
       console.warn(
-        "Ollama offline, using heuristic fallback:",
+        "AI endpoint unavailable, using heuristic fallback:",
         ollamaErr instanceof Error ? ollamaErr.message : ollamaErr,
       );
-      if (entityResult.entities && entityResult.entities.length > 0) {
-        const top = entityResult.entities[0];
-        detection = `Detected ${entityResult.entities.length} interactive element(s), top: ${top.name || top.type} at (${top.position?.x || 960}, ${top.position?.y || 540})`;
-        suggestion = `Target ${top.name || "primary element"} at (${top.position?.x || 960}, ${top.position?.y || 540})`;
-        confidence = 0.82;
-      } else {
-        detection =
-          "Workspace active - heuristic scan complete, 1920x1080 grid ready";
-        suggestion = "Click central focus or record a new action sequence";
-        confidence = 0.78;
-      }
+      applyHeuristicFallback();
     }
 
     // Get current game state

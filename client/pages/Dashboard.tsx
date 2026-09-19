@@ -218,9 +218,6 @@ export default function Dashboard({
     useState<VerificationBadgeState | null>(null);
   const [isAutonomousRunning, setIsAutonomousRunning] = useState(false);
   const [isPerceiving, setIsPerceiving] = useState(false);
-  const [ollmaEndpoint] = useState(
-    "https://remote.quantumpass.io/ollama/api/chat",
-  );
   const [currentTab, setCurrentTab] = useState(initialTab || "screen");
   const [executionHistory, setExecutionHistory] = useState<any[]>([]);
   const [plannerDecision, setPlannerDecision] =

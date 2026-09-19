@@ -88,6 +88,19 @@ import {
   handleAiNavigationCheck,
   handleAiAutoRecordStep,
 } from "./routes/pyautogui-bridge";
+import {
+  handleGetAiMonitor,
+  handleGetActionHistory,
+  handleExportActionHistoryCsv,
+  handleRecordAction,
+  handleClearActionHistory,
+} from "./routes/ai-monitor";
+import {
+  handleGetBrowserTabs,
+  handleInspectBrowserTab,
+  handleBrowserExtensionReport,
+  handleGetBrowserContext,
+} from "./routes/browser-inspector";
 import { handleAnalyzeAndAct } from "./routes/analyze-and-act";
 import {
   handleLearnWorkflows,
@@ -265,6 +278,19 @@ export function createServer() {
   app.post("/api/ai/adaptive-retry", handleAdaptiveRetry);
   app.post("/api/ai/replay-drift-actions", handleReplayDriftActions);
   app.post("/api/ai/qwen-guide-step", handleQwenGuideStep);
+
+  // AI Monitor: live status, action history & CSV export (Google Sheets import)
+  app.get("/api/ai-monitor", handleGetAiMonitor);
+  app.get("/api/ai/action-history", handleGetActionHistory);
+  app.get("/api/ai/action-history.csv", handleExportActionHistoryCsv);
+  app.post("/api/ai/action-history", handleRecordAction);
+  app.delete("/api/ai/action-history", handleClearActionHistory);
+
+  // Browser Inspector: real tabs & page elements for accurate screen interpretation
+  app.get("/api/browser/tabs", handleGetBrowserTabs);
+  app.post("/api/browser/inspect", handleInspectBrowserTab);
+  app.post("/api/browser/extension-report", handleBrowserExtensionReport);
+  app.get("/api/browser/context", handleGetBrowserContext);
 
   // AI Verification, Stuck Thinking & Scheduled Checkups
   app.post("/api/ai/verify-step", handleVerifyStep);

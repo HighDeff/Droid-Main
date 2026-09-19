@@ -15,6 +15,18 @@
 - The AI vision/planner engines (`server/ai-perception-engine.ts`, `server/ai-planner-engine.ts`, `server/routes/analyze-screenshot.ts`) take their Ollama-compatible endpoint from the request body or the `OLLAMA_ENDPOINT` env var (see `server/ai-endpoint.ts`). Nothing is hardcoded.
 - With `OLLAMA_ENDPOINT` unset, perception uses the app's Gemini provider (`detectScreenElementsAndSteps`) and the planner uses its deterministic fallback, so the AI pipeline works without any remote host.
 
+## AI Monitor & action history
+- `server/ai-monitor-store.ts` keeps the live pipeline status plus a bounded (1000 entry) in-memory history of every action. The dual-AI pipeline (`server/routes/dual-ai-pipeline.ts`) records perception → planning → execution → verification, so the history is populated by real runs, not fixtures.
+- Routes: `GET /api/ai-monitor`, `GET /api/ai/action-history`, `GET /api/ai/action-history.csv`, `POST /api/ai/action-history`, `DELETE /api/ai/action-history`.
+- The CSV export is the Google Sheets path: download `ai-action-history.csv` from the AI Monitor screen and import it into a sheet. There is no Sheets API integration and no Google credentials.
+- History is in memory only — it resets when the web service restarts (same as `centralLogHub`).
+
+## Browser tab & page-element analysis
+- `server/browser-inspector.ts` reads real tabs and DOM elements from Chrome over the DevTools protocol (`CHROME_CDP_URL`, default `http://localhost:9222`), and accepts reports from the bundled extension in `browser-extension/` (load unpacked; posts to `/api/browser/extension-report`).
+- Routes: `GET /api/browser/tabs`, `POST /api/browser/inspect`, `POST /api/browser/extension-report`, `GET /api/browser/context`.
+- The last captured context is stored in `aiMonitorStore` and automatically fed into perception: `analyzeScreen` takes it as a 4th argument, adds a BROWSER CONTEXT section to the prompt, and puts the exact DOM elements in front of visually detected ones.
+- With no browser running these routes degrade gracefully (`success: false` with a hint) — they never break the AI pipeline.
+
 ## Secrets
 - `GEMINI_API_KEY` — **optional at boot.** The app falls back to heuristic mock responses without it, but all AI features (screen analysis, task planning, description refinement) require a real key. Get one at https://aistudio.google.com/apikey.
 - Firebase config is hardcoded in `firebase-applet-config.json` (used only by the `/drive` route). No secret needed.

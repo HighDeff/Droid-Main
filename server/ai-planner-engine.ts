@@ -8,6 +8,7 @@ import {
   ScreenPerceptionReport,
   DetectedUIElement,
 } from "./ai-perception-engine";
+import { resolveAiEndpoint } from "./ai-endpoint";
 
 export interface AIThinkingChain {
   observation: string;
@@ -114,9 +115,16 @@ export class AIPlannerActorEngine {
   async planAndFormulateAction(
     perception: ScreenPerceptionReport,
     userObjective?: string,
-    endpoint = "https://remote.quantumpass.io/ollama/api/chat",
+    endpoint?: string,
     model = "qwen2.5vl:7b",
   ): Promise<PlannerActDecision> {
+    const resolvedEndpoint = resolveAiEndpoint(endpoint);
+    if (!resolvedEndpoint) {
+      // No remote planner endpoint configured: use the deterministic planner
+      // instead of failing against a hardcoded host.
+      return this.fallbackPlan(perception);
+    }
+
     const systemPrompt = `You are an elite Autonomous AI Planner and Action Synthesizer.
 You receive a Vision Perception Report of the active user desktop/application screen.
 Your job is to:
@@ -195,7 +203,7 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
         format: "json",
       };
 
-      const response = await fetch(endpoint, {
+      const response = await fetch(resolvedEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -270,7 +278,7 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
 
       return decision;
     } catch (err) {
-      console.error(
+      console.warn(
         "AI Planner formulation error, using deterministic fallback:",
         err,
       );

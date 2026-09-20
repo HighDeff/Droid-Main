@@ -1293,6 +1293,15 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
     py.stdout.on("data", (d) => (stdout += d.toString()));
     py.stderr.on("data", (d) => (stderr += d.toString()));
 
+    // Guard so the process `close` and `error` events can never both respond
+    // (e.g. python3 missing -> `error` fires, then `close` fires too).
+    let responded = false;
+    const sendOnce = (payload: any) => {
+      if (responded) return;
+      responded = true;
+      res.json(payload);
+    };
+
     py.on("close", (code) => {
       const durationMs = Date.now() - startTime;
       const success = code === 0 || !stderr.includes("Error");
@@ -1312,7 +1321,7 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
         }
       );
 
-      res.json({
+      sendOnce({
         success: true,
         action,
         x: Math.round(x),
@@ -1337,7 +1346,7 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
         `[Device Bridge Virtual] Emulated ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)}) across mirror viewport.`,
         { action }
       );
-      res.json({
+      sendOnce({
         success: true,
         action,
         x: Math.round(x),

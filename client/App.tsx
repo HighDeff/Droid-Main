@@ -11,6 +11,7 @@ import { RouteErrorBoundary } from "@/components/route-error-boundary";
 import { BridgeHealthMonitorFooter } from "@/components/bridge-health-monitor-footer";
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const AiMonitor = lazy(() => import("./pages/AiMonitor"));
 const Automation = lazy(() => import("./pages/automation/index"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const Workspace = lazy(() => import("./pages/Workspace"));
@@ -39,6 +40,7 @@ const App = () => (
                   path="/dual-ai"
                   element={<Dashboard initialTab="dual-ai" />}
                 />
+                <Route path="/ai-monitor" element={<AiMonitor />} />
                 <Route path="/automation" element={<Automation />} />
                 <Route path="/workspace" element={<Workspace />} />
                 <Route path="/debugger" element={<Workspace view="debugger" />} />

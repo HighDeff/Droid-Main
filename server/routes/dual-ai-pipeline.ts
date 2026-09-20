@@ -11,24 +11,40 @@ import { verifyStepAccuracy, resolveStuckState } from "../ai-gemini-service";
 import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
+import { aiMonitorStore } from "../ai-monitor-store";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 1. AI #1 Screen Auto-Description & Feedback Positioning
 export const handleDescribeScreen: RequestHandler = async (req, res) => {
   try {
-    const { imageData, endpoint, model } = req.body;
+    const { imageData, endpoint, model, browserContext } = req.body;
     if (!imageData) {
       return res
         .status(400)
         .json({ success: false, error: "Missing imageData" });
     }
 
+    const context = browserContext || aiMonitorStore.getBrowserContext();
+    aiMonitorStore.setStatus({
+      status: "perceiving",
+      currentAction: "Analyzing the current screen",
+    });
     const report = await qwenVisionEngine.analyzeScreen(
       imageData,
       endpoint,
       model,
+      context,
     );
+    aiMonitorStore.record({
+      phase: "perception",
+      title: "Screen perceived",
+      detail: report.screenDescription,
+      status: "completed",
+      confidence: report.confidence,
+      source: "AI #1 Vision",
+    });
+    aiMonitorStore.setStatus({ status: "idle", currentAction: null });
     res.json({ success: true, report });
   } catch (err) {
     res.status(500).json({
@@ -55,12 +71,33 @@ export const handlePlanAndAct: RequestHandler = async (req, res) => {
         .json({ success: false, error: "Missing perceptionReport" });
     }
 
+    aiMonitorStore.setStatus({
+      status: "planning",
+      objective: userObjective || "Automated desktop task",
+      currentAction: "Formulating the next action",
+    });
     const decision = await aiPlannerEngine.planAndFormulateAction(
       perceptionReport,
       userObjective,
       endpoint,
       model,
     );
+    aiMonitorStore.record({
+      phase: "planning",
+      title: decision.statusSummary || "Plan formulated",
+      detail: decision.thinking?.reasoning || "",
+      status: "completed",
+      confidence: decision.thinking?.confidence,
+      source: "AI #2 Planner",
+    });
+    aiMonitorStore.setStatus({
+      status: "idle",
+      currentAction: null,
+      activeGoals: (decision.goals || []).map((g: any) => ({
+        title: g.title,
+        status: g.status,
+      })),
+    });
 
     let executionResult: any = null;
     let verification: any = null;
@@ -90,6 +127,13 @@ export const handlePlanAndAct: RequestHandler = async (req, res) => {
             lastError: verification.analysis,
           });
         }
+        aiMonitorStore.record({
+          phase: "verification",
+          title: `Verification: ${verification?.status || "completed"}`,
+          detail: verification?.analysis || "",
+          status: verification?.verified === false ? "failed" : "completed",
+          source: "AI Verifier",
+        });
       }
     }
 
@@ -296,24 +340,59 @@ export const handleAdaptiveRetry: RequestHandler = async (req, res) => {
 // 5. Unified Autonomous Co-Pilot Step (Perceive -> Plan -> Act -> Verify -> Recalibrate)
 export const handleAutonomousStep: RequestHandler = async (req, res) => {
   try {
-    const { imageData, userObjective, endpoint, model } = req.body;
+    const { imageData, userObjective, endpoint, model, browserContext } =
+      req.body;
     if (!imageData) {
       return res
         .status(400)
         .json({ success: false, error: "Missing imageData" });
     }
 
+    aiMonitorStore.setStatus({
+      status: "perceiving",
+      objective: userObjective || "Autonomous co-pilot step",
+      currentAction: "Analyzing the current screen",
+    });
     const perception = await qwenVisionEngine.analyzeScreen(
       imageData,
       endpoint,
       model,
+      browserContext || aiMonitorStore.getBrowserContext(),
     );
+    aiMonitorStore.record({
+      phase: "perception",
+      title: "Screen perceived",
+      detail: perception.screenDescription,
+      status: "completed",
+      confidence: perception.confidence,
+      source: "AI #1 Vision",
+    });
+    aiMonitorStore.setStatus({
+      status: "planning",
+      currentAction: "Formulating the next action",
+    });
     const decision = await aiPlannerEngine.planAndFormulateAction(
       perception,
       userObjective,
       endpoint,
       model,
     );
+    aiMonitorStore.record({
+      phase: "planning",
+      title: decision.statusSummary || "Plan formulated",
+      detail: decision.thinking?.reasoning || "",
+      status: "completed",
+      confidence: decision.thinking?.confidence,
+      source: "AI #2 Planner",
+    });
+    aiMonitorStore.setStatus({
+      status: "idle",
+      currentAction: null,
+      activeGoals: (decision.goals || []).map((g: any) => ({
+        title: g.title,
+        status: g.status,
+      })),
+    });
 
     let executionResult: any = null;
     let verification: any = null;
@@ -382,6 +461,18 @@ export async function dispatchActionToPython(action: any): Promise<any> {
     const safeResolve = (val: any) => {
       if (!resolved) {
         resolved = true;
+        aiMonitorStore.record({
+          phase: "execution",
+          title: action.title || action.name || "Automated action",
+          detail:
+            typeof val?.result === "string"
+              ? val.result
+              : val?.message || val?.error || "Action dispatched",
+          status: val?.success === false ? "failed" : "completed",
+          target: { name: action.targetName, x: action.x, y: action.y },
+          source: "PyAutoGUI",
+        });
+        aiMonitorStore.setStatus({ status: "idle", currentAction: null });
         resolve(val);
       }
     };
@@ -448,6 +539,23 @@ export async function dispatchActionToPython(action: any): Promise<any> {
         task: taskPayload,
         targetDevice: action.targetDevice || "desktop",
       };
+
+      aiMonitorStore.setStatus({
+        status: "executing",
+        currentAction: taskPayload.name,
+      });
+      aiMonitorStore.record({
+        phase: "execution",
+        title: taskPayload.name,
+        detail: taskDesc,
+        status: "started",
+        target: {
+          name: action.targetName,
+          x: action.x || 960,
+          y: action.y || 540,
+        },
+        source: "PyAutoGUI",
+      });
 
       python.stdin.write(JSON.stringify(envelope));
       python.stdin.end();

@@ -1,3 +1,42 @@
+# Base44 Dev Environment
+
+## Architecture
+- **Single-origin Vite + React + Express app.** The Express API is mounted as Vite dev-server middleware (see `vite.config.ts` `api-server-middleware` plugin), so frontend and API share port 3000. No separate backend service or database is needed.
+- Dev entry: `npx tsx scripts/start-dev.ts` (programmatic Vite launch with pre-flight checks). Equivalent to `npm run dev`.
+- Storage is in-memory / versioned JSON files (`ASSISTANT_STORAGE_PATH`). No DB to migrate or seed.
+- The `python-service/` directory (pyautogui, screen capture) is for desktop automation and is **not** needed for the web preview.
+
+## Setup quirks
+- **`npm install --legacy-peer-deps` is required.** `@vitejs/plugin-react@6` declares `peer vite@^8` but the project pins `vite@^7`. The project actually uses `@vitejs/plugin-react-swc` (not plugin-react), so the conflict is harmless but npm refuses to install without `--legacy-peer-deps`. A committed `.npmrc` now sets `legacy-peer-deps=true`, so a plain `npm install` also works.
+- `node_modules` is a named Docker volume (not bind-mounted) to keep host/container platform binaries separate.
+- The `node:22-slim` image has no `python3`/X11, so the pyautogui bridge returns its designed simulated fallbacks (`{ success: true, simulated: true }`). Handlers that `spawn` a child process must guard their response so the `error` (ENOENT) and `close` events can't both call `res.json` — a double response raises `ERR_HTTP_HEADERS_SENT`, which the startup script's `uncaughtException` handler turns into a full process exit. See `handleInteractiveDeviceAction` in `server/routes/pyautogui-bridge.ts` for the `sendOnce` guard pattern.
+
+## AI provider configuration
+- The AI vision/planner engines (`server/ai-perception-engine.ts`, `server/ai-planner-engine.ts`, `server/routes/analyze-screenshot.ts`) take their Ollama-compatible endpoint from the request body or the `OLLAMA_ENDPOINT` env var (see `server/ai-endpoint.ts`). Nothing is hardcoded.
+- With `OLLAMA_ENDPOINT` unset, perception uses the app's Gemini provider (`detectScreenElementsAndSteps`) and the planner uses its deterministic fallback, so the AI pipeline works without any remote host.
+
+## AI Monitor & action history
+- `server/ai-monitor-store.ts` keeps the live pipeline status plus a bounded (1000 entry) in-memory history of every action. The dual-AI pipeline (`server/routes/dual-ai-pipeline.ts`) records perception → planning → execution → verification, so the history is populated by real runs, not fixtures.
+- Routes: `GET /api/ai-monitor`, `GET /api/ai/action-history`, `GET /api/ai/action-history.csv`, `POST /api/ai/action-history`, `DELETE /api/ai/action-history`.
+- The CSV export is the Google Sheets path: download `ai-action-history.csv` from the AI Monitor screen and import it into a sheet. There is no Sheets API integration and no Google credentials.
+- History is in memory only — it resets when the web service restarts (same as `centralLogHub`).
+
+## Browser tab & page-element analysis
+- `server/browser-inspector.ts` reads real tabs and DOM elements from Chrome over the DevTools protocol (`CHROME_CDP_URL`, default `http://localhost:9222`), and accepts reports from the bundled extension in `browser-extension/` (load unpacked; posts to `/api/browser/extension-report`).
+- Routes: `GET /api/browser/tabs`, `POST /api/browser/inspect`, `POST /api/browser/extension-report`, `GET /api/browser/context`.
+- The last captured context is stored in `aiMonitorStore` and automatically fed into perception: `analyzeScreen` takes it as a 4th argument, adds a BROWSER CONTEXT section to the prompt, and puts the exact DOM elements in front of visually detected ones.
+- With no browser running these routes degrade gracefully (`success: false` with a hint) — they never break the AI pipeline.
+
+## Secrets
+- `GEMINI_API_KEY` — **optional at boot.** The app falls back to heuristic mock responses without it, but all AI features (screen analysis, task planning, description refinement) require a real key. Get one at https://aistudio.google.com/apikey.
+- Firebase config is hardcoded in `firebase-applet-config.json` (used only by the `/drive` route). No secret needed.
+
+## Verify it works
+- `curl http://localhost:3000/api/health` → `{"status":"ok",...}`
+- Preview loads at `/` and redirects to `/dashboard`.
+
+---
+
 # Fusion Starter
 
 A production-ready full-stack React application template with integrated Express server, featuring React Router 6 SPA mode, TypeScript, Vitest, Zod and modern tooling.

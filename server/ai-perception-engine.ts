@@ -4,6 +4,10 @@
  * detects UI elements with precise (X,Y,W,H) bounding boxes, and provides focus positioning.
  */
 
+import { resolveAiEndpoint } from "./ai-endpoint";
+import { detectScreenElementsAndSteps } from "./ai-gemini-service";
+import type { AiMonitorBrowserContext } from "./ai-monitor-store";
+
 export interface DetectedUIElement {
   id: string;
   name: string;
@@ -43,9 +47,17 @@ export class QwenVisionPerceptionEngine {
 
   async analyzeScreen(
     imageData: string,
-    endpoint = "https://remote.quantumpass.io/ollama/api/chat",
+    endpoint?: string,
     model = "qwen2.5vl:7b",
+    browserContext?: AiMonitorBrowserContext | null,
   ): Promise<ScreenPerceptionReport> {
+    const resolvedEndpoint = resolveAiEndpoint(endpoint);
+    if (!resolvedEndpoint) {
+      // No remote vision endpoint configured: use the app's local AI provider
+      // instead of failing against a hardcoded host.
+      return this.analyzeWithLocalProvider(imageData, browserContext);
+    }
+
     const base64Image = imageData.includes(",")
       ? imageData.split(",")[1]
       : imageData;
@@ -75,11 +87,16 @@ Return a STRICT valid JSON object matching this schema:
 }
 IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. Coordinates must be based on a standard 1920x1080 resolution.`;
 
+    const browserSection = this.describeBrowserContext(browserContext);
+    const systemPromptWithBrowser = browserSection
+      ? `${systemPrompt}\n\n${browserSection}`
+      : systemPrompt;
+
     try {
       const payload = {
         model,
         messages: [
-          { role: "system", content: systemPrompt },
+          { role: "system", content: systemPromptWithBrowser },
           {
             role: "user",
             content:
@@ -91,7 +108,7 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
         format: "json",
       };
 
-      const response = await fetch(endpoint, {
+      const response = await fetch(resolvedEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -129,7 +146,7 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
         visualStateChange:
           parsed.visualStateChange ||
           (this.lastDescription ? "State updated" : "Initial frame"),
-        elements:
+        elements: this.mergeBrowserElements(
           Array.isArray(parsed.elements) && parsed.elements.length > 0
             ? parsed.elements.map((el: any, idx: number) => ({
                 id: el.id || `elem_${idx + 1}`,
@@ -148,6 +165,8 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
                 textValue: el.textValue || "",
               }))
             : this.generateDefaultElements(),
+          browserContext,
+        ),
         feedbackPosition: parsed.feedbackPosition || { x: 960, y: 540 },
         primarySuggestion:
           parsed.primarySuggestion ||
@@ -160,13 +179,174 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
       this.lastDescription = report.screenDescription;
       return report;
     } catch (err) {
-      console.error(
+      console.warn(
         "Qwen Vision perception failed, providing structured fallback:",
         err,
       );
       return this.generateFallbackReport(
         err instanceof Error ? err.message : String(err),
       );
+    }
+  }
+
+  /**
+   * Perception via the app's configured AI provider (Gemini). Falls back to the
+   * heuristic report internally when no API key is configured.
+   */
+  private async analyzeWithLocalProvider(
+    imageData: string,
+    browserContext?: AiMonitorBrowserContext | null,
+  ): Promise<ScreenPerceptionReport> {
+    const analysis = await detectScreenElementsAndSteps({ imageData });
+
+    const elements: DetectedUIElement[] = (analysis.elements || []).map(
+      (el, idx) => ({
+        id: el.id || `elem_${idx + 1}`,
+        name: el.name || `Element ${idx + 1}`,
+        type: this.normalizeElementType(el.type),
+        boundingBox: {
+          x: el.x,
+          y: el.y,
+          width: el.width || 80,
+          height: el.height || 35,
+        },
+        center: { x: el.x, y: el.y },
+        confidence:
+          typeof el.confidence === "number" ? el.confidence : 0.85,
+        interactive: true,
+        textValue: el.suggestedTextPayload || "",
+      }),
+    );
+
+    const focus = analysis.primaryActionTarget;
+    const page = browserContext?.page;
+    const report: ScreenPerceptionReport = {
+      timestamp: Date.now(),
+      screenDescription:
+        this.describePage(browserContext) ||
+        analysis.summary ||
+        "Active workspace display with interactive elements.",
+      activeWindow:
+        page?.title || browserContext?.activeTab?.title || "Active Application",
+      visualStateChange: this.lastDescription ? "State updated" : "Initial frame",
+      elements: this.mergeBrowserElements(
+        elements.length > 0 ? elements : this.generateDefaultElements(),
+        browserContext,
+      ),
+      feedbackPosition: focus
+        ? { x: focus.x, y: focus.y }
+        : { x: 960, y: 540 },
+      primarySuggestion: focus?.label
+        ? `Focus ${focus.label}`
+        : "Inspect interactive targets and execute planned sequence.",
+      confidence: 0.85,
+    };
+
+    this.lastDescription = report.screenDescription;
+    return report;
+  }
+
+  /**
+   * Builds the prompt section describing the live browser tabs and page
+   * elements, so the model interprets the web page rather than only pixels.
+   */
+  private describeBrowserContext(
+    browserContext?: AiMonitorBrowserContext | null,
+  ): string {
+    if (!browserContext) return "";
+    const { page, tabs, elements } = browserContext;
+    const lines: string[] = [
+      "BROWSER CONTEXT (authoritative, captured from the live page):",
+      `- Active tab: "${page?.title || browserContext.activeTab?.title || "unknown"}" at ${page?.url || browserContext.activeTab?.url || "unknown"}`,
+      `- Viewport: ${page?.viewport ? `${page.viewport.width}x${page.viewport.height}` : "unknown"}`,
+    ];
+    if (tabs.length > 1) {
+      lines.push(
+        `- Open tabs (${tabs.length}): ${tabs
+          .slice(0, 10)
+          .map((t) => `"${t.title}"`)
+          .join(", ")}`,
+      );
+    }
+    if (elements.length > 0) {
+      lines.push(
+        `- Page elements (${elements.length}, coordinates are page-relative):`,
+        ...elements
+          .slice(0, 40)
+          .map(
+            (el) =>
+              `  • ${el.name} [${el.type}] selector="${el.selector || "n/a"}" center=(${el.x}, ${el.y}) size=${el.width}x${el.height}`,
+          ),
+      );
+      lines.push(
+        "Prefer these page elements over visually guessed ones, and reuse their names and coordinates in your JSON output.",
+      );
+    }
+    return lines.join("\n");
+  }
+
+  private describePage(
+    browserContext?: AiMonitorBrowserContext | null,
+  ): string {
+    if (!browserContext) return "";
+    const title = browserContext.page?.title || browserContext.activeTab?.title;
+    const url = browserContext.page?.url || browserContext.activeTab?.url;
+    if (!title && !url) return "";
+    return `Browser tab "${title || url}"${url ? ` (${url})` : ""} with ${browserContext.elements.length} interactive page element(s).`;
+  }
+
+  /** Puts exact DOM elements from the live page in front of visually detected ones. */
+  private mergeBrowserElements(
+    visionElements: DetectedUIElement[],
+    browserContext?: AiMonitorBrowserContext | null,
+  ): DetectedUIElement[] {
+    if (!browserContext || browserContext.elements.length === 0) {
+      return visionElements;
+    }
+
+    const domElements: DetectedUIElement[] = browserContext.elements.map(
+      (el) => ({
+        id: el.id,
+        name: el.name,
+        type: this.normalizeElementType(el.type),
+        boundingBox: {
+          x: el.x,
+          y: el.y,
+          width: el.width,
+          height: el.height,
+        },
+        center: { x: el.x, y: el.y },
+        confidence: el.confidence,
+        interactive: el.interactive,
+        textValue: el.textValue || "",
+      }),
+    );
+
+    const domNames = new Set(domElements.map((el) => el.name.toLowerCase()));
+    const extras = visionElements.filter(
+      (el) => !domNames.has(el.name.toLowerCase()),
+    );
+
+    return [...domElements, ...extras].slice(0, 80);
+  }
+
+  private normalizeElementType(type: string): DetectedUIElement["type"] {
+    switch (type) {
+      case "button":
+      case "input":
+      case "icon":
+      case "text":
+      case "toggle":
+      case "checkbox":
+        return type;
+      case "tab":
+      case "link":
+        return "button";
+      case "dropdown":
+      case "scroll_area":
+        return "input";
+      default:
+        return "other";
     }
   }
 

@@ -69,6 +69,7 @@ import {
   AIThinkingState,
 } from "@/components/live-screen-hud";
 import { ClickSequenceRegister } from "@/components/click-sequence-register";
+import { AiMonitorPanel } from "@/components/ai-monitor-panel";
 import {
   DualAICopilotPanel,
   ScreenPerceptionReport,
@@ -218,9 +219,6 @@ export default function Dashboard({
     useState<VerificationBadgeState | null>(null);
   const [isAutonomousRunning, setIsAutonomousRunning] = useState(false);
   const [isPerceiving, setIsPerceiving] = useState(false);
-  const [ollmaEndpoint] = useState(
-    "https://remote.quantumpass.io/ollama/api/chat",
-  );
   const [currentTab, setCurrentTab] = useState(initialTab || "screen");
   const [executionHistory, setExecutionHistory] = useState<any[]>([]);
   const [plannerDecision, setPlannerDecision] =
@@ -1672,6 +1670,13 @@ export default function Dashboard({
               <Terminal className="w-3 h-3" />
               Logs
             </TabsTrigger>
+            <TabsTrigger
+              value="ai-monitor"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-600 data-[state=active]:text-white text-cyan-300 border border-cyan-600/70 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
+            >
+              <Bot className="w-3.5 h-3.5 text-cyan-400" />
+              AI Monitor
+            </TabsTrigger>
             <TabsTrigger value="settings" className="h-7 text-xs gap-1">
               <Settings className="w-3 h-3" />
               Settings
@@ -2702,6 +2707,9 @@ export default function Dashboard({
           </TabsContent>
           <TabsContent value="logs" className="space-y-6">
             <CentralLogsConsole />
+          </TabsContent>
+          <TabsContent value="ai-monitor" className="space-y-6">
+            <AiMonitorPanel compact />
           </TabsContent>
           <TabsContent value="settings" className="space-y-6">
             <Card className="bg-slate-900 border-slate-800">

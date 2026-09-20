@@ -180,6 +180,21 @@ let lastSyncedTimestamp = Date.now();
 
 export function createServer(options: ServerOptions = {}) {
   const app = express();
+  const issueBrowserSession = (req: express.Request, res: express.Response) => {
+    if (!options.browserSessionToken) return;
+    const secure =
+      process.env.BROWSER_FACING_HTTPS === "true" ||
+      process.env.TRUST_PROXY_HTTPS === "true" ||
+      process.env.ASSISTANT_PUBLIC_ORIGIN?.startsWith("https://") === true ||
+      req.socket instanceof TLSSocket;
+    res.cookie(BROWSER_SESSION_COOKIE, options.browserSessionToken, {
+      httpOnly: true,
+      sameSite: "strict",
+      secure,
+      path: "/",
+      maxAge: 8 * 60 * 60 * 1_000,
+    });
+  };
   configureLatestFrameProvider(() =>
     lastSyncedFrame
       ? { imageData: lastSyncedFrame, timestamp: lastSyncedTimestamp }
@@ -214,18 +229,7 @@ export function createServer(options: ServerOptions = {}) {
     if (!supplied || !equalCredential(expected, supplied)) {
       return res.status(401).json({ success: false, error: "Invalid assistant API key" });
     }
-    const secure =
-      process.env.BROWSER_FACING_HTTPS === "true" ||
-      process.env.TRUST_PROXY_HTTPS === "true" ||
-      process.env.ASSISTANT_PUBLIC_ORIGIN?.startsWith("https://") === true ||
-      req.socket instanceof TLSSocket;
-    res.cookie(BROWSER_SESSION_COOKIE, options.browserSessionToken, {
-      httpOnly: true,
-      sameSite: "strict",
-      secure,
-      path: "/",
-      maxAge: 8 * 60 * 60 * 1_000,
-    });
+    issueBrowserSession(req, res);
     return res.json({ success: true });
   });
   app.use("/api", (req, res, next) => {
@@ -244,6 +248,16 @@ export function createServer(options: ServerOptions = {}) {
       req.headers["x-assistant-api-key"] ?? req.headers["x-api-key"] ?? bearer ?? "",
     );
     const browserSession = readCookie(req.headers.cookie, BROWSER_SESSION_COOKIE);
+    if (
+      !expected &&
+      process.env.NODE_ENV !== "production" &&
+      options.browserSessionToken &&
+      isSameOriginRequest(req)
+    ) {
+      issueBrowserSession(req, res);
+      res.locals.apiAuthenticated = true;
+      return next();
+    }
     const credentials: Array<{ credential: string; secret: string }> = [];
     if (expected && supplied) credentials.push({ credential: supplied, secret: expected });
     if (options.browserSessionToken && browserSession && isSameOriginRequest(req)) {

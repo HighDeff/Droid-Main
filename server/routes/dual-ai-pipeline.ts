@@ -674,6 +674,11 @@ export async function dispatchActionToPython(action: any, signal?: AbortSignal):
         throw new Error("Action delay must be a finite number");
       }
       const normalizedDelayMs = Math.min(Math.max(requestedDelayMs, 0), 120_000);
+      const requestedDriftPx = action.driftPx ?? 0;
+      if (typeof requestedDriftPx !== "number" || !Number.isFinite(requestedDriftPx)) {
+        throw new Error("Action drift must be a finite number");
+      }
+      const normalizedDriftPx = Math.min(Math.max(requestedDriftPx, 0), 12);
       const routePoints = action.routePoints ?? action.points ?? [];
       if (["stream_mouse_route", "play_route", "replay_route"].includes(actType)) {
         if (!Array.isArray(routePoints) || routePoints.length < 2 || routePoints.length > 10_000) {
@@ -757,7 +762,7 @@ export async function dispatchActionToPython(action: any, signal?: AbortSignal):
         dragEndPosition: action.dragEndPosition,
         direction: action.direction ?? action.scrollDirection,
         speedMultiplier: action.speedMultiplier || 1.0,
-        driftPx: action.driftPx ?? 4,
+        driftPx: normalizedDriftPx,
       };
 
       // Wrap in {task: ...} envelope expected by python-service
@@ -967,6 +972,7 @@ export const handleReplayDriftActions: RequestHandler = async (req, res) => {
           delayMs: s.delayMs ?? s.dwellDurationMs,
           routePoints: s.routePoints ?? s.points,
           isDrag: s.isDrag === true,
+          driftPx: s.driftPx,
           dragEndPosition:
             s.dragEndPosition ??
             (Number.isFinite(Number(s.toX)) && Number.isFinite(Number(s.toY))
@@ -1108,6 +1114,7 @@ export const handleReplayDriftActions: RequestHandler = async (req, res) => {
             delayMs: act.delayMs,
             routePoints: act.routePoints,
             isDrag: act.isDrag,
+            driftPx: act.driftPx,
             dragEndPosition: act.dragEndPosition,
             targetDevice,
             deviceId,

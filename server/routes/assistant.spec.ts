@@ -3,10 +3,13 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AssistantStateRepository } from "../assistant-state";
 import { createAssistantRouter } from "./assistant";
+import { methodLearningSystem } from "../method-learning";
+import { qwenVisionEngine } from "../ai-perception-engine";
 
 const servers: Array<ReturnType<ReturnType<typeof express>["listen"]>> = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     servers.splice(0).map(
       (server) => new Promise<void>((resolve) => server.close(() => resolve())),
@@ -90,6 +93,29 @@ describe("assistant automation API", () => {
     expect(approved.body.plan.approvalState).toBe("approved");
   });
 
+  it("separates chained keyboard actions into complete executable steps", async () => {
+    const repository = new AssistantStateRepository({ mode: "memory" });
+    const request = await startApi({ repository });
+    const created = await request("/sessions", {
+      method: "POST",
+      body: JSON.stringify({ project: { name: "Chained actions" } }),
+    });
+    const planned = await request("/plans", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId: created.body.session.id,
+        instructionText: 'click at 120,240 then type "hello" and press enter',
+      }),
+    });
+
+    expect(planned.body.plan.steps.map((step: any) => step.action)).toEqual([
+      "click",
+      "type",
+      "key",
+    ]);
+    expect(planned.body.plan.steps[2].key).toBe("enter");
+  });
+
   it("requires confirmation, executes the approved action, verifies a fresh frame, and learns the workflow", async () => {
     const repository = new AssistantStateRepository({ mode: "memory" });
     const executeAction = vi.fn(async () => ({ success: true }));
@@ -134,6 +160,11 @@ describe("assistant automation API", () => {
     expect(execution.evidence[0].capture.imageData).toBeUndefined();
     expect(execution.evidence[0].capture.frameId).toMatch(/^test-frame-/);
     expect(execution.nextSuggestions).toHaveLength(3);
+    expect(
+      methodLearningSystem
+        .getAllMethods()
+        .some((method) => method.learnedFrom.includes(execution.id)),
+    ).toBe(true);
     expect(executeAction).toHaveBeenCalledWith(
       expect.objectContaining({ action: "click", x: 10, y: 20, driftPx: 0 }),
     );
@@ -160,6 +191,127 @@ describe("assistant automation API", () => {
     });
     expect(invalidApproval.response.status).toBe(409);
     expect(invalidApproval.body.error).toContain("no pending approval");
+  });
+
+  it("persists reviewed gates and requires the approved OCR result after acting", async () => {
+    const repository = new AssistantStateRepository({ mode: "memory" });
+    const executeAction = vi.fn(async () => ({ success: true }));
+    let frameRead = 0;
+    const successReport = {
+      timestamp: Date.now(),
+      screenDescription: "The operation is complete and Saved successfully",
+      activeWindow: "Test app",
+      visualStateChange: "Confirmation appeared",
+      elements: [{
+        id: "saved",
+        name: "Success message",
+        type: "text",
+        boundingBox: { x: 10, y: 10, width: 120, height: 30 },
+        center: { x: 70, y: 25 },
+        confidence: 0.99,
+        interactive: false,
+        textValue: "Saved successfully",
+      }],
+      feedbackPosition: { x: 70, y: 25 },
+      primarySuggestion: "Goal confirmed",
+      confidence: 0.99,
+      degraded: false,
+    } as const;
+    vi.spyOn(qwenVisionEngine, "analyzeScreen")
+      .mockResolvedValueOnce({
+        ...successReport,
+        screenDescription: "The operation is still working",
+        elements: [{
+          ...successReport.elements[0],
+          id: "working",
+          textValue: "Working",
+        }],
+      })
+      .mockResolvedValue(successReport);
+    const request = await startApi({
+      repository,
+      executeAction,
+      getLatestFrame: () => ({
+        imageData: `data:image/png;base64,adaptive-${frameRead++}`,
+        timestamp: Date.now(),
+      }),
+    });
+    const created = await request("/sessions", {
+      method: "POST",
+      body: JSON.stringify({ project: { name: "Adaptive" } }),
+    });
+    const sessionId = created.body.session.id as string;
+    const planned = await request("/plans", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, instructionText: "click at 10,20" }),
+    });
+    const condition = {
+      id: "condition_ready",
+      type: "timer",
+      label: "Ready delay",
+      timeoutMs: 30000,
+      pollIntervalMs: 500,
+      confidenceThreshold: 0.8,
+      approved: true,
+      durationMs: 0,
+      createdAt: new Date(Date.now() - 1000).toISOString(),
+    };
+    const step = {
+      ...planned.body.plan.steps[0],
+      waitConditions: [condition],
+      adaptive: {
+        captureBefore: true,
+        verification: { kind: "text-present", text: "Saved successfully" },
+        retry: { maxAttempts: 2, backoffMs: 10 },
+      },
+    };
+    const saved = await request(
+      `/plans/${planned.body.plan.id}?sessionId=${encodeURIComponent(sessionId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ steps: [step], timing: "when_ready" }),
+      },
+    );
+    expect(saved.body.plan.approvalState).toBe("pending");
+    expect(saved.body.plan.steps[0].waitConditions[0].id).toBe(condition.id);
+    const approved = await request(
+      `/plans/${planned.body.plan.id}/approve?sessionId=${encodeURIComponent(sessionId)}`,
+      { method: "POST" },
+    );
+    expect(approved.response.status).toBe(200);
+
+    const started = await request("/execution", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId,
+        planId: planned.body.plan.id,
+        confirmation: true,
+      }),
+    });
+    let execution = started.body.execution;
+    for (let attempt = 0; attempt < 30 && execution.status === "running"; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      execution = (
+        await request(
+          `/execution/${execution.id}?sessionId=${encodeURIComponent(sessionId)}`,
+        )
+      ).body.execution;
+    }
+    if (execution.status === "running") {
+      for (let attempt = 0; attempt < 50 && execution.status === "running"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        execution = (
+          await request(
+            `/execution/${execution.id}?sessionId=${encodeURIComponent(sessionId)}`,
+          )
+        ).body.execution;
+      }
+    }
+    expect(execution.status).toBe("completed");
+    expect(executeAction).toHaveBeenCalledTimes(2);
+    expect(execution.evidence[0].verification.status).toBe("missed");
+    expect(execution.evidence[1].verification.status).toBe("verified");
+    expect(execution.evidence[1].analysis.ocrText[0].text).toBe("Saved successfully");
   });
 
   it("pauses instead of claiming success when the native action fails", async () => {

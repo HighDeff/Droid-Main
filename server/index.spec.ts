@@ -19,6 +19,40 @@ afterEach(() => {
 });
 
 describe("API authentication", () => {
+  it("bootstraps a same-origin browser session only in local development", async () => {
+    delete process.env.ASSISTANT_API_KEY;
+    process.env.NODE_ENV = "development";
+    const server = createServer({ browserSessionToken: "local-browser-session" }).listen(0);
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const sameOrigin = await fetch(`${baseUrl}/api/capture-screen`, {
+        headers: { referer: `${baseUrl}/automation` },
+      });
+      expect(sameOrigin.status).toBe(200);
+      expect(sameOrigin.headers.get("set-cookie")).toContain(
+        "droid_browser_session=local-browser-session",
+      );
+
+      const crossSite = await fetch(`${baseUrl}/api/capture-screen`, {
+        headers: { origin: "https://untrusted.example" },
+      });
+      expect(crossSite.status).toBe(401);
+
+      process.env.NODE_ENV = "production";
+      const production = await fetch(`${baseUrl}/api/capture-screen`, {
+        headers: { referer: `${baseUrl}/automation` },
+      });
+      expect(production.status).toBe(401);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
   it("requires credentials even when callers claim to be same-origin", async () => {
     process.env.ASSISTANT_API_KEY = "test-only-key";
     process.env.NODE_ENV = "production";

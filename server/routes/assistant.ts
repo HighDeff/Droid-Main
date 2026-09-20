@@ -15,6 +15,7 @@ import { dispatchActionToPython } from "./dual-ai-pipeline";
 import { AUTOMATION_BOUNDS, validateDeviceId, validateKey, validateText } from "../automation-adapters";
 import { validatePoint } from "../../shared/coordinates";
 import { createDiskFrameStore, type StoreFrame } from "../frame-store";
+import { methodLearningSystem } from "../method-learning";
 
 type ExecuteAction = (action: Record<string, unknown>) => Promise<Record<string, any>>;
 
@@ -48,7 +49,9 @@ function requireSession(repository: AssistantStateRepository, sessionId: unknown
 
 function parseInstruction(instruction: string): PlannedStep[] {
   const clauses = instruction
-    .split(/\n+|\bthen\b|;/gi)
+    .split(
+      /\n+|;|\bthen\b|\band\s+(?=(?:click|tap|select|open|press|key|wait|scroll)\b)/gi,
+    )
     .map((part) => part.replace(/^\s*(?:\d+[.)-]?|[-*])\s*/, "").trim())
     .filter(Boolean)
     .slice(0, 25);
@@ -183,6 +186,109 @@ function alternateAction(
   }
   alternate.delayMs = Math.min(Number(action.delayMs ?? 500) + 300, 2_000);
   return alternate;
+}
+
+async function verifyStepOutcome(
+  step: PlannedStep,
+  imageData?: string,
+): Promise<{
+  verified: boolean;
+  reason: string;
+  confidence?: number;
+  analysis?: FrameAnalysis;
+} | null> {
+  const rule = step.adaptive?.verification;
+  if (!rule) return null;
+  if (!imageData) {
+    return { verified: false, reason: "No fresh post-action frame was available for the approved success check." };
+  }
+  try {
+    const report = await qwenVisionEngine.analyzeScreen(imageData);
+    if (report.degraded) {
+      return {
+        verified: false,
+        reason: report.error ?? "Vision/OCR was unavailable for the approved success check.",
+        confidence: report.confidence,
+      };
+    }
+    const normalized = [
+      report.screenDescription,
+      ...report.elements.flatMap((element) => [element.name, element.textValue ?? ""]),
+    ].join(" ").toLowerCase();
+    let verified = false;
+    let expected = "the approved visual result";
+    if (rule.kind === "text-present") {
+      expected = rule.text?.trim() || "approved text";
+      verified = Boolean(rule.text?.trim() && normalized.includes(rule.text.trim().toLowerCase()));
+    } else if (rule.kind === "element-present") {
+      expected = rule.elementLabel?.trim() || "approved element";
+      verified = Boolean(
+        rule.elementLabel?.trim() &&
+        report.elements.some((element) =>
+          `${element.name} ${element.textValue ?? ""}`
+            .toLowerCase()
+            .includes(rule.elementLabel!.trim().toLowerCase()),
+        ),
+      );
+    } else if (rule.kind === "confidence-threshold") {
+      const threshold = rule.minConfidence ?? 0.8;
+      expected = `vision confidence of at least ${Math.round(threshold * 100)}%`;
+      verified = report.confidence >= threshold;
+    } else if (rule.kind === "region-present" && rule.region) {
+      expected = rule.region.label || "an element in the approved region";
+      const region = rule.region;
+      verified = report.elements.some((element) => {
+        const box = element.boundingBox;
+        return (
+          box.x < region.x + region.width &&
+          box.x + box.width > region.x &&
+          box.y < region.y + region.height &&
+          box.y + box.height > region.y
+        );
+      });
+    }
+    return {
+      verified,
+      reason: verified
+        ? `Fresh screen analysis confirmed ${expected}.`
+        : `Fresh screen analysis did not confirm ${expected}.`,
+      confidence: report.confidence,
+      analysis: {
+        id: id("analysis"),
+        status: "completed",
+        provider: "local-ocr",
+        confidence: report.confidence,
+        ocrText: report.elements
+          .filter((element) => element.textValue?.trim())
+          .map((element) => ({
+            id: `${element.id}_ocr`,
+            text: element.textValue!.trim(),
+            confidence: element.confidence,
+            region: { id: `${element.id}_region`, ...element.boundingBox },
+          })),
+        detectedElements: report.elements.map((element) => ({
+          id: element.id,
+          type: element.type,
+          label: element.name,
+          confidence: element.confidence,
+          region: { id: `${element.id}_region`, ...element.boundingBox },
+        })),
+        regionsOfInterest: report.elements.map((element) => ({
+          id: `${element.id}_region`,
+          label: element.name,
+          confidence: element.confidence,
+          ...element.boundingBox,
+        })),
+        notes: [report.primarySuggestion],
+        analyzedAt: now(),
+      },
+    };
+  } catch (error) {
+    return {
+      verified: false,
+      reason: `The approved success check could not run: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 export function createAssistantRouter(options: AssistantRouterOptions = {}) {
@@ -338,6 +444,14 @@ export function createAssistantRouter(options: AssistantRouterOptions = {}) {
       execution = getExecution(executionId);
       if (execution.status !== "running" || execution.pendingApproval) return;
       const step = plan.steps[execution.currentStepIndex];
+      const priorAttempts = (execution.evidence ?? []).filter(
+        (entry) => entry.stepId === step.id,
+      ).length;
+      const attempt = priorAttempts + 1;
+      const maxAttempts = Math.max(
+        1,
+        Math.min(step.adaptive?.retry?.maxAttempts ?? 1, 3),
+      );
       if ((step.waitConditions ?? []).some((condition) => !condition.approved)) {
         updateExecution(execution, {
           status: "paused",
@@ -414,6 +528,34 @@ export function createAssistantRouter(options: AssistantRouterOptions = {}) {
       execution = getExecution(executionId);
       if (execution.status !== "running") return;
       if (!result.success) {
+        const failureEvidence = {
+          id: id("evidence"),
+          stepId: step.id,
+          attempt,
+          capturedAt: before ? new Date(before.timestamp).toISOString() : now(),
+          capture: before ? captureReference(before.imageData) : undefined,
+          verification: {
+            status: "native_failed",
+            reason: String(result.error ?? result.message ?? "Native action failed"),
+          },
+        };
+        execution = updateExecution(execution, {
+          evidence: [...(execution.evidence ?? []), failureEvidence].slice(-10),
+        });
+        if (attempt < maxAttempts) {
+          addTimeline(
+            execution,
+            `Retrying step ${step.order} after native action failure (attempt ${attempt + 1}/${maxAttempts})`,
+            { status: "retry", stepId: step.id },
+          );
+          await new Promise((resolve) =>
+            setTimeout(
+              resolve,
+              Math.min(step.adaptive?.retry?.backoffMs ?? 500, 5_000),
+            ),
+          );
+          continue;
+        }
         updateExecution(execution, {
           status: "paused",
           error: result.error ?? result.message ?? "Action failed",
@@ -429,32 +571,56 @@ export function createAssistantRouter(options: AssistantRouterOptions = {}) {
       await new Promise((resolve) => setTimeout(resolve, Math.min(Number(action.delayMs) || 500, 2_000)));
       const after = getLatestFrame();
       const changed = frameChanged(before?.imageData, after?.imageData);
+      const outcome = await verifyStepOutcome(step, after?.imageData);
       const evidence = {
         id: id("evidence"),
         stepId: step.id,
-        attempt: 1,
+        attempt,
         capturedAt: after ? new Date(after.timestamp).toISOString() : now(),
         capture: after ? captureReference(after.imageData) : undefined,
-        verification: {
-          status: changed === true ? "changed" : changed === false ? "unchanged" : "unavailable",
-          reason:
-            changed === true
-              ? "A fresh post-action frame changed; the next step will re-analyze the current screen."
-              : changed === false
-                ? "The fresh frame did not change after the action."
-                : "No fresh screen frame was available for visual verification.",
-        },
+        ...(outcome?.analysis ? { analysis: outcome.analysis } : {}),
+        verification: outcome
+          ? {
+              status: outcome.verified ? "verified" : "missed",
+              reason: outcome.reason,
+              confidence: outcome.confidence,
+            }
+          : {
+              status: changed === true ? "changed" : changed === false ? "unchanged" : "unavailable",
+              reason:
+                changed === true
+                  ? "A fresh post-action frame changed; the next step will re-analyze the current screen."
+                  : changed === false
+                    ? "The fresh frame did not change after the action."
+                    : "No fresh screen frame was available for visual verification.",
+            },
       };
       execution = updateExecution(execution, {
         evidence: [...(execution.evidence ?? []), evidence].slice(-10),
       });
 
-      if (changed === false && step.action !== "wait") {
+      if ((outcome ? !outcome.verified : changed === false) && step.action !== "wait") {
+        if (attempt < maxAttempts) {
+          addTimeline(
+            execution,
+            `Retrying step ${step.order} after screen verification missed (attempt ${attempt + 1}/${maxAttempts})`,
+            { status: "retry", stepId: step.id, evidenceId: evidence.id },
+          );
+          await new Promise((resolve) =>
+            setTimeout(
+              resolve,
+              Math.min(step.adaptive?.retry?.backoffMs ?? 500, 5_000),
+            ),
+          );
+          continue;
+        }
         const alternate = alternateAction(action, "unchanged_screen");
         updateExecution(execution, {
           status: "paused",
           pendingApproval: {
-            reason: `Step ${step.order} produced no visible change. Approve the adapted method or edit the plan.`,
+            reason: outcome
+              ? `Step ${step.order} did not satisfy its approved screen/OCR success check. Approve the adapted method or edit the plan.`
+              : `Step ${step.order} produced no visible change. Approve the adapted method or edit the plan.`,
             alternateStepId: step.id,
             alternateAction: alternate,
           },
@@ -476,14 +642,34 @@ export function createAssistantRouter(options: AssistantRouterOptions = {}) {
       "Save or schedule this learned workflow if you expect to repeat it.",
       "Add a screen wait condition for any asynchronous page or app transition.",
     ];
-    updateExecution(execution, {
+    execution = updateExecution(execution, {
       status: "completed",
       completedAt: now(),
       nextSuggestions: suggestions,
     });
+    const learnedMethod = methodLearningSystem.learnFromExecution(execution, plan, {
+      sessionId: plan.sessionId,
+      applicationName: "screen automation",
+      screenLayout: "fresh post-action frame",
+      userIntent: plan.goal ?? plan.title ?? "Complete approved workflow",
+      environmentalFactors: [],
+      timeOfDay: now(),
+      deviceType: plan.steps.some((step) => step.targetDevice === "android")
+        ? "android"
+        : "desktop",
+    });
     repository.updatePlan(plan.id, plan.sessionId, {
       status: "completed",
       steps: plan.steps.map((step) => ({ ...step, status: "completed" })),
+      metadata: {
+        ...(plan.metadata ?? {}),
+        totalSuccessfulRuns: Number(plan.metadata?.totalSuccessfulRuns ?? 0) + 1,
+        learnedMethod: {
+          successRate: learnedMethod.successRate,
+          adaptationNotes: learnedMethod.adaptationNotes.join(" ") || "Successful reviewed route retained.",
+          lastSuccessfulAt: now(),
+        },
+      },
     });
     repository.createResource("progress", plan.sessionId, {
       stepId: plan.id,
@@ -697,18 +883,35 @@ export function createAssistantRouter(options: AssistantRouterOptions = {}) {
     await new Promise((resolve) => setTimeout(resolve, Math.min(Number(alternate.delayMs) || 500, 2_000)));
     const after = getLatestFrame();
     const changed = frameChanged(before?.imageData, after?.imageData);
+    const plan = repository.getPlan(execution.planId, execution.sessionId);
+    const approvedStep = plan?.steps.find(
+      (step) => step.id === execution.pendingApproval?.alternateStepId,
+    );
+    const outcome = approvedStep
+      ? await verifyStepOutcome(approvedStep, after?.imageData)
+      : null;
     const evidence = {
       id: id("evidence"),
       stepId: execution.pendingApproval?.alternateStepId,
-      attempt: 2,
+      attempt:
+        (execution.evidence ?? []).filter(
+          (entry) => entry.stepId === execution.pendingApproval?.alternateStepId,
+        ).length + 1,
       capturedAt: after ? new Date(after.timestamp).toISOString() : now(),
       capture: after ? captureReference(after.imageData) : undefined,
-      verification: {
-        status: changed === true ? "changed" : changed === false ? "unchanged" : "unavailable",
-        reason: changed === true ? "The approved alternate produced a fresh screen change." : "The approved alternate could not be visually confirmed.",
-      },
+      ...(outcome?.analysis ? { analysis: outcome.analysis } : {}),
+      verification: outcome
+        ? {
+            status: outcome.verified ? "verified" : "missed",
+            reason: outcome.reason,
+            confidence: outcome.confidence,
+          }
+        : {
+            status: changed === true ? "changed" : changed === false ? "unchanged" : "unavailable",
+            reason: changed === true ? "The approved alternate produced a fresh screen change." : "The approved alternate could not be visually confirmed.",
+          },
     };
-    if (changed !== true && alternate.action !== "wait") {
+    if ((outcome ? !outcome.verified : changed !== true) && alternate.action !== "wait") {
       execution = updateExecution(execution, {
         status: "failed",
         error: "The alternate action did not produce a verifiable screen change. Edit the plan before retrying.",
@@ -812,7 +1015,14 @@ export function createAssistantRouter(options: AssistantRouterOptions = {}) {
       status: report.degraded ? "fallback" : "complete",
       summary: report.screenDescription,
       confidence: report.degraded ? 0 : report.confidence,
-      ocrText: [],
+      ocrText: report.elements
+        .filter((element) => element.textValue?.trim())
+        .map((element) => ({
+          id: `${element.id}_ocr`,
+          text: element.textValue!.trim(),
+          confidence: element.confidence,
+          region: { id: `${element.id}_region`, ...element.boundingBox },
+        })),
       notes: report.degraded ? [report.error ?? "Vision provider unavailable; no screen contents were inferred."] : [report.primarySuggestion],
       regionsOfInterest: report.elements.map((element) => element.boundingBox),
       detectedElements: report.elements,

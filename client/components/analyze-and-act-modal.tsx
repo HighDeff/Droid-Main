@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { playClickPip } from "@/lib/audio-synthesizer";
@@ -51,6 +52,9 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
   const [activeTab, setActiveTab] = useState<"analysis" | "tasks" | "tools" | "preferences">("analysis");
 
   const [bridgeResultLog, setBridgeResultLog] = useState<string | null>(null);
+  const [objective, setObjective] = useState(
+    "Analyze the current screen and propose the safest next action toward my goal.",
+  );
 
   // Key Point Action Tools State
   const [searchQuery, setSearchQuery] = useState("sightline workspace automation");
@@ -79,7 +83,7 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
         body: JSON.stringify({
           liveScreenUrl: activeImage,
           previousTasks: storedSteps,
-          userInstructions: "Analyze the current screen and propose the safest reviewable next action.",
+          userInstructions: objective.trim(),
         }),
       });
 
@@ -214,10 +218,10 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
               <div>
                 <DialogTitle className="text-base font-bold text-slate-100 flex items-center gap-2">
                   <span>Analyze & Act Master Vision Engine</span>
-                  <Badge className="bg-cyan-600 text-white text-[10px]">Gemini 3.8 + Qwen Multimodal</Badge>
+                  <Badge className="bg-cyan-600 text-white text-[10px]">Qwen Vision + Review Gate</Badge>
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-400">
-                  Inspects live stream, cross-references historical actions, auto-assembles tasks, and bridges to native PC.
+                  Inspects a fresh frame, cross-references prior actions, and prepares reviewable PC or phone steps.
                 </DialogDescription>
               </div>
             </div>
@@ -229,7 +233,7 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
               className="h-8 px-4 font-bold bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white shadow-lg shadow-cyan-950 gap-1.5"
             >
               <Sparkles className={`w-3.5 h-3.5 text-yellow-300 ${isAnalyzing ? "animate-spin" : ""}`} />
-              <span>{isAnalyzing ? "ANALYZING LIVE SCREEN..." : "ANALYZE & ACT NOW"}</span>
+              <span>{isAnalyzing ? "ANALYZING LIVE SCREEN..." : "ANALYZE & PLAN"}</span>
             </Button>
           </div>
 
@@ -264,6 +268,19 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
           {/* Tab 1: Analysis & Cross-Reference */}
           {activeTab === "analysis" && (
             <div className="space-y-4 text-xs">
+              <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-2">
+                <label className="font-bold text-slate-200" htmlFor="analyze-objective">
+                  Live goal for Qwen planning
+                </label>
+                <Textarea
+                  id="analyze-objective"
+                  value={objective}
+                  onChange={(event) => setObjective(event.target.value)}
+                  maxLength={2000}
+                  className="min-h-20 bg-slate-950 border-slate-700 text-slate-200"
+                  placeholder="Describe the result the AI should work toward on this screen."
+                />
+              </div>
               {/* Visual Preview */}
               <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-xl space-y-2">
                 <span className="font-bold text-slate-300 flex items-center gap-1.5">

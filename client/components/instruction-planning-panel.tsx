@@ -126,6 +126,8 @@ export function PlanReview({
   const updateStep = (stepId: string, patch: Partial<PlannedStep>) => {
     onChange({
       ...plan,
+      approvalState: "pending",
+      status: "draft",
       steps: plan.steps.map((step) =>
         step.id === stepId ? { ...step, ...patch, status: "edited" } : step,
       ),
@@ -151,13 +153,18 @@ export function PlanReview({
           : undefined,
     });
   };
-  const hasIncompleteCoordinates = plan.steps.some(
-    (step) =>
+  const hasInvalidStep = plan.steps.some((step) => {
+    if (!step.action) return true;
+    if (
       requiredCoordinateActions.has(step.action) &&
       (!step.target ||
         !Number.isFinite(step.target.x) ||
-        !Number.isFinite(step.target.y)),
-  );
+        !Number.isFinite(step.target.y))
+    ) return true;
+    if (["type", "clear_and_type"].includes(step.action) && !step.text?.trim()) return true;
+    if (step.action === "key" && !step.key?.trim()) return true;
+    return step.targetDevice === "android" && !step.deviceId?.trim();
+  });
 
   return (
     <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4">
@@ -339,6 +346,35 @@ export function PlanReview({
                   .join(", ")}
               </div>
             )}
+            <label className="mt-2 block text-[11px] text-slate-500">
+              Post-action OCR success text (optional)
+              <Input
+                className="mt-1"
+                value={
+                  step.adaptive?.verification?.kind === "text-present"
+                    ? step.adaptive.verification.text ?? ""
+                    : ""
+                }
+                onChange={(event) => {
+                  const text = event.target.value;
+                  updateStep(step.id, {
+                    adaptive: {
+                      ...step.adaptive,
+                      captureBefore: true,
+                      verification: text.trim()
+                        ? { kind: "text-present", text }
+                        : undefined,
+                      retry: step.adaptive?.retry ?? {
+                        maxAttempts: 2,
+                        backoffMs: 500,
+                      },
+                    },
+                  });
+                }}
+                placeholder="e.g. Saved successfully"
+                aria-label={`Step ${step.order} post-action OCR success text`}
+              />
+            </label>
           </div>
         ))}
       </div>
@@ -352,7 +388,7 @@ export function PlanReview({
       <div className="mt-4 flex gap-2">
         <Button
           onClick={onApprove}
-          disabled={busy || hasIncompleteCoordinates}
+          disabled={busy || hasInvalidStep}
           className="flex-1 bg-emerald-400 text-slate-950 hover:bg-emerald-300"
         >
           <Check className="h-4 w-4" /> Approve plan
@@ -366,9 +402,9 @@ export function PlanReview({
           <X className="h-4 w-4" /> Reject
         </Button>
       </div>
-      {hasIncompleteCoordinates && (
+      {hasInvalidStep && (
         <p className="mt-2 text-xs text-amber-300">
-          Approval is blocked until every positional step has both X and Y coordinates.
+          Approval requires an action and all needed coordinates, text, keys, and Android device IDs.
         </p>
       )}
     </div>
@@ -490,6 +526,29 @@ export function InstructionPlanningPanel() {
     }
   };
 
+  const attachCondition = async (
+    condition: WaitCondition,
+    targetStepId: string,
+  ) => {
+    if (!plan) return;
+    const nextPlan: AssistantPlan = {
+      ...plan,
+      approvalState: "pending",
+      status: "draft",
+      steps: plan.steps.map((step) =>
+        step.id === targetStepId
+          ? {
+              ...step,
+              waitConditions: [...(step.waitConditions ?? []), condition],
+              status: "edited",
+            }
+          : step,
+      ),
+    };
+    setPlan(nextPlan);
+    await savePlan(nextPlan);
+  };
+
   return (
     <div className="mt-5">
       <InstructionComposer
@@ -514,22 +573,9 @@ export function InstructionPlanningPanel() {
           )}
           <WaitConditionPanel
             sessionId={plan.sessionId}
-            onConditionCreated={(condition: WaitCondition) =>
-              setPlan({
-                ...plan,
-                steps: plan.steps.map((step, index) =>
-                  index === 0
-                    ? {
-                        ...step,
-                        waitConditions: [
-                          ...(step.waitConditions ?? []),
-                          condition,
-                        ],
-                        status: "edited",
-                      }
-                    : step,
-                ),
-              })
+            steps={plan.steps}
+            onConditionCreated={(condition, targetStepId) =>
+              void attachCondition(condition, targetStepId)
             }
           />
         </>

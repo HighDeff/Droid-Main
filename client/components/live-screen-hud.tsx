@@ -107,6 +107,7 @@ export interface SequenceStep {
   lastCalibratedAt?: number;
   routePoints?: Array<{ x: number; y: number }>;
   isDrag?: boolean;
+  driftPx?: number;
 }
 
 type ReviewedReplayStep = {
@@ -118,6 +119,7 @@ type ReviewedReplayStep = {
   text?: string;
   routePoints?: Array<{ x: number; y: number }>;
   isDrag?: boolean;
+  driftPx?: number;
 };
 
 export interface AIThinkingState {
@@ -1093,6 +1095,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         y: waypoints[0].y,
         routePoints: waypoints,
         isDrag: false,
+        driftPx: humanDriftPx,
       }])
         .then((res) => {
           if (res.success) {

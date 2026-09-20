@@ -313,6 +313,22 @@ export interface RegionOfInterest {
   confidence?: number;
 }
 
+export type VisualLookoutExpectation = "present" | "absent" | "changed";
+export type VisualLookoutMatchAction = "continue" | "stop";
+export type VisualLookoutMissAction = "retry" | "stop";
+
+export interface VisualLookout {
+  id: string;
+  label: string;
+  region: RegionOfInterest;
+  expectedText?: string;
+  expectation: VisualLookoutExpectation;
+  minConfidence: number;
+  onMatch: VisualLookoutMatchAction;
+  onMiss: VisualLookoutMissAction;
+  referenceImage?: string;
+}
+
 export interface Annotation {
   id: string;
   text: string;
@@ -423,6 +439,7 @@ export interface PlannedStep {
   deviceId?: string;
   adaptive?: AdaptiveExecutionPolicy;
   waitConditions?: WaitCondition[];
+  visualLookouts?: VisualLookout[];
 }
 
 export interface PlanRisk {

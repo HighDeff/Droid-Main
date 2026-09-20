@@ -68,6 +68,7 @@ import {
   framePointFromClient,
   getContainedFrameViewport,
 } from "@/lib/frame-viewport";
+import type { VisualLookout } from "@shared/assistant";
 
 export interface SequenceStep {
   id: string;
@@ -108,6 +109,8 @@ export interface SequenceStep {
   routePoints?: Array<{ x: number; y: number }>;
   isDrag?: boolean;
   driftPx?: number;
+  visualLookouts?: VisualLookout[];
+  retryLimit?: number;
 }
 
 type ReviewedReplayStep = {
@@ -204,6 +207,7 @@ interface LiveScreenHUDProps {
   showDriftHeatmap?: boolean;
   onToggleDriftHeatmap?: (enabled: boolean) => void;
   driftThresholdPx?: number;
+  onAddLookout?: (stepId: string, lookout: VisualLookout) => void;
 }
 
 export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
@@ -232,6 +236,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   showDriftHeatmap,
   onToggleDriftHeatmap,
   driftThresholdPx,
+  onAddLookout,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -856,6 +861,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   const [saveAsNumberedStep, setSaveAsNumberedStep] = useState<boolean>(true);
   const [popoverSaveScreenshot, setPopoverSaveScreenshot] =
     useState<boolean>(true);
+  const [isDrawingLookout, setIsDrawingLookout] = useState(false);
+  const [lookoutStart, setLookoutStart] = useState<{ x: number; y: number } | null>(null);
+  const [lookoutRegion, setLookoutRegion] = useState<VisualLookout["region"] | null>(null);
+  const [lookoutLabel, setLookoutLabel] = useState("Next-step visual cue");
+  const [lookoutText, setLookoutText] = useState("");
+  const [lookoutExpectation, setLookoutExpectation] = useState<VisualLookout["expectation"]>("present");
+  const [lookoutOnMatch, setLookoutOnMatch] = useState<VisualLookout["onMatch"]>("continue");
+  const [lookoutOnMiss, setLookoutOnMiss] = useState<VisualLookout["onMiss"]>("retry");
   const [dynamicFixupMode, setDynamicFixupMode] = useState<
     "auto_fixup" | "perform_anyways" | "link_workflow"
   >("auto_fixup");
@@ -1170,6 +1183,16 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const coords = getNativeCoordinates(e);
+    if (isDrawingLookout && lookoutStart) {
+      setLookoutRegion({
+        id: `region_${Date.now()}`,
+        x: Math.min(lookoutStart.x, coords.x),
+        y: Math.min(lookoutStart.y, coords.y),
+        width: Math.abs(coords.x - lookoutStart.x),
+        height: Math.abs(coords.y - lookoutStart.y),
+      });
+      return;
+    }
     setMousePos({ x: coords.x, y: coords.y });
     recordMovementPoint(coords.x, coords.y);
     // Reset dwell start if moved significantly (>20px)
@@ -1189,6 +1212,11 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   };
 
   const handleMouseUp = () => {
+    if (isDrawingLookout && lookoutStart) {
+      setLookoutStart(null);
+      setIsDrawingLookout(false);
+      return;
+    }
     setDraggingStepId(null);
   };
 
@@ -1211,6 +1239,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   };
 
   const handleContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (lookoutRegion || isDrawingLookout) return;
     if (draggingStepId) return;
     if (isRecordMode || isRecordingMouseTrail) {
       const coords = getNativeCoordinates(e);
@@ -1236,7 +1265,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   const handleContainerContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     if (draggingStepId) return;
-    if (isRecordMode) {
+    if (isRecordMode || sequence.length > 0) {
       const coords = getNativeCoordinates(e);
       const stepNumber = sequence.length + 1;
       setPopoverName(`Step ${stepNumber} (Right Click)`);
@@ -1245,6 +1274,35 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       setPopoverDelay(500);
       setRecordingClickPos(coords);
     }
+  };
+
+  const beginLookoutDrawing = () => {
+    const targetStep = sequence.find((step) => step.id === activeStepId) ?? sequence.at(-1);
+    if (!targetStep || !onAddLookout) return;
+    if ((targetStep.visualLookouts?.length ?? 0) >= 10) return;
+    setRecordingClickPos(null);
+    setLookoutRegion(null);
+    setLookoutStart(null);
+    setIsDrawingLookout(true);
+  };
+
+  const commitLookout = () => {
+    const targetStep = sequence.find((step) => step.id === activeStepId) ?? sequence.at(-1);
+    if (!targetStep || !lookoutRegion || !onAddLookout) return;
+    if (lookoutRegion.width < 4 || lookoutRegion.height < 4) return;
+    onAddLookout(targetStep.id, {
+      id: `lookout_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      label: lookoutLabel.trim() || "Visual cue",
+      region: lookoutRegion,
+      expectedText: lookoutText.trim() || undefined,
+      expectation: lookoutExpectation,
+      minConfidence: 0.7,
+      onMatch: lookoutOnMatch,
+      onMiss: lookoutOnMiss,
+    });
+    setLookoutRegion(null);
+    setLookoutLabel("Next-step visual cue");
+    setLookoutText("");
   };
 
   const handleCommitRecordStep = () => {
@@ -1284,6 +1342,19 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           : "border-slate-800 shadow-xl cursor-default"
       }`}
       onMouseMove={handleMouseMove}
+      onMouseDown={(event) => {
+        if (!isDrawingLookout || event.button !== 0) return;
+        event.preventDefault();
+        const coords = getNativeCoordinates(event);
+        setLookoutStart({ x: coords.x, y: coords.y });
+        setLookoutRegion({
+          id: `region_${Date.now()}`,
+          x: coords.x,
+          y: coords.y,
+          width: 0,
+          height: 0,
+        });
+      }}
       onMouseUp={handleMouseUp}
       onMouseLeave={() => {
         setMousePos(null);
@@ -1292,6 +1363,35 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       onClick={handleContainerClick}
       onContextMenu={handleContainerContextMenu}
     >
+      {isDrawingLookout && (
+        <div className="pointer-events-none absolute inset-x-4 top-4 z-[70] rounded-lg border border-violet-400/60 bg-violet-950/90 px-3 py-2 text-center text-xs font-semibold text-violet-100">
+          Drag a rectangle around the item the AI should watch for.
+        </div>
+      )}
+      {sequence.flatMap((step) => step.visualLookouts ?? []).map((lookout) => (
+        <div
+          key={lookout.id}
+          className="pointer-events-none absolute z-20 border-2 border-violet-400/80 bg-violet-400/10"
+          style={{
+            left: `${(lookout.region.x / NATIVE_WIDTH) * 100}%`,
+            top: `${(lookout.region.y / NATIVE_HEIGHT) * 100}%`,
+            width: `${(lookout.region.width / NATIVE_WIDTH) * 100}%`,
+            height: `${(lookout.region.height / NATIVE_HEIGHT) * 100}%`,
+          }}
+          title={lookout.label}
+        />
+      ))}
+      {lookoutRegion && (
+        <div
+          className="pointer-events-none absolute z-[65] border-2 border-dashed border-violet-300 bg-violet-400/15"
+          style={{
+            left: `${(lookoutRegion.x / NATIVE_WIDTH) * 100}%`,
+            top: `${(lookoutRegion.y / NATIVE_HEIGHT) * 100}%`,
+            width: `${(lookoutRegion.width / NATIVE_WIDTH) * 100}%`,
+            height: `${(lookoutRegion.height / NATIVE_HEIGHT) * 100}%`,
+          }}
+        />
+      )}
       <div ref={viewportRef} className="absolute inset-0">
         {/* Native WebRTC Live Real Screen Video Stream */}
         <video
@@ -2717,6 +2817,21 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             </span>
           </div>
 
+          {onAddLookout && sequence.length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={beginLookoutDrawing}
+              disabled={
+                ((sequence.find((step) => step.id === activeStepId) ?? sequence.at(-1))
+                  ?.visualLookouts?.length ?? 0) >= 10
+              }
+              className="h-7 w-full border-violet-500/60 bg-violet-950/40 text-xs text-violet-200 hover:bg-violet-900/60"
+            >
+              <Eye className="h-3.5 w-3.5" /> Draw AI lookout region
+            </Button>
+          )}
+
           <div>
             <label className="text-[10px] font-mono text-slate-300 mb-1 block">
               Action Type:{" "}
@@ -2875,6 +2990,69 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                   : ""}
             </Button>
           </div>
+        </div>
+      )}
+
+      {recordingClickPos && !isRecordMode && sequence.length > 0 && (
+        <div
+          style={{
+            left: `${Math.min(75, Math.max(25, recordingClickPos.pctX))}%`,
+            top: `${Math.min(70, Math.max(30, recordingClickPos.pctY))}%`,
+          }}
+          onClick={(event) => event.stopPropagation()}
+          className="absolute z-50 w-64 -translate-x-1/2 -translate-y-1/2 space-y-2 rounded-xl border-2 border-violet-500/70 bg-slate-950/95 p-3 text-xs text-slate-100 shadow-2xl"
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-violet-200">Screen context actions</span>
+            <button onClick={() => setRecordingClickPos(null)}><X className="h-3.5 w-3.5" /></button>
+          </div>
+          <Button
+            size="sm"
+            onClick={beginLookoutDrawing}
+            disabled={
+              ((sequence.find((step) => step.id === activeStepId) ?? sequence.at(-1))
+                ?.visualLookouts?.length ?? 0) >= 10
+            }
+            className="h-8 w-full bg-violet-600 text-xs hover:bg-violet-500"
+          >
+            <Eye className="h-3.5 w-3.5" /> Draw AI lookout for selected step
+          </Button>
+          <p className="text-[10px] text-slate-400">Up to 10 lookouts can guide each workflow step.</p>
+        </div>
+      )}
+
+      {lookoutRegion && !isDrawingLookout && (
+        <div
+          onClick={(event) => event.stopPropagation()}
+          className="absolute bottom-4 right-4 z-[75] w-80 space-y-2 rounded-xl border-2 border-violet-500/70 bg-slate-950/95 p-3 text-xs text-slate-100 shadow-2xl"
+        >
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-violet-200">Configure AI lookout</span>
+            <button onClick={() => setLookoutRegion(null)}><X className="h-3.5 w-3.5" /></button>
+          </div>
+          <Input value={lookoutLabel} onChange={(event) => setLookoutLabel(event.target.value)} placeholder="Lookout label" className="h-8 bg-slate-900" />
+          <Input value={lookoutText} onChange={(event) => setLookoutText(event.target.value)} placeholder="Expected OCR / element text (optional)" className="h-8 bg-slate-900" />
+          <div className="grid grid-cols-3 gap-2">
+            <label className="text-[10px] text-slate-400">Expect
+              <select value={lookoutExpectation} onChange={(event) => setLookoutExpectation(event.target.value as VisualLookout["expectation"])} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-1 text-[10px]">
+                <option value="present">Present</option><option value="absent">Absent</option><option value="changed">Changed</option>
+              </select>
+            </label>
+            <label className="text-[10px] text-slate-400">On match
+              <select value={lookoutOnMatch} onChange={(event) => setLookoutOnMatch(event.target.value as VisualLookout["onMatch"])} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-1 text-[10px]">
+                <option value="continue">Continue</option><option value="stop">Stop</option>
+              </select>
+            </label>
+            <label className="text-[10px] text-slate-400">On miss
+              <select value={lookoutOnMiss} onChange={(event) => setLookoutOnMiss(event.target.value as VisualLookout["onMiss"])} className="mt-1 w-full rounded border border-slate-700 bg-slate-900 p-1 text-[10px]">
+                <option value="retry">Retry</option><option value="stop">Stop</option>
+              </select>
+            </label>
+          </div>
+          <p className="text-[10px] text-slate-500">Region: {Math.round(lookoutRegion.x)},{Math.round(lookoutRegion.y)} · {Math.round(lookoutRegion.width)}×{Math.round(lookoutRegion.height)}</p>
+          <Button onClick={commitLookout} disabled={lookoutRegion.width < 4 || lookoutRegion.height < 4} className="h-8 w-full bg-violet-600 text-xs hover:bg-violet-500">
+            Save lookout to selected step
+          </Button>
         </div>
       )}
 

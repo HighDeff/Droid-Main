@@ -76,6 +76,12 @@ interface ClickSequenceRegisterProps {
   onMoveStep: (id: string, direction: "up" | "down") => void;
   onClearSequence: () => void;
   onSelectStep: (id: string) => void;
+  repeatCount: number;
+  repeatIntervalMs: number;
+  maxStepAttempts: number;
+  onRepeatCountChange: (value: number) => void;
+  onRepeatIntervalChange: (value: number) => void;
+  onMaxStepAttemptsChange: (value: number) => void;
 }
 
 export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
@@ -94,6 +100,12 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
   onMoveStep,
   onClearSequence,
   onSelectStep,
+  repeatCount,
+  repeatIntervalMs,
+  maxStepAttempts,
+  onRepeatCountChange,
+  onRepeatIntervalChange,
+  onMaxStepAttemptsChange,
 }) => {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -149,22 +161,8 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
 
       setActivityEvents((prev) => [newEvent, ...prev.slice(0, 30)]);
 
-      // If AI Repeat is enabled during recording, dispatch physical execution immediately
-      if (isAiRepeatEnabled && isRecordMode) {
-        fetch("/api/execute-task", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            task: {
-              id: `ai_mimic_${latest.id}`,
-              name: `AI Repeat: ${latest.name}`,
-              action: latest.action,
-              targetPosition: { x: latest.x, y: latest.y },
-              textPayload: latest.text || "",
-            },
-          }),
-        }).catch(() => {});
-      }
+      // Recording updates the reviewed workflow only. Physical input remains
+      // behind the explicit Run Sequence control and its live-screen checks.
     }
   }, [sequence.length, isAiRepeatEnabled, isRecordMode]);
 
@@ -289,6 +287,19 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                 {isAiRepeatEnabled ? "ON" : "OFF"}
               </button>
             </div>
+
+            <label className="flex items-center gap-1 rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] text-slate-300">
+              Runs
+              <input type="number" min={1} max={100} value={repeatCount} onChange={(event) => onRepeatCountChange(Math.max(1, Math.min(100, Number(event.target.value) || 1)))} className="h-5 w-12 rounded bg-slate-950 px-1 text-cyan-300" />
+            </label>
+            <label className="flex items-center gap-1 rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] text-slate-300">
+              Gap ms
+              <input type="number" min={250} max={60000} step={250} value={repeatIntervalMs} onChange={(event) => onRepeatIntervalChange(Math.max(250, Math.min(60000, Number(event.target.value) || 250)))} className="h-5 w-16 rounded bg-slate-950 px-1 text-cyan-300" />
+            </label>
+            <label className="flex items-center gap-1 rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] text-slate-300">
+              Attempts
+              <input type="number" min={1} max={5} value={maxStepAttempts} onChange={(event) => onMaxStepAttemptsChange(Math.max(1, Math.min(5, Number(event.target.value) || 1)))} className="h-5 w-10 rounded bg-slate-950 px-1 text-cyan-300" />
+            </label>
 
             {/* Record Clicks Button */}
             <Button
@@ -619,6 +630,11 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                               no img
                             </span>
                           )}
+                          {(step.visualLookouts?.length ?? 0) > 0 && (
+                            <span className="text-[9px] font-mono bg-violet-950 text-violet-300 border border-violet-700 px-1.5 py-0.5 rounded">
+                              👁 {step.visualLookouts!.length}/10 lookouts
+                            </span>
+                          )}
                           <Button
                             size="sm"
                             variant="ghost"
@@ -705,6 +721,38 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                               </option>
                             </select>
                           </div>
+                        </div>
+
+                        <div className="w-full flex flex-wrap items-center gap-2 text-[10px]">
+                          <Input
+                            value={step.targetOcrLabel ?? ""}
+                            onChange={(event) => onUpdateStep(step.id, { targetOcrLabel: event.target.value })}
+                            placeholder="OCR label used to re-align"
+                            className="h-7 min-w-44 flex-1 border-violet-800 bg-violet-950/20 text-xs"
+                          />
+                          <select
+                            value={step.fallbackMethod ?? "direct_click"}
+                            onChange={(event) => onUpdateStep(step.id, { fallbackMethod: event.target.value as SequenceStep["fallbackMethod"] })}
+                            className="h-7 rounded border border-amber-800 bg-slate-900 px-2 text-[10px] text-amber-200"
+                          >
+                            <option value="direct_click">Retry direct action</option>
+                            <option value="tab_enter">Fallback: Tab then Enter</option>
+                            <option value="arrow_keys">Fallback: Arrow then Enter</option>
+                            <option value="escape_retry">Fallback: Escape then retry</option>
+                          </select>
+                          {(step.visualLookouts?.length ?? 0) > 0 && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onUpdateStep(step.id, { visualLookouts: [] });
+                              }}
+                              className="h-7 text-[10px] text-violet-300"
+                            >
+                              Clear lookouts
+                            </Button>
+                          )}
                         </div>
 
                         {/* Order Change Buttons: UP (↑), DOWN (↓), DELETE */}

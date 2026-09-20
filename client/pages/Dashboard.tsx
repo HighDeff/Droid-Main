@@ -136,6 +136,8 @@ import { LiveExecutionConsole } from "@/components/live-execution-console";
 import { WorkflowHistoryScrubber } from "@/components/workflow-history-scrubber";
 import { TaskInspector } from "@/components/task-inspector";
 import { AssistantWorkspace } from "@/components/assistant-workspace";
+import { DeviceCommandComposer } from "@/components/device-command-composer";
+import { evaluateVisualLookouts } from "@/lib/visual-lookouts";
 export default function Dashboard({
   initialTab,
 }: { initialTab?: string } = {}) {
@@ -185,12 +187,22 @@ export default function Dashboard({
   ]);
   const [collabInput, setCollabInput] = useState("");
   const [popoutOpen, setPopoutOpen] = useState(false);
-  const [sequence, setSequence] = useState<SequenceStep[]>([]);
+  const [sequence, setSequence] = useState<SequenceStep[]>(() => {
+    try {
+      const saved = localStorage.getItem("unified_sequence");
+      return saved ? (JSON.parse(saved) as SequenceStep[]).slice(0, 100) : [];
+    } catch {
+      return [];
+    }
+  });
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
   const [isRecordMode, setIsRecordMode] = useState(false);
   const [isSequenceRunning, setIsSequenceRunning] = useState(false);
   const [aiThinking, setAiThinking] = useState<AIThinkingState | null>(null);
   const sequenceRunningRef = useRef(false);
+  const [repeatCount, setRepeatCount] = useState(1);
+  const [repeatIntervalMs, setRepeatIntervalMs] = useState(1000);
+  const [maxStepAttempts, setMaxStepAttempts] = useState(3);
   const [recalibrationNotice, setRecalibrationNotice] =
     useState<RecalibrationNotice | null>(null);
   const [perceptionReport, setPerceptionReport] =
@@ -249,6 +261,15 @@ export default function Dashboard({
   const prevLiveRef = useRef(false);
   const mobileIntervalRef = useRef<number | null>(null);
   const stripFileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "unified_sequence",
+        JSON.stringify(sequence.map((step) => ({ ...step, status: "pending" }))),
+      );
+    } catch {}
+  }, [sequence]);
 
   // AI Canvas Screen & Auto-Actor State
   const [activeCanvasSourceId, setActiveCanvasSourceId] = useState<string>("live");
@@ -323,7 +344,6 @@ export default function Dashboard({
     stepData: (Partial<SequenceStep> & { x: number; y: number }) | number,
     maybeY?: number,
   ) => {
-    const stepNum = sequence.length + 1;
     let pendingRightClick = false;
     try {
       if (localStorage.getItem("pending_right_click") === "1") {
@@ -331,45 +351,45 @@ export default function Dashboard({
         localStorage.removeItem("pending_right_click");
       }
     } catch {}
-    let newStep: SequenceStep;
-    if (typeof stepData === "number") {
-      newStep = {
-        id: `step_${Date.now()}_${stepNum}`,
-        stepNumber: stepNum,
-        name: pendingRightClick
-          ? `Step ${stepNum} (Right Click)`
-          : `Step ${stepNum}`,
-        action: pendingRightClick ? "right_click" : "click",
-        x: stepData,
-        y: maybeY ?? 540,
-        delayMs: 500,
-        status: "pending",
-        referenceScreenshotUrl: saveScreenshotWithStep
-          ? screenshotUrl
-          : undefined,
-      };
-    } else {
-      const isRight =
-        pendingRightClick || (stepData as any).action === "right_click";
-      newStep = {
-        id: stepData.id || `step_${Date.now()}_${stepNum}`,
-        stepNumber: stepNum,
-        name:
-          stepData.name ||
-          (isRight ? `Step ${stepNum} (Right Click)` : `Step ${stepNum}`),
-        action: (stepData.action as any) || (isRight ? "right_click" : "click"),
-        x: stepData.x,
-        y: stepData.y,
-        delayMs: stepData.delayMs || 500,
-        text: stepData.text,
-        keyPayload: stepData.keyPayload,
-        status: "pending",
-        referenceScreenshotUrl:
-          (stepData as any).referenceScreenshotUrl ??
-          (saveScreenshotWithStep ? screenshotUrl : undefined),
-      };
-    }
-    setSequence((prev) => [...prev, newStep]);
+    setSequence((previous) => {
+      const stepNum = previous.length + 1;
+      let newStep: SequenceStep;
+      if (typeof stepData === "number") {
+        newStep = {
+          id: `step_${Date.now()}_${stepNum}`,
+          stepNumber: stepNum,
+          name: pendingRightClick ? `Step ${stepNum} (Right Click)` : `Step ${stepNum}`,
+          action: pendingRightClick ? "right_click" : "click",
+          x: stepData,
+          y: maybeY ?? 540,
+          delayMs: 500,
+          status: "pending",
+          referenceScreenshotUrl: saveScreenshotWithStep ? screenshotUrl : undefined,
+        };
+      } else {
+        const isRight = pendingRightClick || stepData.action === "right_click";
+        newStep = {
+          id: stepData.id || `step_${Date.now()}_${stepNum}`,
+          stepNumber: stepNum,
+          name: stepData.name || (isRight ? `Step ${stepNum} (Right Click)` : `Step ${stepNum}`),
+          action: stepData.action || (isRight ? "right_click" : "click"),
+          x: stepData.x,
+          y: stepData.y,
+          delayMs: stepData.delayMs || 500,
+          text: stepData.text,
+          keyPayload: stepData.keyPayload,
+          targetOcrLabel: stepData.targetOcrLabel,
+          fallbackMethod: stepData.fallbackMethod ?? "direct_click",
+          visualLookouts: stepData.visualLookouts?.slice(0, 10),
+          retryLimit: stepData.retryLimit,
+          status: "pending",
+          referenceScreenshotUrl:
+            stepData.referenceScreenshotUrl ??
+            (saveScreenshotWithStep ? screenshotUrl : undefined),
+        };
+      }
+      return [...previous, newStep];
+    });
   };
   const handleStripUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -452,188 +472,212 @@ export default function Dashboard({
       copy[t] = tmp;
       return copy.map((s, i) => ({ ...s, stepNumber: i + 1 }));
     });
+  const captureFreshFrame = async () => {
+    const response = await fetch("/api/capture-screen");
+    const capture = await response.json();
+    if (!response.ok || !capture.success || !capture.imageData || !Number.isFinite(capture.timestamp)) {
+      throw new Error(capture.error || "No live frame is available from the capture service");
+    }
+    if (!Number.isFinite(capture.ageMs) || capture.ageMs > 5_000) {
+      throw new Error("The latest shared frame is stale; resume screen sharing");
+    }
+    return capture;
+  };
+
+  const perceiveFrame = async (imageData: string) => {
+    const response = await fetch("/api/ai/describe-screen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageData }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success || result.report?.degraded) {
+      throw new Error(result.error || "Qwen/OCR could not inspect the current screen");
+    }
+    setPerceptionReport(result.report);
+    return result.report as ScreenPerceptionReport;
+  };
+
+  const dispatchReviewedAction = async (step: SequenceStep, attempt: number) => {
+    const baseDrift = movementMode === "exact" || attempt > 1 ? 0 : driftPx;
+    const variedDrift =
+      driftPerStepVariate && baseDrift > 0
+        ? Math.max(0, baseDrift + Math.floor((Math.random() - 0.5) * baseDrift))
+        : baseDrift;
+    const driftToSend = movementMode === "live" && attempt === 1 ? Math.max(variedDrift, 6) : variedDrift;
+    const response = await fetch("/api/execute-task", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targetDevice,
+        deviceId: selectedAdbDevice,
+        task: {
+          id: step.id,
+          name: step.name,
+          description: `${step.action} ${step.name}`,
+          action: step.action,
+          targetPosition: { x: step.x, y: step.y },
+          textPayload: step.text || (step.action === "scroll" ? step.text : ""),
+          keyPayload: step.keyPayload || "enter",
+          delayMs: step.delayMs,
+          driftPx: driftToSend,
+          variationMode: attempt > 1 ? "exact" : movementMode,
+        },
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) throw new Error(result.error || "Native action failed");
+    return result;
+  };
+
+  const runRecovery = async (step: SequenceStep) => {
+    const keys =
+      step.fallbackMethod === "tab_enter"
+        ? ["tab", "enter"]
+        : step.fallbackMethod === "arrow_keys"
+          ? ["down", "enter"]
+          : step.fallbackMethod === "escape_retry"
+            ? ["escape"]
+            : [];
+    for (const key of keys) {
+      await dispatchReviewedAction(
+        { ...step, id: `${step.id}_recovery_${key}`, name: `${step.name} recovery`, action: "press_key", keyPayload: key },
+        2,
+      );
+    }
+  };
+
   const handleRunSequence = async () => {
     if (sequence.length === 0 || isSequenceRunning) return;
+    if (!isLiveDesktopActive) {
+      toast.error("Start Screen HUD sharing before running the sequence");
+      return;
+    }
     setIsSequenceRunning(true);
     sequenceRunningRef.current = true;
-    setSequence((prev) => prev.map((s) => ({ ...s, status: "pending" })));
-    for (let i = 0; i < sequence.length; i++) {
-      if (!sequenceRunningRef.current) break;
-      const current = sequence[i];
-      setActiveStepId(current.id);
-      setSequence((prev) =>
-        prev.map((s) =>
-          s.id === current.id ? { ...s, status: "running" } : s,
-        ),
-      );
-      setAiThinking({
-        x: current.x,
-        y: current.y,
-        action: `Executing ${current.name} (${current.action})`,
-        confidence: 0.95,
-        isThinking: true,
-        targetLabel: current.name,
-      });
-      const stepDelay = driftRandomInterval
-        ? 1000 + Math.floor(Math.random() * 2000)
-        : current.delayMs;
-      await new Promise((r) => setTimeout(r, stepDelay));
-      if (!sequenceRunningRef.current) break;
-      try {
-        if (!isLiveDesktopActive) {
-          throw new Error("Start Screen HUD sharing before running the sequence");
-        }
-        const beforeCapture = await (await fetch("/api/capture-screen")).json();
-        if (!beforeCapture.success || !beforeCapture.imageData || !Number.isFinite(beforeCapture.timestamp)) {
-          throw new Error("No live frame is available from the capture service");
-        }
-        if (!Number.isFinite(beforeCapture.ageMs) || beforeCapture.ageMs > 5_000) {
-          throw new Error("The latest shared frame is stale; resume screen sharing");
-        }
-        let taskDescription = `Click at ${current.x}, ${current.y}`;
-        if (current.action === "right_click")
-          taskDescription = `Right click at ${current.x}, ${current.y}`;
-        else if (current.action === "clear_and_type")
-          taskDescription = `Clear and type "${current.text || ""}" at ${current.x}, ${current.y}`;
-        else if (current.action === "type_text")
-          taskDescription = `Type "${current.text || ""}" at ${current.x}, ${current.y}`;
-        const baseDrift = movementMode === "exact" ? 0 : driftPx;
-        const variedDrift =
-          driftPerStepVariate && baseDrift > 0
-            ? Math.max(
-                0,
-                baseDrift + Math.floor((Math.random() - 0.5) * baseDrift),
-              )
-            : baseDrift;
-        const driftToSend =
-          movementMode === "live" ? Math.max(variedDrift, 6) : variedDrift;
-        const executionResponse = await fetch("/api/execute-task", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            targetDevice,
-            deviceId: selectedAdbDevice,
-            task: {
-              id: current.id,
-              name: current.name,
-              description: taskDescription,
-              action: current.action,
-              x: current.x,
-              y: current.y,
-              targetPosition: { x: current.x, y: current.y },
-              textPayload: current.text || "",
-              keyPayload: current.keyPayload || "enter",
-              delayMs: current.delayMs,
-              driftPx: driftToSend,
-              variationMode: movementMode,
-            },
-          }),
-        });
-        const executionResult = await executionResponse.json();
-        if (!executionResponse.ok || !executionResult.success) {
-          throw new Error(executionResult.error || "Native action failed");
-        }
-        const frameDeadline = Date.now() + 3_000;
-        let afterCapture: any = null;
-        while (Date.now() < frameDeadline && sequenceRunningRef.current) {
-          const candidate = await (await fetch("/api/capture-screen")).json();
-          if (!sequenceRunningRef.current) break;
-          if (
-            candidate.success &&
-            candidate.imageData &&
-            Number.isFinite(candidate.timestamp) &&
-            candidate.timestamp > beforeCapture.timestamp
-          ) {
-            afterCapture = candidate;
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-        if (!sequenceRunningRef.current) break;
-        const requiresVisibleChange = new Set([
-          "click",
-          "double_click",
-          "right_click",
-          "clear_and_type",
-          "type_text",
-          "drag",
-          "drag_and_drop",
-          "scroll",
-        ]).has(current.action);
-        if (
-          requiresVisibleChange &&
-          (!afterCapture ||
-            !afterCapture.success ||
-            !afterCapture.imageData ||
-            !Number.isFinite(afterCapture.timestamp) ||
-            afterCapture.timestamp <= beforeCapture.timestamp ||
-            !afterCapture.frameHash ||
-            afterCapture.frameHash === beforeCapture.frameHash)
-        ) {
-          throw new Error("The screen did not visibly change; sequence paused for review");
-        }
-        setSequence((prev) =>
-          prev.map((s) =>
-            s.id === current.id ? { ...s, status: "completed" } : s,
-          ),
-        );
-        // Conditional Branching Evaluation (Jump to step, retry, workaround, failover)
-        const condType = (current as any).conditionType;
-        const condVal = (current as any).conditionValue;
-        const thenBranch = (current as any).thenBranchAction;
-        if (condType && condType !== "always") {
-          let conditionTriggered = false;
-          if (condType === "ocr_error" || condType === "ocr_contains") {
-            const pattern = condType === "ocr_error" ? "error" : (condVal || "").toLowerCase();
-            const label = (current.name || "").toLowerCase();
-            conditionTriggered = label.includes(pattern) || (condVal && label.includes(condVal.toLowerCase()));
-          } else if (condType === "pixel_diff" || condType === "element_missing") {
-            conditionTriggered = false;
-          }
+    let previousFrameHash: string | undefined;
+    let stopReason = "";
+    let requestedStop = false;
 
-          if (conditionTriggered && thenBranch) {
-            if (thenBranch === "jump_to_step") {
-              const targetIdx = sequence.findIndex(
-                (s) => s.stepNumber === Number(condVal) || s.name.toLowerCase().includes((condVal || "").toLowerCase())
+    runs: for (let runIndex = 0; runIndex < repeatCount; runIndex += 1) {
+      setSequence((previous) => previous.map((step) => ({ ...step, status: "pending" })));
+      for (const recordedStep of sequence) {
+        if (!sequenceRunningRef.current) break runs;
+        setActiveStepId(recordedStep.id);
+        setSequence((previous) => previous.map((step) => step.id === recordedStep.id ? { ...step, status: "running" } : step));
+        let completed = false;
+
+        const attemptLimit = Math.min(5, recordedStep.retryLimit ?? maxStepAttempts);
+        for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
+          try {
+            setAiThinking({
+              x: recordedStep.x,
+              y: recordedStep.y,
+              action: `Qwen checking ${recordedStep.name} · run ${runIndex + 1}/${repeatCount} · attempt ${attempt}`,
+              confidence: 0.95,
+              isThinking: true,
+              targetLabel: recordedStep.targetOcrLabel || recordedStep.name,
+            });
+            const before = await captureFreshFrame();
+            let current = recordedStep;
+            const preLookouts = (current.visualLookouts ?? []).filter((lookout) => lookout.expectation !== "changed");
+            const needsPerception = Boolean(current.targetOcrLabel?.trim() || preLookouts.length);
+            if (needsPerception) {
+              const report = await perceiveFrame(before.imageData);
+              const evaluation = evaluateVisualLookouts(
+                preLookouts,
+                report.elements ?? [],
+                Boolean(previousFrameHash && previousFrameHash !== before.frameHash),
               );
-              if (targetIdx >= 0) {
-                toast.info(`Conditional branch: Jumping to Step #${sequence[targetIdx].stepNumber}`);
-                i = targetIdx - 1;
-                continue;
+              if (evaluation.shouldStop) {
+                stopReason = evaluation.results.map((result) => result.reason).join(" ");
+                completed = true;
+                requestedStop = true;
+                break;
               }
-            } else if (thenBranch === "workaround_escape") {
-              toast.info("Conditional branch: Triggering Escape Workaround");
-              await fetch("/api/execute-task", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  targetDevice,
-                  deviceId: selectedAdbDevice,
-                  task: {
-                    id: `escape_${Date.now()}`,
-                    name: "Escape Workaround",
-                    action: "press_key",
-                    keyPayload: "escape",
-                    delayMs: 200,
-                  },
-                }),
-              });
+              if (!evaluation.allSatisfied) {
+                throw new Error(evaluation.results.filter((result) => !result.satisfied).map((result) => result.reason).join(" "));
+              }
+              const targetText = current.targetOcrLabel?.trim().toLowerCase();
+              const matched =
+                evaluation.results.find((result) => result.matchedElement)?.matchedElement ??
+                (targetText
+                  ? report.elements?.find((element) => `${element.name ?? ""} ${element.textValue ?? ""}`.toLowerCase().includes(targetText))
+                  : undefined);
+              if (matched?.center) {
+                current = { ...current, x: Math.round(matched.center.x), y: Math.round(matched.center.y), recalibrated: true };
+                setSequence((previous) => previous.map((step) => step.id === current.id ? { ...step, x: current.x, y: current.y, recalibrated: true } : step));
+              }
             }
+
+            const delay = driftRandomInterval ? Math.max(250, current.delayMs + Math.floor(Math.random() * 500)) : current.delayMs;
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            if (!sequenceRunningRef.current) break runs;
+            await dispatchReviewedAction(current, attempt);
+
+            const requiresVisibleChange = new Set(["click", "double_click", "right_click", "clear_and_type", "type_text", "scroll"]).has(current.action);
+            const deadline = Date.now() + 3_000;
+            let after: any = null;
+            while (Date.now() < deadline && sequenceRunningRef.current) {
+              const candidate = await captureFreshFrame();
+              if (candidate.timestamp > before.timestamp) {
+                after = candidate;
+                break;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            const frameChanged = Boolean(after?.frameHash && after.frameHash !== before.frameHash);
+            if (requiresVisibleChange && !frameChanged) throw new Error("The fresh screen did not visibly change after the action");
+
+            const changeLookouts = (current.visualLookouts ?? []).filter((lookout) => lookout.expectation === "changed");
+            if (changeLookouts.length) {
+              const report = await perceiveFrame(after?.imageData ?? before.imageData);
+              const evaluation = evaluateVisualLookouts(changeLookouts, report.elements ?? [], frameChanged);
+              if (evaluation.shouldStop) {
+                stopReason = evaluation.results.map((result) => result.reason).join(" ");
+                completed = true;
+                requestedStop = true;
+                break;
+              }
+              if (!evaluation.allSatisfied) throw new Error(evaluation.results.map((result) => result.reason).join(" "));
+            }
+            previousFrameHash = after?.frameHash ?? before.frameHash;
+            completed = true;
+            setVerificationBadge({ status: "verified", message: `${current.name} verified on attempt ${attempt}` });
+            break;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Sequence step failed";
+            setVerificationBadge({ status: attempt < attemptLimit ? "retrying" : "failed", message });
+            if (attempt < attemptLimit) {
+              try {
+                await runRecovery(recordedStep);
+              } catch (recoveryError) {
+                stopReason = `${recordedStep.name} recovery failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`;
+                break;
+              }
+              toast.info(`${recordedStep.name}: retrying with ${recordedStep.fallbackMethod ?? "direct action"}`);
+              continue;
+            }
+            stopReason = `${recordedStep.name} failed after ${attempt} attempt(s): ${message}`;
           }
         }
-      } catch (error) {
-        sequenceRunningRef.current = false;
-        toast.error(
-          error instanceof Error ? error.message : "Sequence step failed",
-        );
-        setSequence((prev) =>
-          prev.map((s) =>
-            s.id === current.id ? { ...s, status: "failed" } : s,
-          ),
-        );
+
+        setSequence((previous) => previous.map((step) => step.id === recordedStep.id ? { ...step, status: completed ? "completed" : "failed" } : step));
+        if (requestedStop) break runs;
+        if (!completed) {
+          sequenceRunningRef.current = false;
+          break runs;
+        }
+      }
+      if (runIndex + 1 < repeatCount && sequenceRunningRef.current) {
+        await new Promise((resolve) => setTimeout(resolve, repeatIntervalMs));
       }
     }
+
+    if (stopReason) toast[sequenceRunningRef.current ? "info" : "error"](stopReason);
+    else if (sequenceRunningRef.current) toast.success(`Workflow completed ${repeatCount} time(s) with live verification.`);
     setActiveStepId(null);
+    setAiThinking(null);
     setIsSequenceRunning(false);
     sequenceRunningRef.current = false;
   };
@@ -1988,6 +2032,18 @@ export default function Dashboard({
                   }
                   selectedTabName={currentTab}
                   onMouseTrailChange={setLiveMouseTrail}
+                  onAddLookout={(stepId, lookout) =>
+                    setSequence((previous) =>
+                      previous.map((step) =>
+                        step.id === stepId
+                          ? {
+                              ...step,
+                              visualLookouts: [...(step.visualLookouts ?? []), lookout].slice(0, 10),
+                            }
+                          : step,
+                      ),
+                    )
+                  }
                 />
               </CardContent>
             </Card>
@@ -2048,6 +2104,11 @@ export default function Dashboard({
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
               {/* Left Column (8 cols): Action Sequence Register & Loop Verification Hub */}
               <div className="lg:col-span-8 space-y-4">
+                <DeviceCommandComposer
+                  onAddCommands={(commands) =>
+                    commands.forEach((command) => handleAddSequenceStep(command))
+                  }
+                />
                 <ClickSequenceRegister
                   sequence={sequence}
                   activeStepId={activeStepId}
@@ -2074,6 +2135,12 @@ export default function Dashboard({
                   onMoveStep={handleMoveStep}
                   onClearSequence={() => setSequence([])}
                   onSelectStep={setActiveStepId}
+                  repeatCount={repeatCount}
+                  repeatIntervalMs={repeatIntervalMs}
+                  maxStepAttempts={maxStepAttempts}
+                  onRepeatCountChange={setRepeatCount}
+                  onRepeatIntervalChange={setRepeatIntervalMs}
+                  onMaxStepAttemptsChange={setMaxStepAttempts}
                 />
 
                 <MainScreenLoopVerificationHub

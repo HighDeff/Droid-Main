@@ -253,20 +253,6 @@ export const handleExecuteTask: RequestHandler = async (req, res) => {
       });
     });
 
-    try {
-      python.stdin.write(JSON.stringify({
-        ...req.body,
-        targetDevice,
-        ...(deviceId ? { deviceId } : {}),
-      }));
-      python.stdin.end();
-    } catch (e) {
-      if (!responseSent) {
-        responseSent = true;
-        res.json({ success: false, error: String(e) });
-      }
-    }
-
     const executionTimeoutMs = action === "wait"
       ? Number(rawTask.delayMs ?? rawTask.delay) + 5_000
       : 15_000;

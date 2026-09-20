@@ -7,8 +7,10 @@
 import {
   ScreenPerceptionReport,
   DetectedUIElement,
+  resolveAIEndpoint,
 } from "./ai-perception-engine";
 import { resolveAiEndpoint } from "./ai-endpoint";
+import { AUTOMATION_BOUNDS } from "./automation-adapters";
 
 export interface AIThinkingChain {
   observation: string;
@@ -118,13 +120,27 @@ export class AIPlannerActorEngine {
     endpoint?: string,
     model = "qwen2.5vl:7b",
   ): Promise<PlannerActDecision> {
+    if (perception.degraded) {
+      return {
+        timestamp: Date.now(),
+        thinking: {
+          observation: perception.screenDescription,
+          reasoning: perception.error ?? "The vision provider did not analyze the current frame.",
+          strategy: "Wait for a verified frame or use explicitly reviewed coordinates.",
+          confidence: 0,
+        },
+        goals: this.activeGoals,
+        nextAction: null,
+        verificationRule: null,
+        statusSummary: "Paused: screen perception is unavailable",
+      };
+    }
     const resolvedEndpoint = resolveAiEndpoint(endpoint);
     if (!resolvedEndpoint) {
       // No remote planner endpoint configured: use the deterministic planner
       // instead of failing against a hardcoded host.
       return this.fallbackPlan(perception);
     }
-
     const systemPrompt = `You are an elite Autonomous AI Planner and Action Synthesizer.
 You receive a Vision Perception Report of the active user desktop/application screen.
 Your job is to:
@@ -193,6 +209,7 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
 - Current Active Goals: ${JSON.stringify(this.activeGoals.map((g) => ({ title: g.title, status: g.status })))}`;
 
     try {
+      const endpointUrl = resolveAIEndpoint(resolvedEndpoint);
       const payload = {
         model,
         messages: [
@@ -203,7 +220,7 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
         format: "json",
       };
 
-      const response = await fetch(resolvedEndpoint, {
+      const response = await fetch(endpointUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -225,21 +242,41 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
           .trim();
         parsed = JSON.parse(cleaned);
       } catch {
-        parsed = this.fallbackPlan(perception);
+        return this.fallbackPlan(perception);
       }
 
       if (Array.isArray(parsed.goals) && parsed.goals.length > 0) {
         this.activeGoals = parsed.goals;
       }
 
-      const nextAction: SubTask | null = parsed.nextAction
+      const allowedActionTypes = new Set<SubTask["actionType"]>([
+        "click",
+        "double_click",
+        "right_click",
+        "type_text",
+        "scroll",
+        "wait",
+      ]);
+      const proposedActionType = parsed.nextAction?.actionType as SubTask["actionType"];
+      const proposedX = Number(parsed.nextAction?.x);
+      const proposedY = Number(parsed.nextAction?.y);
+      const coordinatesValid =
+        Number.isFinite(proposedX) &&
+        Number.isFinite(proposedY) &&
+        proposedX >= 0 &&
+        proposedY >= 0 &&
+        proposedX < AUTOMATION_BOUNDS.width &&
+        proposedY < AUTOMATION_BOUNDS.height;
+      const nextAction: SubTask | null =
+        parsed.nextAction &&
+        allowedActionTypes.has(proposedActionType) &&
+        (proposedActionType === "wait" || coordinatesValid)
         ? {
             id: parsed.nextAction.id || `act_${Date.now()}`,
             title: parsed.nextAction.title || "Execute Next Step",
-            actionType: parsed.nextAction.actionType || "click",
+            actionType: proposedActionType,
             targetName: parsed.nextAction.targetName || "Target Element",
-            x: parsed.nextAction.x ?? perception.feedbackPosition.x ?? 960,
-            y: parsed.nextAction.y ?? perception.feedbackPosition.y ?? 540,
+            ...(coordinatesValid ? { x: proposedX, y: proposedY } : {}),
             textPayload: parsed.nextAction.textPayload,
             delayMs: parsed.nextAction.delayMs || 500,
             status: "in_progress",
@@ -257,15 +294,15 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
           strategy:
             parsed.thinking?.strategy ||
             "Execute immediate target action, then verify UI response.",
-          confidence: parsed.thinking?.confidence || 0.9,
+          confidence: parsed.thinking?.confidence ?? 0.9,
         },
         goals: this.activeGoals,
         nextAction,
         verificationRule: parsed.verificationRule || {
           expectedChange: "Visual update in target coordinate region",
           targetRegion: {
-            x: (nextAction?.x || 960) - 40,
-            y: (nextAction?.y || 540) - 20,
+            x: (nextAction?.x ?? 960) - 40,
+            y: (nextAction?.y ?? 540) - 20,
             width: 80,
             height: 40,
           },
@@ -310,50 +347,24 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
     }
 
     return {
-      verified: true, // Graceful pass with warning
-      feedback: `Action dispatched. Visual confirmation: ${currentPerception.visualStateChange}`,
+      verified: false,
+      feedback: `Action dispatched but not visually confirmed: ${currentPerception.visualStateChange}`,
     };
   }
 
   private fallbackPlan(perception: ScreenPerceptionReport): PlannerActDecision {
-    const topElem = perception.elements[0];
-    const targetX = topElem?.center.x || perception.feedbackPosition.x || 960;
-    const targetY = topElem?.center.y || perception.feedbackPosition.y || 540;
-
-    const action: SubTask = {
-      id: `fallback_${Date.now()}`,
-      title: `Interact with ${topElem?.name || "Target Area"}`,
-      actionType: "click",
-      targetName: topElem?.name || "Focus Point",
-      x: targetX,
-      y: targetY,
-      delayMs: 500,
-      status: "in_progress",
-    };
-
     return {
       timestamp: Date.now(),
       thinking: {
         observation: perception.screenDescription,
-        reasoning: `Targeting highest confidence element "${topElem?.name || "center"}" at (${targetX}, ${targetY}).`,
-        strategy:
-          "Step-by-step UI interaction with automatic visual feedback validation.",
-        confidence: 0.88,
+        reasoning: "The planning provider did not return a valid, reviewable action.",
+        strategy: "Pause and ask the user to review explicit coordinates or retry planning.",
+        confidence: 0,
       },
       goals: this.activeGoals,
-      nextAction: action,
-      verificationRule: {
-        expectedChange: "Element state change or visual feedback",
-        targetRegion: {
-          x: targetX - 40,
-          y: targetY - 20,
-          width: 80,
-          height: 40,
-        },
-        successCondition: "Confirmation of interactive response",
-        retryStrategy: "Retry with +10px offset",
-      },
-      statusSummary: `Targeting: ${action.title}`,
+      nextAction: null,
+      verificationRule: null,
+      statusSummary: "Paused: no verified action was formulated",
     };
   }
 

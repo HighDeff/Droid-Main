@@ -8,7 +8,8 @@ Uses color detection, edge detection, and pattern matching
 import json
 import sys
 import numpy as np
-from pathlib import Path
+from io import BytesIO
+from typing import Optional
 
 try:
     from PIL import Image
@@ -49,11 +50,7 @@ class EntityDetector:
 
             # Load image
             if PIL_AVAILABLE:
-                img = Image.open(Path("/tmp/temp_screenshot.png"))
-                # Save temporarily
-                with open("/tmp/temp_screenshot.png", "wb") as f:
-                    f.write(image_bytes)
-                img = Image.open(Path("/tmp/temp_screenshot.png"))
+                img = Image.open(BytesIO(image_bytes))
             else:
                 raise ImportError("PIL required for entity detection")
 
@@ -109,7 +106,7 @@ class EntityDetector:
                 "patterns": [],
             }
 
-    def detect_player(self, img_array: np.ndarray) -> dict | None:
+    def detect_player(self, img_array: np.ndarray) -> Optional[dict]:
         """Detect player character (usually center, distinct color)"""
         try:
             height, width = img_array.shape[:2]

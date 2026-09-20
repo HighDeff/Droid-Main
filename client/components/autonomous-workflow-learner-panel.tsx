@@ -25,6 +25,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { audioSynthesizer } from "@/lib/audio-synthesizer";
+import { ensureAssistantSession } from "@/lib/assistant-session";
 
 export function AutonomousWorkflowLearnerPanel() {
   const [learnedWorkflows, setLearnedWorkflows] = useState<any[]>([]);
@@ -119,32 +120,84 @@ export function AutonomousWorkflowLearnerPanel() {
     }
   };
 
-  // Execute a learned workflow on PC via PyAutoGUI bridge
+  // Convert learned steps into a persisted draft; physical execution happens only after plan approval.
   const handleExecuteLearnedWorkflow = async (workflow: any) => {
     setExecutingWorkflowId(workflow.id);
     audioSynthesizer.playClickSound();
 
     try {
-      for (let i = 0; i < workflow.steps.length; i++) {
-        const step = workflow.steps[i];
-        await fetch("/api/pyautogui/bridge", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: step.action || "click",
-            targetPosition: { x: step.x || 960, y: step.y || 540 },
-            text: step.text,
-            key: step.key,
-            speed: 1.0,
-            driftPx: 5
-          })
-        });
-        await new Promise((r) => setTimeout(r, step.dwellMs || 500));
+      if (!Array.isArray(workflow.steps) || workflow.steps.length === 0) {
+        throw new Error("This workflow has no reviewed steps to replay");
       }
-      setLearningFeedback(`Successfully executed learned workflow "${workflow.name}" on PC.`);
-      audioSynthesizer.playTaskCompleteSound();
+      const sessionId = await ensureAssistantSession({
+        project: { name: "Learned workflow review" },
+      });
+
+      const supported = new Set([
+        "click", "double_click", "right_click", "type",
+        "clear_and_type", "key", "scroll", "wait",
+      ]);
+      const reviewedSteps = workflow.steps.flatMap((step: any, index: number) => {
+        const sourceAction = String(step.action || "").toLowerCase();
+        const action = sourceAction === "type_text"
+          ? "type"
+          : sourceAction === "press_key"
+            ? "key"
+            : sourceAction;
+        if (!supported.has(action)) return [];
+        return [{
+          id: String(step.id || `learned_step_${index + 1}`),
+          order: 0,
+          title: String(step.name || `Learned step ${index + 1}`),
+          description: `Review learned action: ${step.name || action}`,
+          action,
+          target: (() => {
+            const x = Number(step.x);
+            const y = Number(step.y);
+            return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
+          })(),
+          text: step.text,
+          key: step.key,
+          targetDevice: "desktop",
+          timing: "when_ready",
+          confidence: workflow.confidenceScore ?? 0.5,
+          status: "pending",
+        }];
+      }).map((step: any, index: number) => ({ ...step, order: index + 1 }));
+      if (reviewedSteps.length === 0) {
+        throw new Error("This learned workflow has no Assistant-compatible steps");
+      }
+
+      const draftResponse = await fetch("/api/assistant/plans", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          instructionText: `Review learned workflow ${workflow.name}`,
+        }),
+      });
+      const draft = await draftResponse.json();
+      if (!draftResponse.ok || !draft.success || typeof draft?.plan?.id !== "string") {
+        throw new Error(draft.error || "Could not create a learned-workflow draft");
+      }
+      const saveResponse = await fetch(
+        `/api/assistant/plans/${encodeURIComponent(draft.plan.id)}?sessionId=${encodeURIComponent(sessionId!)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ steps: reviewedSteps, timing: "when_ready" }),
+        },
+      );
+      const saved = await saveResponse.json();
+      if (!saveResponse.ok || !saved.success || !saved?.plan) {
+        throw new Error(saved.error || "Could not save the learned-workflow draft");
+      }
+      setLearningFeedback(
+        `Created draft plan "${saved.plan.title}" with ${reviewedSteps.length} learned step(s). Review and approve it in Automation before execution.`,
+      );
+      window.dispatchEvent(new CustomEvent("assistant-session-changed", { detail: { sessionId } }));
     } catch (err: any) {
-      setLearningFeedback(`Execution error: ${err.message}`);
+      setLearningFeedback(`Draft error: ${err.message}`);
     } finally {
       setExecutingWorkflowId(null);
     }
@@ -200,22 +253,71 @@ export function AutonomousWorkflowLearnerPanel() {
   // Execute assembled task on PC
   const handleExecuteAssembledTask = async (task: any) => {
     audioSynthesizer.playClickSound();
+    setLearningFeedback(null);
     try {
-      await fetch("/api/pyautogui/bridge", {
+      const action = String(task.action ?? "").toLowerCase();
+      if (!new Set(["click", "type", "wait"]).has(action)) {
+        throw new Error(`The exact "${action || "missing"}" action is not supported by the Assistant review runner`);
+      }
+      const x = Number(task.parameters?.x);
+      const y = Number(task.parameters?.y);
+      const hasTarget = Number.isFinite(x) && Number.isFinite(y);
+      const text = typeof task.parameters?.text === "string" ? task.parameters.text : "";
+      if (action === "type" && !text) throw new Error("The assembled typing task has no text to review");
+      const delayMs = Math.min(Math.max(Number(task.parameters?.delayMs) || 500, 0), 120_000);
+      const targetDescription = hasTarget ? ` at ${x},${y}` : " in the focused control";
+      const instructionText = action === "wait"
+        ? `wait ${delayMs} ms`
+        : action === "click"
+          ? `click${targetDescription}`
+          : `type ${JSON.stringify(text)}${targetDescription}`;
+      const sessionId = await ensureAssistantSession({
+        project: { name: "Assembled task review" },
+      });
+      const draftResponse = await fetch("/api/assistant/plans", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: task.action === "companion_command" ? "companion_command" : task.action === "launch" ? "launch_app" : task.action,
-          targetPosition: task.parameters?.x ? { x: task.parameters.x, y: task.parameters.y } : undefined,
-          text: task.parameters?.text,
-          key: task.parameters?.key,
-          companionCommand: task.parameters?.command,
-          launchApp: task.parameters?.appName
-        })
+          sessionId,
+          instructionText,
+        }),
       });
-      fetchLearnedData();
-    } catch (e) {
-      console.error(e);
+      const draft = await draftResponse.json().catch(() => null);
+      if (!draftResponse.ok || !draft?.plan?.id) {
+        throw new Error(draft?.error || "Could not create the assembled-task draft");
+      }
+      const exactStep = {
+        id: `assembled_${String(task.id ?? Date.now())}`,
+        order: 1,
+        title: String(task.name || "Assembled task"),
+        description: action === "wait" ? `Wait ${delayMs}ms` : `Review assembled ${action} action`,
+        action,
+        ...(hasTarget ? { target: { x, y } } : {}),
+        ...(action === "type" ? { text } : {}),
+        targetDevice: "desktop",
+        timing: "when_ready",
+        confidence: Number.isFinite(Number(task.confidence)) ? Number(task.confidence) : 0.5,
+        status: "pending",
+      };
+      const saveResponse = await fetch(
+        `/api/assistant/plans/${encodeURIComponent(draft.plan.id)}?sessionId=${encodeURIComponent(sessionId)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ steps: [exactStep], timing: "when_ready" }),
+        },
+      );
+      const saved = await saveResponse.json().catch(() => null);
+      if (!saveResponse.ok || !saved?.plan?.id) {
+        throw new Error(saved?.error || "Could not save the assembled-task draft");
+      }
+      setLearningFeedback(`Opening review for "${exactStep.title}". No device action has run.`);
+      window.dispatchEvent(new CustomEvent("assistant-session-changed", { detail: { sessionId } }));
+      window.location.assign(
+        `/automation?sessionId=${encodeURIComponent(sessionId)}&planId=${encodeURIComponent(saved.plan.id)}`,
+      );
+    } catch (err) {
+      setLearningFeedback(`Draft error: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -321,7 +423,7 @@ export function AutonomousWorkflowLearnerPanel() {
                         className="h-7 px-2.5 bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white font-bold text-[10px] gap-1 shadow-md shrink-0"
                       >
                         <Zap className="w-3 h-3 text-yellow-300" />
-                        {executingWorkflowId === wf.id ? "RUNNING..." : "RUN ON PC"}
+                        {executingWorkflowId === wf.id ? "PREPARING..." : "PREPARE DRAFT PLAN"}
                       </Button>
                     </div>
 
@@ -443,7 +545,7 @@ export function AutonomousWorkflowLearnerPanel() {
                         onClick={() => handleExecuteAssembledTask(t)}
                         className="h-6 px-2 text-[10px] bg-emerald-700 hover:bg-emerald-600 text-white font-bold gap-1 shrink-0"
                       >
-                        <Zap className="w-2.5 h-2.5 text-yellow-300" /> Run
+                        <Zap className="w-2.5 h-2.5 text-yellow-300" /> Review required
                       </Button>
                     </div>
                   ))}

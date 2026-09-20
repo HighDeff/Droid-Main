@@ -34,7 +34,8 @@ export interface EuclideanDriftMatch {
   templateName: string;
   selector?: string;
   expectedPosition: Point2D;
-  livePosition: Point2D;
+  livePosition: Point2D | null;
+  matched: boolean;
   euclideanDistancePx: number;
   driftVector: { deltaX: number; deltaY: number };
   correctionVector: { correctX: number; correctY: number };
@@ -111,24 +112,39 @@ export function matchLiveFeedWithTemplates(
       }
     }
 
-    // Otherwise find closest spatial element
+    // Otherwise accept only a nearby spatial candidate; a distant unrelated
+    // element must never be converted into an automation correction.
     if (!closestLive && liveDetections.length > 0) {
       for (const live of liveDetections) {
         const dist = calculateEuclideanDistance(tmpl.expectedPosition, live.currentPosition);
-        if (dist < minDistance) {
+        const maxCandidateDistance = Math.max((tmpl.tolerancePx ?? driftThresholdPx) * 3, 30);
+        if (dist <= maxCandidateDistance && dist < minDistance) {
           minDistance = dist;
           closestLive = live;
         }
       }
     }
 
-    // If no live detection found, simulate realistic physical drift
-    const livePos: Point2D = closestLive
-      ? closestLive.currentPosition
-      : {
-          x: tmpl.expectedPosition.x + (tmpl.role === "input" ? 14 : tmpl.role === "checkbox" ? 12 : 2),
-          y: tmpl.expectedPosition.y + (tmpl.role === "input" ? -8 : tmpl.role === "checkbox" ? 6 : 1),
-        };
+    if (!closestLive) {
+      matches.push({
+        templateId: tmpl.id,
+        templateName: tmpl.name,
+        selector: tmpl.selector,
+        expectedPosition: tmpl.expectedPosition,
+        livePosition: null,
+        matched: false,
+        euclideanDistancePx: 0,
+        driftVector: { deltaX: 0, deltaY: 0 },
+        correctionVector: { correctX: 0, correctY: 0 },
+        status: "red",
+        alignmentAccuracy: 0,
+        isDrifting: false,
+        notes: "No live detection matched this template; no correction was inferred.",
+      });
+      continue;
+    }
+
+    const livePos = closestLive.currentPosition;
 
     const dist = calculateEuclideanDistance(tmpl.expectedPosition, livePos);
     const deltaX = Math.round(livePos.x - tmpl.expectedPosition.x);
@@ -143,6 +159,7 @@ export function matchLiveFeedWithTemplates(
       selector: tmpl.selector,
       expectedPosition: tmpl.expectedPosition,
       livePosition: livePos,
+      matched: true,
       euclideanDistancePx: dist,
       driftVector: { deltaX, deltaY },
       correctionVector: { correctX: -deltaX, correctY: -deltaY },
@@ -155,12 +172,15 @@ export function matchLiveFeedWithTemplates(
     });
   }
 
-  const totalDist = matches.reduce((acc, m) => acc + m.euclideanDistancePx, 0);
-  const avgDist = matches.length > 0 ? Math.round((totalDist / matches.length) * 10) / 10 : 0;
-  const maxDist = matches.reduce((max, m) => Math.max(max, m.euclideanDistancePx), 0);
+  const verifiedMatches = matches.filter((match) => match.matched);
+  const totalDist = verifiedMatches.reduce((acc, m) => acc + m.euclideanDistancePx, 0);
+  const avgDist = verifiedMatches.length > 0 ? Math.round((totalDist / verifiedMatches.length) * 10) / 10 : 0;
+  const maxDist = verifiedMatches.reduce((max, m) => Math.max(max, m.euclideanDistancePx), 0);
   const totalAcc = matches.reduce((acc, m) => acc + m.alignmentAccuracy, 0);
-  const overallAccuracy = matches.length > 0 ? Math.round((totalAcc / matches.length) * 10) / 10 : 100;
-  const overallStatus = getAlignmentStatus(avgDist);
+  const overallAccuracy = matches.length > 0 ? Math.round((totalAcc / matches.length) * 10) / 10 : 0;
+  const overallStatus = verifiedMatches.length > 0 && verifiedMatches.length === matches.length
+    ? getAlignmentStatus(avgDist)
+    : "red";
 
   return {
     timestamp: Date.now(),
@@ -170,7 +190,9 @@ export function matchLiveFeedWithTemplates(
     status: overallStatus,
     matches,
     driftCorrectionApplied: false,
-    summary: `Euclidean screen matching verified ${matches.length} template landmarks: avg drift Δ ${avgDist}px (${overallAccuracy}% accuracy). Status: ${overallStatus.toUpperCase()}.`,
+    summary: verifiedMatches.length === matches.length && matches.length > 0
+      ? `Euclidean screen matching verified ${matches.length} template landmarks: avg drift Δ ${avgDist}px (${overallAccuracy}% accuracy). Status: ${overallStatus.toUpperCase()}.`
+      : `Verified ${verifiedMatches.length} of ${matches.length} template landmarks; unmatched targets were left uncorrected.`,
   };
 }
 
@@ -187,11 +209,12 @@ export function applyEuclideanCorrectionsToSteps<T extends { x: number; y: numbe
     // Find matching template by selector or coordinate proximity
     const match = matchingResult.matches.find(
       (m) =>
-        (step.selector && m.selector === step.selector) ||
-        calculateEuclideanDistance(m.expectedPosition, { x: step.originalX ?? step.x, y: step.originalY ?? step.y }) < 15
+        m.matched &&
+        ((step.selector && m.selector === step.selector) ||
+          calculateEuclideanDistance(m.expectedPosition, { x: step.originalX ?? step.x, y: step.originalY ?? step.y }) < 15)
     );
 
-    if (match && match.isDrifting) {
+    if (match?.isDrifting) {
       correctedCount++;
       const baseX = step.originalX ?? step.x;
       const baseY = step.originalY ?? step.y;

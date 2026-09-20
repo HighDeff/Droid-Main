@@ -25,6 +25,33 @@ export interface CaptureCommandRunner {
 
 export const adbDeviceIdPattern =
   /^(?:[A-Za-z0-9._-]+|\d{1,3}(?:\.\d{1,3}){3}:\d{1,5})$/;
+export const AUTOMATION_BOUNDS = { width: 16_384, height: 16_384 } as const;
+
+export const POSITIONAL_AUTOMATION_ACTIONS = new Set([
+  "click", "tap", "move", "double_click", "right_click", "drag", "drag_and_drop", "activate_window",
+  "focus_window", "scroll",
+]);
+export const OPTIONAL_POSITIONAL_AUTOMATION_ACTIONS = new Set([
+  "clear_and_type", "type", "type_text",
+]);
+export const ALLOWED_AUTOMATION_ACTIONS = new Set([
+  ...POSITIONAL_AUTOMATION_ACTIONS,
+  ...OPTIONAL_POSITIONAL_AUTOMATION_ACTIONS,
+  "key", "press_key", "hotkey", "wait", "stream_mouse_route", "play_route",
+  "replay_route", "relative_action", "relative_click", "relative_type",
+]);
+export const REPLAY_POSITIONAL_ACTIONS = new Set([
+  "click", "tap", "move", "double_click", "right_click", "clear_and_type",
+  "type", "type_text", "drag", "drag_and_drop", "scroll",
+]);
+export const REPLAY_ALLOWED_ACTIONS = new Set([
+  ...REPLAY_POSITIONAL_ACTIONS,
+  "key", "press_key", "hotkey", "wait", "stream_mouse_route",
+]);
+export const LEARNABLE_AUTOMATION_ACTIONS = new Set([
+  ...REPLAY_POSITIONAL_ACTIONS,
+  "key", "press_key", "hotkey", "wait",
+]);
 
 export function validateDeviceId(deviceId: string): string {
   if (!adbDeviceIdPattern.test(deviceId) || deviceId.length > 128) {
@@ -118,6 +145,22 @@ export function validateKey(key: string): string {
     throw new Error(`Key "${key}" is not in the safe keyboard allowlist`);
   }
   return normalized;
+}
+
+export function validateHotkey(value: string): string[] {
+  const keys = value.split("+").map((key) => key.trim().toLowerCase()).filter(Boolean);
+  const modifiers = new Set(["ctrl", "alt", "shift", "command"]);
+  if (
+    keys.length === 0 ||
+    keys.length > 5 ||
+    !keys.some((key) => !modifiers.has(key)) ||
+    keys.some(
+      (key) => !modifiers.has(key) && !allowedKeys.has(key) && !/^[a-z0-9]$/.test(key),
+    )
+  ) {
+    throw new Error("Hotkey contains an unsupported key");
+  }
+  return keys;
 }
 
 export function validateText(text: string): string {

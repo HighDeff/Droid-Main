@@ -132,10 +132,10 @@ export async function verifyStepAccuracy(params: {
 
   if (!ai || !imageData) {
     return {
-      verified: true,
-      accuracyScore: 0.88,
-      status: "verified",
-      analysis: "Heuristic verification passed (Gemini API key not configured).",
+      verified: false,
+      accuracyScore: 0,
+      status: "missed",
+      analysis: "Visual verification is unavailable because no configured vision provider analyzed the post-action frame.",
       goalFinished: false,
     };
   }
@@ -205,10 +205,10 @@ Return a STRICT JSON response only (no markdown, no backticks, just valid JSON):
   } catch (err) {
     centralLogHub.addLog("AI-Verifier", "WARN", `AI Verification fallback: ${err instanceof Error ? err.message : String(err)}`);
     return {
-      verified: true,
-      accuracyScore: 0.85,
-      status: "verified",
-      analysis: `Heuristic fallback verification: ${err instanceof Error ? err.message : String(err)}`,
+      verified: false,
+      accuracyScore: 0,
+      status: "missed",
+      analysis: `Visual verification failed: ${err instanceof Error ? err.message : String(err)}`,
       goalFinished: false,
     };
   }
@@ -423,62 +423,10 @@ export async function detectScreenElementsAndSteps(params: {
   const ai = getGenAIClient();
 
   if (!ai || !imageData) {
-    // Fallback heuristic detection if API key not available or no image
-    const fallbackElements: DetectedElement[] = [
-      {
-        id: `elem_${Date.now()}_1`,
-        name: "Primary Action Button",
-        type: "button",
-        x: Math.round(screenWidth * 0.5),
-        y: Math.round(screenHeight * 0.65),
-        width: 140,
-        height: 44,
-        suggestedAction: "click",
-        confidence: 0.9,
-        description: "Standard primary action target located near center-bottom canvas",
-      },
-      {
-        id: `elem_${Date.now()}_2`,
-        name: "Search or Input Field",
-        type: "input",
-        x: Math.round(screenWidth * 0.5),
-        y: Math.round(screenHeight * 0.2),
-        width: 320,
-        height: 40,
-        suggestedAction: "clear_and_type",
-        suggestedTextPayload: "search query",
-        confidence: 0.88,
-        description: "Text input bar located in the upper header region",
-      },
-      {
-        id: `elem_${Date.now()}_3`,
-        name: "Navigation Tab / Link",
-        type: "tab",
-        x: Math.round(screenWidth * 0.25),
-        y: Math.round(screenHeight * 0.15),
-        width: 100,
-        height: 36,
-        suggestedAction: "click",
-        confidence: 0.85,
-        description: "Navigation route switch tab",
-      },
-    ];
-
     return {
-      elements: fallbackElements,
-      suggestedSteps: fallbackElements.map((el, idx) => ({
-        id: `auto_step_${Date.now()}_${idx + 1}`,
-        stepNumber: idx + 1,
-        name: `Auto: ${el.name}`,
-        action: el.suggestedAction,
-        x: el.x,
-        y: el.y,
-        text: el.suggestedTextPayload,
-        delayMs: 400,
-        description: el.description,
-      })),
-      summary: "Identified 3 interactive UI targets using geometric screen heuristics.",
-      primaryActionTarget: { x: fallbackElements[0].x, y: fallbackElements[0].y, label: fallbackElements[0].name },
+      elements: [],
+      suggestedSteps: [],
+      summary: "Screen detection unavailable; no UI targets were inferred.",
     };
   }
 
@@ -568,37 +516,10 @@ Return a STRICT JSON response ONLY without markdown:
       `Screen detection fallback: ${err instanceof Error ? err.message : String(err)}`
     );
 
-    const fallbackElements: DetectedElement[] = [
-      {
-        id: `elem_${Date.now()}_1`,
-        name: "Detected Interactive Center",
-        type: "button",
-        x: Math.round(screenWidth * 0.5),
-        y: Math.round(screenHeight * 0.5),
-        width: 120,
-        height: 40,
-        suggestedAction: "click",
-        confidence: 0.8,
-        description: "Center interactive target",
-      },
-    ];
-
     return {
-      elements: fallbackElements,
-      suggestedSteps: [
-        {
-          id: `step_${Date.now()}_1`,
-          stepNumber: 1,
-          name: "Click Detected Target",
-          action: "click",
-          x: fallbackElements[0].x,
-          y: fallbackElements[0].y,
-          delayMs: 500,
-          description: "Click primary target",
-        },
-      ],
-      summary: "AI vision fallback generated 1 target.",
-      primaryActionTarget: { x: fallbackElements[0].x, y: fallbackElements[0].y, label: "Center Target" },
+      elements: [],
+      suggestedSteps: [],
+      summary: `Screen detection failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
@@ -613,18 +534,14 @@ export async function compareScreensForMatch(params: {
   const ai = getGenAIClient();
 
   if (!ai || !currentScreen || !expectedScreen) {
-    // If either image is missing or AI is unavailable, use heuristic comparison
+    const matched = Boolean(currentScreen && expectedScreen && cleanBase64(currentScreen).data === cleanBase64(expectedScreen).data);
     return {
-      matched: true,
-      similarityScore: 0.88,
-      reason: "Heuristic screen match approved: visual dimensions and viewport structure align.",
-      identifiedElements: ["Header Nav", "Target Button", "Active Canvas"],
-      suggestedNextStep: {
-        action: "click",
-        x: 960,
-        y: 540,
-        name: `Auto-Act on ${expectedStepLabel}`,
-      },
+      matched,
+      similarityScore: matched ? 1 : 0,
+      reason: matched
+        ? "The supplied image bytes are identical; semantic matching was not available."
+        : "A configured vision provider is required to approve non-identical screens.",
+      identifiedElements: [],
     };
   }
 
@@ -699,16 +616,10 @@ Return a STRICT JSON response ONLY:
     );
 
     return {
-      matched: true,
-      similarityScore: 0.85,
-      reason: "Visual comparison fallback: Screen state verified compatible with pending step.",
-      identifiedElements: ["Target UI Region"],
-      suggestedNextStep: {
-        action: "click",
-        x: 960,
-        y: 540,
-        name: `Auto-Act on ${expectedStepLabel}`,
-      },
+      matched: false,
+      similarityScore: 0,
+      reason: `Visual comparison failed: ${err instanceof Error ? err.message : String(err)}`,
+      identifiedElements: [],
     };
   }
 }
@@ -762,21 +673,23 @@ export async function detectVisualErrorsAndDifferenceMapping(params: {
   const ai = getGenAIClient();
 
   if (!ai || !expectedImage || !responseImage) {
+    const identical = Boolean(expectedImage && responseImage && cleanBase64(expectedImage).data === cleanBase64(responseImage).data);
     return {
-      similarityScore: 0.89,
-      driftDetected: false,
+      similarityScore: identical ? 1 : 0,
+      driftDetected: !identical,
       driftVector: { deltaX: 0, deltaY: 0 },
       originalCoordinates: targetCoords,
       autoPositionedCoordinates: targetCoords,
       differences: [
         {
-          description: "Visual verification completed with minimal delta.",
+          description: identical ? "Frames are byte-identical." : "Frames differ, but semantic drift could not be calculated.",
           area: "Target Area",
-          severity: "low",
+          severity: identical ? "low" : "high",
         },
       ],
-      aiInterventionRequired: false,
-      recommendedAction: "proceed",
+      aiInterventionRequired: !identical,
+      interventionReason: identical ? undefined : "Vision is required to map the changed screen safely.",
+      recommendedAction: identical ? "proceed" : "stalled_abort",
     };
   }
 
@@ -868,14 +781,15 @@ Return a STRICT JSON response ONLY:
     );
 
     return {
-      similarityScore: 0.88,
-      driftDetected: false,
+      similarityScore: 0,
+      driftDetected: true,
       driftVector: { deltaX: 0, deltaY: 0 },
       originalCoordinates: targetCoords,
       autoPositionedCoordinates: targetCoords,
-      differences: [{ description: "Visual diff evaluation completed.", area: "Screen", severity: "low" }],
-      aiInterventionRequired: false,
-      recommendedAction: "proceed",
+      differences: [{ description: `Visual diff failed: ${err instanceof Error ? err.message : String(err)}`, area: "Screen", severity: "high" }],
+      aiInterventionRequired: true,
+      interventionReason: "The visual diff provider failed; execution cannot safely infer the next state.",
+      recommendedAction: "stalled_abort",
     };
   }
 }

@@ -29,7 +29,7 @@ export function ExecutionControlPanel({ plan }: { plan: AssistantPlan }) {
     const timer = window.setInterval(async () => {
       try {
         const response = await request<{ execution: AssistantExecution }>(
-          `/api/assistant/execution/${execution.id}`,
+          `/api/assistant/execution/${execution.id}?sessionId=${encodeURIComponent(plan.sessionId)}`,
         );
         setExecution(response.execution);
       } catch (cause) {
@@ -54,6 +54,7 @@ export function ExecutionControlPanel({ plan }: { plan: AssistantPlan }) {
             planId: plan.id,
             sessionId: plan.sessionId,
             confirmation: confirmed,
+            executionId: execution?.status === "paused" ? execution.id : undefined,
           }),
         },
       );
@@ -71,7 +72,7 @@ export function ExecutionControlPanel({ plan }: { plan: AssistantPlan }) {
     try {
       const response = await request<{ execution: AssistantExecution }>(
         `/api/assistant/execution/${execution.id}/${name}`,
-        { method: "POST" },
+        { method: "POST", body: JSON.stringify({ sessionId: plan.sessionId }) },
       );
       setExecution(response.execution);
     } catch (cause) {
@@ -89,7 +90,7 @@ export function ExecutionControlPanel({ plan }: { plan: AssistantPlan }) {
         `/api/assistant/execution/${execution.id}/approve-alternate`,
         {
           method: "POST",
-          body: JSON.stringify({ confirmation: true }),
+          body: JSON.stringify({ confirmation: true, sessionId: plan.sessionId }),
         },
       );
       setExecution(response.execution);
@@ -108,7 +109,7 @@ export function ExecutionControlPanel({ plan }: { plan: AssistantPlan }) {
         `/api/assistant/execution/${execution.id}/approve`,
         {
           method: "POST",
-          body: JSON.stringify({ confirmation: true }),
+          body: JSON.stringify({ confirmation: true, sessionId: plan.sessionId }),
         },
       );
       setExecution(response.execution);
@@ -266,6 +267,18 @@ export function ExecutionControlPanel({ plan }: { plan: AssistantPlan }) {
               </div>
             </div>
           )}
+          {execution.nextSuggestions?.length ? (
+            <div className="mt-3 rounded-lg border border-violet-300/10 bg-violet-300/5 p-3">
+              <p className="text-xs font-medium text-violet-200">
+                Suggested next steps
+              </p>
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-slate-400">
+                {execution.nextSuggestions.map((suggestion, index) => (
+                  <li key={`${index}-${suggestion}`}>{suggestion}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </>
       )}
       {error && <p className="mt-2 text-xs text-rose-300">{error}</p>}

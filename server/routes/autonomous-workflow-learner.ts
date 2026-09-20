@@ -1,5 +1,12 @@
 import { RequestHandler } from "express";
 import { GoogleGenAI } from "@google/genai";
+import { DurableStore } from "../durable-store";
+import {
+  LEARNABLE_AUTOMATION_ACTIONS,
+  REPLAY_POSITIONAL_ACTIONS,
+  validateHotkey,
+  validateKey,
+} from "../automation-adapters";
 
 interface WorkflowAction {
   id: string;
@@ -11,6 +18,7 @@ interface WorkflowAction {
   key?: string;
   timestamp?: number;
   dwellMs?: number;
+  dragEndPosition?: { x: number; y: number };
 }
 
 interface LearnedWorkflow {
@@ -25,42 +33,73 @@ interface LearnedWorkflow {
   executionCount: number;
 }
 
-// In-memory learned workflows store
-const learnedWorkflowsStore: LearnedWorkflow[] = [
-  {
-    id: "lw_auto_search_01",
-    name: "Autonomous Web Search & Query",
-    description: "Detected repeating pattern: Click address/search input, type query with natural human drift, press Enter",
-    confidenceScore: 0.96,
-    triggerCondition: "User navigates to browser search bar",
-    patternType: "navigation_sequence",
-    steps: [
-      { id: "s1", action: "click", name: "Focus Search Input", x: 960, y: 82, dwellMs: 400 },
-      { id: "s2", action: "type", name: "Type Search Query", text: "latest AI vision updates", dwellMs: 800 },
-      { id: "s3", action: "key", name: "Submit Enter", key: "enter", dwellMs: 500 }
-    ],
-    createdAt: Date.now() - 3600000,
-    executionCount: 7
-  },
-  {
-    id: "lw_calculator_equation_02",
-    name: "Live Calculator Expression Solver",
-    description: "Detected repeated numeric typing, operand selection, and result capture",
-    confidenceScore: 0.94,
-    triggerCondition: "Math question or calculator window detected",
-    patternType: "form_filler",
-    steps: [
-      { id: "c1", action: "click", name: "Focus Calculator Window", x: 540, y: 320, dwellMs: 300 },
-      { id: "c2", action: "type", name: "Input Equation", text: "125 * 8.5", dwellMs: 600 },
-      { id: "c3", action: "key", name: "Calculate", key: "enter", dwellMs: 400 }
-    ],
-    createdAt: Date.now() - 7200000,
-    executionCount: 12
-  }
-];
+const workflowStore = new DurableStore();
+const MAX_LEARNED_WORKFLOWS = 200;
+const readLearnedWorkflows = () =>
+  workflowStore
+    .readCollection<LearnedWorkflow>("learned-workflows")
+    .slice(0, MAX_LEARNED_WORKFLOWS);
+const saveLearnedWorkflows = (workflows: LearnedWorkflow[]) => {
+  workflows.splice(MAX_LEARNED_WORKFLOWS);
+  workflowStore.writeCollection("learned-workflows", workflows);
+};
+let workflowMutationQueue: Promise<void> = Promise.resolve();
+const withWorkflowLock = <T>(operation: () => Promise<T> | T): Promise<T> => {
+  const result = workflowMutationQueue.then(operation, operation);
+  workflowMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
+};
 
 const apiKey = process.env.GEMINI_API_KEY || "";
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+
+function normalizeLearnedSteps(rawSteps: unknown[]): WorkflowAction[] {
+  return rawSteps.flatMap((raw, index) => {
+    if (!raw || typeof raw !== "object") return [];
+    const source = raw as Record<string, any>;
+    if (source.success === false) return [];
+    const action = String(source.action || source.actionType || "").toLowerCase();
+    if (!LEARNABLE_AUTOMATION_ACTIONS.has(action)) return [];
+
+    const x = Number(source.x ?? source.coordinates?.x ?? source.targetPosition?.x);
+    const y = Number(source.y ?? source.coordinates?.y ?? source.targetPosition?.y);
+    if (REPLAY_POSITIONAL_ACTIONS.has(action) && (!Number.isFinite(x) || !Number.isFinite(y))) {
+      return [];
+    }
+
+    const endX = Number(source.toX ?? source.dragEndPosition?.x);
+    const endY = Number(source.toY ?? source.dragEndPosition?.y);
+    if (["drag", "drag_and_drop"].includes(action) && (!Number.isFinite(endX) || !Number.isFinite(endY))) {
+      return [];
+    }
+
+    const rawText = String(source.text ?? source.textPayload ?? "");
+    const rawKey = String(source.key ?? source.keyPayload ?? "");
+    if (["type", "type_text", "clear_and_type", "relative_type"].includes(action) && !rawText) {
+      return [];
+    }
+    let key = rawKey;
+    try {
+      if (["key", "press_key"].includes(action)) key = validateKey(rawKey);
+      if (action === "hotkey") key = validateHotkey(rawKey || rawText).join("+");
+    } catch {
+      return [];
+    }
+
+    return [{
+      id: String(source.id || `step_${index + 1}`),
+      action,
+      name: String(source.name || `Action #${index + 1}`),
+      ...(Number.isFinite(x) && Number.isFinite(y) ? { x, y } : {}),
+      text: String(source.text ?? source.textPayload ?? ""),
+      key,
+      dwellMs: Number.isFinite(Number(source.dwellMs)) ? Number(source.dwellMs) : 500,
+      ...(["drag", "drag_and_drop"].includes(action)
+        ? { dragEndPosition: { x: endX, y: endY } }
+        : {}),
+    }];
+  });
+}
 
 /**
  * Detect similar actions from workflow history, save them, and create new automatic workflows
@@ -68,11 +107,14 @@ const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 export const handleLearnWorkflows: RequestHandler = async (req, res) => {
   try {
     const { historySteps = [], mouseTrails = [], liveContext = "" } = req.body;
+    const inputHistorySteps = Array.isArray(historySteps) ? historySteps : [];
+    const inputMouseTrails = Array.isArray(mouseTrails) ? mouseTrails : [];
+    const existingWorkflows = readLearnedWorkflows();
 
-    if (!historySteps.length && !mouseTrails.length) {
+    if (!inputHistorySteps.length && !inputMouseTrails.length) {
       return res.json({
         success: true,
-        learnedWorkflows: learnedWorkflowsStore,
+        allLearnedWorkflows: existingWorkflows,
         message: "No new trace data provided; returned existing learned workflow library."
       });
     }
@@ -83,7 +125,7 @@ export const handleLearnWorkflows: RequestHandler = async (req, res) => {
       try {
         const prompt = `You are an Autonomous AI Workflow Learning Engine.
 Analyze the following recorded user actions and mouse trails:
-History steps: ${JSON.stringify(historySteps.slice(0, 25))}
+History steps: ${JSON.stringify(inputHistorySteps.slice(0, 25))}
 Live context: ${liveContext}
 
 Task:
@@ -99,7 +141,7 @@ Return ONLY a JSON object:
   "patternType": "navigation_sequence",
   "triggerCondition": "Condition under which this workflow should auto-run",
   "steps": [
-    { "action": "click|type|key|hover", "name": "Step description", "x": 500, "y": 300, "text": "", "key": "" }
+    { "action": "click|type|key|move", "name": "Step description", "x": 500, "y": 300, "text": "", "key": "" }
   ]
 }`;
 
@@ -113,7 +155,10 @@ Return ONLY a JSON object:
         const raw = response.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
         const parsed = JSON.parse(raw);
 
-        if (parsed.name && Array.isArray(parsed.steps) && parsed.steps.length > 0) {
+        const normalizedSteps = Array.isArray(parsed.steps)
+          ? normalizeLearnedSteps(parsed.steps)
+          : [];
+        if (parsed.name && normalizedSteps.length > 0) {
           synthesizedWorkflow = {
             id: `lw_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             name: parsed.name,
@@ -121,20 +166,10 @@ Return ONLY a JSON object:
             confidenceScore: parsed.confidenceScore || 0.91,
             triggerCondition: parsed.triggerCondition || "Manual or contextual auto-trigger",
             patternType: parsed.patternType || "custom",
-            steps: parsed.steps.map((s: any, idx: number) => ({
-              id: `step_${idx + 1}`,
-              action: s.action || "click",
-              name: s.name || `Action #${idx + 1}`,
-              x: s.x ?? 960,
-              y: s.y ?? 540,
-              text: s.text || "",
-              key: s.key || "",
-              dwellMs: 400
-            })),
+            steps: normalizedSteps,
             createdAt: Date.now(),
             executionCount: 0
           };
-          learnedWorkflowsStore.unshift(synthesizedWorkflow);
         }
       } catch (geminiErr) {
         console.warn("Gemini pattern learning error, falling back to heuristic clustering:", geminiErr);
@@ -142,29 +177,29 @@ Return ONLY a JSON object:
     }
 
     // Heuristic fallback if Gemini not available or failed
-    if (!synthesizedWorkflow && historySteps.length >= 2) {
+    const successfulHistorySteps = normalizeLearnedSteps(inputHistorySteps);
+    if (!synthesizedWorkflow && successfulHistorySteps.length >= 2) {
       synthesizedWorkflow = {
         id: `lw_heur_${Date.now()}`,
-        name: `Auto-Learned Action Sequence (${historySteps.length} steps)`,
-        description: `Pattern assembled by observing ${historySteps.length} sequential user actions across screen coordinates`,
+        name: `Auto-Learned Action Sequence (${successfulHistorySteps.length} steps)`,
+        description: `Pattern assembled from ${successfulHistorySteps.length} successful, complete user actions`,
         confidenceScore: 0.88,
         triggerCondition: "Recorded UI interaction sequence replay",
         patternType: "custom",
-        steps: historySteps.map((s: any, idx: number) => ({
-          id: `step_${idx + 1}`,
-          action: s.action || "click",
-          name: s.name || `Step #${idx + 1}`,
-          x: s.x ?? 960,
-          y: s.y ?? 540,
-          text: s.text || s.textPayload || "",
-          key: s.key || s.keyPayload || "",
-          dwellMs: s.dwellMs || 500
-        })),
+        steps: successfulHistorySteps,
         createdAt: Date.now(),
         executionCount: 0
       };
-      learnedWorkflowsStore.unshift(synthesizedWorkflow);
     }
+
+    const learnedWorkflowsStore = await withWorkflowLock(() => {
+      const current = readLearnedWorkflows();
+      if (synthesizedWorkflow) {
+        current.unshift(synthesizedWorkflow);
+        saveLearnedWorkflows(current);
+      }
+      return current;
+    });
 
     return res.json({
       success: true,
@@ -185,7 +220,7 @@ Return ONLY a JSON object:
 export const handleGetLearnedWorkflows: RequestHandler = async (_req, res) => {
   res.json({
     success: true,
-    learnedWorkflows: learnedWorkflowsStore
+    learnedWorkflows: readLearnedWorkflows()
   });
 };
 
@@ -193,11 +228,22 @@ export const handleGetLearnedWorkflows: RequestHandler = async (_req, res) => {
  * Delete a learned workflow
  */
 export const handleDeleteLearnedWorkflow: RequestHandler = async (req, res) => {
-  const { id } = req.params;
-  const idx = learnedWorkflowsStore.findIndex((w) => w.id === id);
-  if (idx !== -1) {
-    learnedWorkflowsStore.splice(idx, 1);
-    return res.json({ success: true, message: `Learned workflow ${id} deleted.` });
-  }
-  return res.status(404).json({ success: false, error: "Workflow not found." });
+  return withWorkflowLock(async () => {
+    try {
+      const { id } = req.params;
+      const learnedWorkflowsStore = readLearnedWorkflows();
+      const idx = learnedWorkflowsStore.findIndex((w) => w.id === id);
+      if (idx !== -1) {
+        learnedWorkflowsStore.splice(idx, 1);
+        saveLearnedWorkflows(learnedWorkflowsStore);
+        return res.json({ success: true, message: `Learned workflow ${id} deleted.` });
+      }
+      return res.status(404).json({ success: false, error: "Workflow not found." });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 };

@@ -17,9 +17,14 @@ interface SourceResponse {
   sources?: CaptureSource[];
   source?: CaptureSource;
   error?: string;
+  capture?: { imageData?: string; timestamp?: number };
 }
 
-export function CaptureSourcePanel() {
+export function CaptureSourcePanel({
+  onCaptureFrame,
+}: {
+  onCaptureFrame?: (imageData: string) => void;
+} = {}) {
   const [sources, setSources] = useState<CaptureSource[]>([]);
   const [selectedId, setSelectedId] = useState("desktop");
   const [loading, setLoading] = useState(true);
@@ -64,6 +69,9 @@ export function CaptureSourcePanel() {
       const data = (await response.json()) as SourceResponse;
       if (!response.ok || !data.success)
         throw new Error(data.error || `Unable to ${action} source`);
+      if (data.capture?.imageData?.startsWith("data:image/")) {
+        onCaptureFrame?.(data.capture.imageData);
+      }
       await loadSources();
     } catch (cause) {
       setError(

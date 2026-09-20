@@ -170,6 +170,7 @@ export function AssistantWorkspace({
   const [calibrationBanner, setCalibrationBanner] = useState<string | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [isBridgePaused, setIsBridgePaused] = useState<boolean>(false);
+  const [debuggerScreenshot, setDebuggerScreenshot] = useState<string>();
 
   // Bridge Verification Utility: Sends a dummy ping command to PyAutoGUI Python Bridge
   const handleBridgePing = async () => {
@@ -298,7 +299,7 @@ export function AssistantWorkspace({
         steps,
         thresholdPx: driftThreshold,
       });
-      if (res.calibratedSteps) {
+      if (res.success) {
         setSteps(res.calibratedSteps);
         saveUnifiedSequence(res.calibratedSteps);
         window.dispatchEvent(
@@ -1051,6 +1052,7 @@ export function AssistantWorkspace({
                       initialSteps={steps}
                       driftThresholdPx={driftThreshold}
                       onStepSelect={(step) => setSelectedStepId(step.id)}
+                      screenshotUrl={debuggerScreenshot}
                     />
                   </div>
                 )}
@@ -1149,7 +1151,7 @@ export function AssistantWorkspace({
                 </div>
                 <InstructionPlanningPanel />
                 <div className="mt-6 space-y-5">
-                  <CaptureSourcePanel />
+                  <CaptureSourcePanel onCaptureFrame={setDebuggerScreenshot} />
                   <div>
                     <div className="mb-2 flex items-center justify-between">
                       <p className="text-xs font-medium text-slate-300">

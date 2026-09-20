@@ -18,7 +18,14 @@ export type PlanApprovalState =
   | "needs_clarification"
   | "approved"
   | "rejected";
-export type PlanStepStatus = "proposed" | "edited" | "approved";
+export type PlanStepStatus =
+  | "pending"
+  | "proposed"
+  | "edited"
+  | "approved"
+  | "in_progress"
+  | "completed"
+  | "failed";
 export type PlanRiskLevel = "low" | "medium" | "high";
 export type TimingHint = "now" | "soon" | "scheduled" | "when_ready";
 
@@ -39,6 +46,11 @@ export interface WaitConditionBase {
   pollIntervalMs: number;
   confidenceThreshold: number;
   approved: boolean;
+  sessionId?: string;
+  value?: string;
+  status?: "pending" | "satisfied" | "failed" | "timed_out";
+  createdAt?: string;
+  satisfiedAt?: string;
 }
 
 export interface VisibleTextWaitCondition extends WaitConditionBase {
@@ -90,11 +102,12 @@ export interface WaitConditionStatusEvent {
   id: string;
   conditionId: string;
   sessionId: string;
-  status: WaitConditionStatus;
-  message: string;
+  status: WaitConditionStatus | "satisfied" | "failed";
+  message?: string;
   suggestion?: string;
   confidence?: number;
   timestamp: string;
+  detail?: string;
 }
 
 export type AllowlistedActionType =
@@ -197,10 +210,10 @@ export interface ExecutionEvidence {
   stepId: string;
   attempt: number;
   capturedAt: string;
-  capture?: CapturedFrameReference;
+  capture?: any;
   analysis?: FrameAnalysis;
   verification: {
-    status: "passed" | "failed" | "uncertain";
+    status: string;
     reason: string;
     confidence?: number;
   };
@@ -209,7 +222,7 @@ export interface ExecutionEvidence {
 export interface ExecutionTimelineEvent {
   id: string;
   timestamp: string;
-  status: ExecutionEventStatus;
+  status?: ExecutionEventStatus;
   message: string;
   stepId?: string;
   result?: unknown;
@@ -229,19 +242,24 @@ export interface AssistantExecution {
   sessionId: string;
   status: ExecutionStatus;
   currentStep: number;
+  currentStepIndex?: number;
   totalSteps: number;
   startedAt?: string;
   completedAt?: string;
   error?: string;
-  timeline: ExecutionTimelineEvent[];
-  results: ActionExecutionResult[];
-  evidence: ExecutionEvidence[];
+  timeline?: ExecutionTimelineEvent[];
+  results?: ActionExecutionResult[];
+  evidence?: ExecutionEvidence[];
   pendingApproval?: {
-    stepId: string;
-    reason: string;
+    stepId?: string;
+    reason?: string;
     alternateStepId?: string;
     retryStep?: boolean;
+    alternateAction?: Record<string, unknown>;
+    [key: string]: any;
   };
+  logs?: string[];
+  nextSuggestions?: string[];
 }
 
 export interface AssistantProject {
@@ -359,6 +377,7 @@ export interface FrameAnalysis {
   regionsOfInterest: RegionOfInterest[];
   notes: string[];
   analyzedAt: string;
+  timestamp?: string;
 }
 
 export interface UserInstruction {
@@ -389,13 +408,19 @@ export interface PlannedStep {
   id: string;
   order: number;
   title: string;
-  description: string;
+  description?: string;
   status: PlanStepStatus;
   timing: TimingHint;
   confidence: number;
-  prerequisites: string[];
-  risks: string[];
-  action?: AllowlistedAction;
+  prerequisites?: string[];
+  risks?: string[];
+  action?: any;
+  target?: { x: number; y: number };
+  selector?: string;
+  text?: string;
+  key?: string;
+  targetDevice?: "desktop" | "android";
+  deviceId?: string;
   adaptive?: AdaptiveExecutionPolicy;
   waitConditions?: WaitCondition[];
 }
@@ -410,16 +435,19 @@ export interface PlanRisk {
 export interface AssistantPlan {
   id: string;
   sessionId: string;
-  instruction: UserInstruction;
-  sourceCaptureIds: string[];
-  sourceNoteIds: string[];
-  clarifications: InstructionClarification[];
+  title?: string;
+  goal?: string;
+  status?: "draft" | "approved" | "executing" | "completed" | "failed";
+  instruction?: UserInstruction | string;
+  sourceCaptureIds?: string[];
+  sourceNoteIds?: string[];
+  clarifications?: any[];
   steps: PlannedStep[];
-  prerequisites: PlanPrerequisite[];
-  risks: PlanRisk[];
-  timing: TimingHint;
-  confidence: number;
-  approvalState: PlanApprovalState;
+  prerequisites?: any[];
+  risks?: any[];
+  timing?: TimingHint;
+  confidence?: number;
+  approvalState?: PlanApprovalState | "pending";
   createdAt: string;
   updatedAt: string;
   approvedAt?: string;
@@ -463,7 +491,12 @@ export interface SavedState {
   createdAt: string;
 }
 
-export type WorkflowStatus = "active" | "paused" | "completed" | "archived";
+export type WorkflowStatus =
+  | "ready"
+  | "active"
+  | "paused"
+  | "completed"
+  | "archived";
 export type WorkflowResumeMode = "manual" | "scheduled";
 
 export interface WorkflowSchedule {
@@ -506,7 +539,10 @@ export interface AssistantWorkflow {
   repeatCount: number;
   schedule: WorkflowSchedule;
   pauseResumePolicy: PauseResumePolicy;
-  goals: WorkflowGoalProgress[];
+  goals: any[];
+  steps?: PlannedStep[];
+  executionCount?: number;
+  successRate?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -520,6 +556,8 @@ export type CaptureSourceConnectionState =
 export interface CaptureSource {
   id: string;
   kind: CaptureSourceKind;
+  type?: "desktop" | "android" | "browser" | "window";
+  connected?: boolean;
   name: string;
   detail?: string;
   connectionState: CaptureSourceConnectionState;

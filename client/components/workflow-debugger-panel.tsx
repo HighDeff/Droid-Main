@@ -25,7 +25,6 @@ import {
   CircleDot,
   Check,
   ShieldAlert,
-  Bot,
   PlayCircle,
   Undo2,
   Tv,
@@ -77,13 +76,6 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
     frame: number;
     label: string;
   } | null>(null);
-
-  // Qwen AI Agent Guide State
-  const [qwenGuideActive, setQwenGuideActive] = useState<boolean>(true);
-  const [qwenThought, setQwenThought] = useState<string | null>(
-    "Qwen Agent Guide active: Monitoring trajectories, assisted movement, and action completion."
-  );
-  const [qwenBacktrackingNotice, setQwenBacktrackingNotice] = useState<string | null>(null);
 
   const [executionLogs, setExecutionLogs] = useState<
     { id: string; time: string; text: string; type: "info" | "warn" | "success" | "drift" }[]
@@ -321,6 +313,11 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
         onProgress: (status) => addLog(status, "info"),
       });
 
+      if (!result.success) {
+        addLog(result.summary, "warn");
+        return;
+      }
+
       // Update stored automation coordinates based on latest detected UI drift frames
       const permanentlyUpdatedSteps = result.calibratedSteps.map((s) => {
         if (s.recalibrated) {
@@ -379,35 +376,25 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
   // AI Play Similar Action for Frames 1-10 with PC Execution & Clickpoint Contacts ("..")
   const handleReplayFrames1To10OnPC = async () => {
     if (isReplayingDrift10) return;
+    if (steps.length === 0) {
+      addLog("Replay requires at least one recorded or reviewed step.", "warn");
+      return;
+    }
+    if (!screenshotUrl?.startsWith("data:image/")) {
+      addLog("Start or provide a real screen capture before replaying actions.", "warn");
+      return;
+    }
     setIsReplayingDrift10(true);
-    addLog("Initiating AI Replay & Execution for Frames 1-10 on PC with clickpoint verification...", "info");
-
     try {
-      // 1. First check if Qwen guide detects any incomplete typing or adjustments
-      if (qwenGuideActive) {
-        setQwenThought("Qwen Agent Guide: Inspecting frame 1-10 sequence for missing text or path adjustments...");
-        try {
-          const guideRes = await fetch("/api/ai/qwen-guide-step", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              currentStep: activeStep,
-              driftDetected: (activeStep?.driftDistancePx || 0) > driftThresholdPx,
-              driftPx: activeStep?.driftDistancePx || 0,
-              isTypingIncomplete: false,
-            }),
-          });
-          const guideData = await guideRes.json();
-          if (guideData?.reasoning) {
-            setQwenThought(guideData.reasoning);
-            addLog(`🤖 ${guideData.reasoning}`, "info");
-          }
-        } catch {
-          // fallback
-        }
+      const syncResponse = await fetch("/api/sync-real-frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageData: screenshotUrl }),
+      });
+      if (!syncResponse.ok) {
+        throw new Error("The current screenshot could not be synchronized");
       }
-
-      // 2. Dispatch sequence to backend for physical PC execution
+      addLog(`Analyzing the live screen before replaying ${Math.min(steps.length, 10)} reviewed action(s)...`, "info");
       const payloadSteps = steps.slice(0, 10).map((s, idx) => ({
         id: s.id,
         frame: idx + 1,
@@ -418,75 +405,40 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
         text: s.text,
         selector: s.selector,
       }));
-
-      // 3. Step through frames 1 to 10 locally with animated clickpoints
-      for (let i = 0; i < Math.min(10, Math.max(10, steps.length)); i++) {
-        const frameNum = i + 1;
-        setCurrentReplayFrame(frameNum);
-        const currentStepData = steps[i] || {
-          stepNumber: frameNum,
-          name: `Frame ${frameNum} Action`,
-          action: "click",
-          x: 400 + i * 40,
-          y: 200 + i * 25,
-        };
-
-        const targetX = ((currentStepData as any).originalX ?? currentStepData.x) + ((currentStepData as any).offsetX || 0);
-        const targetY = ((currentStepData as any).originalY ?? currentStepData.y) + ((currentStepData as any).offsetY || 0);
-
-        // Check for simulated incomplete typing on step 6
-        if (qwenGuideActive && frameNum === 6) {
-          setQwenBacktrackingNotice("⚠️ Incomplete typing detected ('engin' found). Qwen backtracking to complete...");
-          addLog("Qwen Guide: Detected partial typing. Backtracking to field to finish 'eering@sightline.ai'...", "warn");
-          await new Promise((r) => setTimeout(r, 600));
-          setQwenBacktrackingNotice(null);
-        }
-
-        // Display Clickpoint Marker with visual pulsating ripple ("..")
-        const isClick = currentStepData.action === "click" || currentStepData.action === "double_click" || !currentStepData.action;
-        if (isClick) {
-          setActiveClickMarker({
-            x: targetX,
-            y: targetY,
-            frame: frameNum,
-            label: `AI CLICK [${targetX}, ${targetY}]`,
-          });
-        }
-
-        addLog(
-          `Replaying Frame ${frameNum}/10: ${currentStepData.name} at (${targetX}, ${targetY}) ${isClick ? "• AI CLICK CONTACT" : ""}`,
-          isClick ? "success" : "info"
-        );
-
-        // Send to PC execution endpoint
-        fetch("/api/execute-task", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            targetDevice: "desktop",
-            task: {
-              id: `frame_${frameNum}`,
-              name: currentStepData.name,
-              action: currentStepData.action || "click",
-              targetPosition: { x: targetX, y: targetY },
-              text: (currentStepData as any).text,
-            },
-          }),
-        }).catch(() => {});
-
-        // Pacing delay between frames
-        await new Promise((resolve) => setTimeout(resolve, 750));
+      const response = await fetch("/api/ai/replay-drift-actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          steps: payloadSteps,
+          executeOnPC: true,
+          approved: true,
+          targetDevice: "desktop",
+        }),
+      });
+      const data = await response.json();
+      setCurrentReplayFrame(data.processedFrames || null);
+      const lastAction = data.executedActions
+        ?.slice()
+        .reverse()
+        .find((action: any) => action.isClick && action.pcResult?.success === true);
+      if (lastAction) {
+        setActiveClickMarker({
+          x: lastAction.x,
+          y: lastAction.y,
+          frame: lastAction.frame,
+          label: `LAST CHECKED CLICK [${lastAction.x}, ${lastAction.y}]`,
+        });
+      } else {
+        setActiveClickMarker(null);
       }
-
-      setActiveClickMarker(null);
-      setCurrentReplayFrame(null);
-      addLog("AI Replay completed: 10 frames executed on PC with verified clickpoints and trajectory guidance.", "success");
+      addLog(
+        data.summary || data.haltedReason || data.error || "Replay did not complete.",
+        response.ok && data.success ? "success" : "warn",
+      );
     } catch (err) {
       addLog(`Replay error: ${String(err)}`, "warn");
     } finally {
       setIsReplayingDrift10(false);
-      setActiveClickMarker(null);
-      setCurrentReplayFrame(null);
     }
   };
 
@@ -501,7 +453,7 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
       if (onExecuteStepOnPC) {
         await onExecuteStepOnPC(activeStep);
       } else {
-        await fetch("/api/execute-task", {
+        const response = await fetch("/api/execute-task", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -518,6 +470,10 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
             },
           }),
         });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || "Native action did not complete.");
+        }
       }
       addLog(
         `Step #${activeStep.stepNumber} successfully executed on physical hardware!`,
@@ -647,7 +603,7 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
           <Button
             size="sm"
             onClick={handleReplayFrames1To10OnPC}
-            disabled={isReplayingDrift10}
+            disabled={isReplayingDrift10 || !screenshotUrl?.startsWith("data:image/")}
             className={`h-8 px-3 font-mono font-bold gap-1.5 border shadow-md ${
               isReplayingDrift10
                 ? "bg-purple-600 hover:bg-purple-500 text-white animate-pulse border-purple-400"
@@ -663,45 +619,8 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
             </span>
           </Button>
 
-          {/* Qwen AI Agent Guide Toggle */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setQwenGuideActive(!qwenGuideActive);
-              addLog(
-                `Qwen AI Agent Guide ${!qwenGuideActive ? "ACTIVATED (assisted movement & backtracking on)" : "DEACTIVATED"}.`,
-                !qwenGuideActive ? "success" : "info"
-              );
-            }}
-            className={`h-8 px-2.5 text-xs font-mono font-bold gap-1.5 transition-all ${
-              qwenGuideActive
-                ? "bg-cyan-950 border-cyan-400/80 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.3)]"
-                : "bg-slate-900 border-slate-700 text-slate-400 hover:text-white"
-            }`}
-            title="Qwen AI Agent Guide: Assists in movement trajectories, compensates drift, and backtracks to complete forgotten actions like typing"
-          >
-            <Bot className={`w-3.5 h-3.5 ${qwenGuideActive ? "text-cyan-400 animate-bounce" : "text-slate-500"}`} />
-            <span>QWEN GUIDE: {qwenGuideActive ? "ON" : "OFF"}</span>
-          </Button>
         </div>
       </div>
-
-      {/* Qwen Agent Thought & Backtracking Strip */}
-      {qwenGuideActive && (
-        <div className="px-3 py-1.5 bg-cyan-950/40 border-b border-cyan-900/60 flex items-center justify-between gap-2 text-[11px] text-cyan-200 font-mono">
-          <div className="flex items-center gap-1.5 truncate">
-            <Bot className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-            <span className="font-bold text-cyan-300 shrink-0">Qwen Co-Pilot:</span>
-            <span className="text-slate-300 truncate">{qwenThought}</span>
-          </div>
-          {qwenBacktrackingNotice && (
-            <span className="px-2 py-0.5 rounded bg-amber-950 border border-amber-500 text-amber-300 font-bold text-[10px] animate-pulse shrink-0">
-              {qwenBacktrackingNotice}
-            </span>
-          )}
-        </div>
-      )}
 
       {/* Active Click Marker Contact Visual Overlay */}
       {activeClickMarker && (

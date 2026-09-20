@@ -43,6 +43,7 @@ export const handleStuckResolver: RequestHandler = async (req, res) => {
       targetSeconds,
       lastError,
       autoExecuteFix = false,
+      approved = false,
     } = req.body;
 
     const resolution = await resolveStuckState({
@@ -55,7 +56,7 @@ export const handleStuckResolver: RequestHandler = async (req, res) => {
     });
 
     let executedActions: any[] = [];
-    if (autoExecuteFix && resolution.recommendedActions?.length > 0) {
+    if (autoExecuteFix && approved === true && resolution.recommendedActions?.length > 0) {
       centralLogHub.addLog(
         "AI-StuckResolver",
         "INFO",
@@ -82,7 +83,7 @@ export const handleStuckResolver: RequestHandler = async (req, res) => {
     res.json({
       success: true,
       resolution,
-      executedActions: autoExecuteFix ? executedActions : undefined,
+      executedActions: autoExecuteFix && approved === true ? executedActions : undefined,
     });
   } catch (err) {
     res.status(500).json({
@@ -100,7 +101,8 @@ export const handleScheduleCheckup: RequestHandler = async (req, res) => {
       elapsedSeconds = 0,
       maxSeconds = 60,
       remainingStepCount = 0,
-      autoFinishIfFound = true,
+      autoFinishIfFound = false,
+      approved = false,
     } = req.body;
 
     const evaluation = await evaluateCheckupAndCompletion({
@@ -114,6 +116,7 @@ export const handleScheduleCheckup: RequestHandler = async (req, res) => {
     let finishActionResult: any = null;
     if (
       autoFinishIfFound &&
+      approved === true &&
       !evaluation.isFinished &&
       evaluation.recommendedNextAction
     ) {
@@ -213,16 +216,10 @@ export const handleAutoActorTrigger: RequestHandler = async (req, res) => {
     );
 
     let matchResult: ScreenMatchResult = {
-      matched: true,
-      similarityScore: 0.9,
-      reason: "Visual state verified.",
-      identifiedElements: ["Screen Interface"],
-      suggestedNextStep: step || {
-        action: "click",
-        x: 960,
-        y: 540,
-        name: "Auto-Act Next Step",
-      },
+      matched: false,
+      similarityScore: 0,
+      reason: "Both current and expected screens are required before auto-acting.",
+      identifiedElements: [],
     };
 
     if (currentScreen && expectedScreen) {
@@ -237,21 +234,29 @@ export const handleAutoActorTrigger: RequestHandler = async (req, res) => {
     let executionResult: any = null;
     if (autoActEnabled && matchResult.matched) {
       const targetStep = step || matchResult.suggestedNextStep;
-      centralLogHub.addLog(
-        "AI-AutoActor",
-        "SUCCESS",
-        `Screen matched (${((matchResult.similarityScore || 0) * 100).toFixed(1)}%) -> Auto-executing step: "${targetStep.name || targetStep.action}"`
-      );
+      if (targetStep) {
+        centralLogHub.addLog(
+          "AI-AutoActor",
+          "SUCCESS",
+          `Screen matched (${((matchResult.similarityScore || 0) * 100).toFixed(1)}%) -> Auto-executing step: "${targetStep.name || targetStep.action}"`
+        );
 
-      executionResult = await dispatchActionToPython({
-        title: `Auto-Act: ${targetStep.name || targetStep.action}`,
-        action: targetStep.action || "click",
-        x: targetStep.x || 960,
-        y: targetStep.y || 540,
-        textPayload: targetStep.text,
-        keyPayload: targetStep.keyPayload,
-        delayMs: targetStep.delayMs || 400,
-      });
+        executionResult = await dispatchActionToPython({
+          title: `Auto-Act: ${targetStep.name || targetStep.action}`,
+          action: targetStep.action || "click",
+          x: targetStep.x ?? 960,
+          y: targetStep.y ?? 540,
+          textPayload: targetStep.text,
+          keyPayload: targetStep.keyPayload,
+          delayMs: targetStep.delayMs || 400,
+        });
+      } else {
+        centralLogHub.addLog(
+          "AI-AutoActor",
+          "WARN",
+          "Screen matched, but no reviewed target step was available; no action was dispatched."
+        );
+      }
     }
 
     res.json({
@@ -308,4 +313,3 @@ export const handleVisualErrorAndDiff: RequestHandler = async (req, res) => {
     });
   }
 };
-

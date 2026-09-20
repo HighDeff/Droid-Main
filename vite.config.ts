@@ -1,10 +1,21 @@
 import react from '@vitejs/plugin-react-swc';
+import crypto from 'node:crypto';
 import path from 'path';
 import { defineConfig } from 'vite';
 import { createServer } from './server/index';
 
 export default defineConfig(() => {
-  const apiApp = createServer();
+  const browserSessionToken = crypto.randomBytes(32).toString('base64url');
+  const apiApp = createServer({ browserSessionToken });
+  const mountApplication = (server: { middlewares: { use: (handler: any) => void } }) => {
+    server.middlewares.use((req: any, res: any, next: any) => {
+      if (/^\/api(?:\/|[?]|$)/.test(req.url ?? '')) {
+        apiApp(req, res, next);
+      } else {
+        next();
+      }
+    });
+  };
 
   return {
     plugins: [
@@ -12,13 +23,10 @@ export default defineConfig(() => {
       {
         name: 'api-server-middleware',
         configureServer(server) {
-          server.middlewares.use((req, res, next) => {
-            if (req.url?.startsWith('/api')) {
-              apiApp(req as any, res as any, next);
-            } else {
-              next();
-            }
-          });
+          mountApplication(server);
+        },
+        configurePreviewServer(server) {
+          mountApplication(server);
         },
       },
     ],

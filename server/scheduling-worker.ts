@@ -21,10 +21,6 @@ class SchedulingWorker {
   private workerInterval: NodeJS.Timeout | null = null;
   private isRunning = false;
 
-  constructor() {
-    this.start();
-  }
-
   start() {
     if (this.isRunning) return;
     
@@ -32,6 +28,7 @@ class SchedulingWorker {
     this.workerInterval = setInterval(() => {
       this.processScheduledTasks();
     }, 1000); // Check every second
+    this.workerInterval.unref?.();
     
     console.log("Scheduling worker started");
   }
@@ -52,6 +49,7 @@ class SchedulingWorker {
     priority: "high" | "medium" | "low" = "medium",
     estimatedDuration: number = 60000
   ): string {
+    this.start();
     const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     
     const task: ScheduledTask = {

@@ -67,6 +67,8 @@ def main():
                 action = "clear_and_type"
             elif desc.startswith("type"):
                 action = "type_text"
+            elif re.search(r"\bclick\b", desc):
+                action = "click"
             elif "hotkey" in desc:
                 action = "hotkey"
             elif "press key" in desc:
@@ -76,8 +78,9 @@ def main():
             elif "wait" in desc:
                 action = "wait"
             else:
-                action = "click"
+                raise ValueError("An explicit supported action is required")
         target_pos = task.get("targetPosition", {})
+        has_target_coordinates = bool(task.get("hasTargetCoordinates", True))
         x = int(target_pos.get("x", task.get("x", payload.get("x", 960))))
         y = int(target_pos.get("y", task.get("y", payload.get("y", 540))))
         text_payload = task.get("textPayload", task.get("text", payload.get("text", "")))
@@ -89,35 +92,43 @@ def main():
                 text_payload = m.group(1)
         explanation = ""
 
+        def require_action(success, description):
+            if not success:
+                raise RuntimeError(f"Native action failed: {description}")
+
         # Android Device Execution
         if target_device == "android":
             if action in ["click", "tap"]:
-                execute_adb_tap(x, y, device_id)
+                require_action(execute_adb_tap(x, y, device_id), "ADB tap")
                 explanation = f"Tapped Android screen at ({x}, {y}) via ADB."
             elif action in ["double_click", "double_tap"]:
-                execute_adb_tap(x, y, device_id)
+                require_action(execute_adb_tap(x, y, device_id), "first ADB tap")
                 time.sleep(0.1)
-                execute_adb_tap(x, y, device_id)
+                require_action(execute_adb_tap(x, y, device_id), "second ADB tap")
                 explanation = f"Double-tapped Android screen at ({x}, {y}) via ADB."
             elif action in ["swipe", "drag"]:
                 drag_end = task.get("dragEndPosition", {})
                 x2 = int(drag_end.get("x", x))
                 y2 = int(drag_end.get("y", y - 300))
-                execute_adb_swipe(x, y, x2, y2, 400, device_id)
+                require_action(execute_adb_swipe(x, y, x2, y2, 400, device_id), "ADB swipe")
                 explanation = f"Swiped on Android from ({x}, {y}) to ({x2}, {y2}) via ADB."
             elif action in ["type", "clear_and_type", "type_text"]:
-                execute_adb_tap(x, y, device_id)
-                time.sleep(0.3)
-                execute_adb_text(text_payload, device_id)
-                explanation = f"Focused ({x}, {y}) and typed \"{text_payload}\" on Android via ADB."
+                if has_target_coordinates:
+                    require_action(execute_adb_tap(x, y, device_id), "ADB field focus")
+                    time.sleep(0.3)
+                require_action(execute_adb_text(text_payload, device_id), "ADB text input")
+                explanation = (
+                    f"Focused ({x}, {y}) and typed \"{text_payload}\" on Android via ADB."
+                    if has_target_coordinates
+                    else f"Typed \"{text_payload}\" into the currently focused Android control via ADB."
+                )
             elif action in ["key", "press_key", "hotkey"]:
                 keycode_map = {"enter": 66, "back": 4, "home": 3, "tab": 61, "escape": 111}
                 code = keycode_map.get(key_payload.lower(), 66)
-                execute_adb_keyevent(code, device_id)
+                require_action(execute_adb_keyevent(code, device_id), "ADB key event")
                 explanation = f"Sent keyevent {code} ({key_payload}) on Android via ADB."
             else:
-                execute_adb_tap(x, y, device_id)
-                explanation = f"Executed generic touch action at ({x}, {y}) on Android via ADB."
+                raise ValueError(f"Unsupported Android action: {action}")
 
             print(json.dumps({
                 "success": True,
@@ -157,13 +168,13 @@ def main():
             speed_mult = float(task.get("speedMultiplier", 1.0))
             drift = int(task.get("driftPx", driftPx))
             is_drag_mode = bool(task.get("isDrag", False))
-            stream_mouse_route(route_points, speed_multiplier=speed_mult, drift_px=drift, is_drag=is_drag_mode)
+            require_action(stream_mouse_route(route_points, speed_multiplier=speed_mult, drift_px=drift, is_drag=is_drag_mode), "mouse route replay")
             explanation = f"Streamed continuous 60Hz mouse route ({len(route_points)} waypoints) across OS desktop with ±{drift}px drift."
         elif action in ["activate_window", "focus_window"]:
             act_x = int(target_pos.get("x", 960))
             act_y = int(target_pos.get("y", 200))
             dwell = int(task.get("dwellMs", 150))
-            activate_and_focus_window(act_x, act_y, dwell)
+            require_action(activate_and_focus_window(act_x, act_y, dwell), "window activation")
             explanation = f"Special window activation click dispatched at ({act_x}, {act_y}) with {dwell}ms focus lock."
         elif action in ["relative_action", "relative_click", "relative_type"]:
             origin = task.get("appOrigin", {"x": 100, "y": 100})
@@ -171,52 +182,74 @@ def main():
             rel_v = int(task.get("relV", target_pos.get("y", 0)))
             sub_act = task.get("subAction", "click")
             res_data = execute_relative_action(origin.get("x", 0), origin.get("y", 0), rel_u, rel_v, sub_act, text_payload)
+            require_action(res_data.get("success", False), "relative desktop action")
             explanation = f"Executed relative {sub_act} at ({rel_u}, {rel_v}) -> Absolute ({res_data['absoluteCoords']['x']}, {res_data['absoluteCoords']['y']})."
         elif action in ["click", "focus_and_click"]:
-            click_mouse_human(x, y, dwell_ms=120, drift_px=driftPx)
+            require_action(click_mouse_human(x, y, dwell_ms=120, drift_px=driftPx), "desktop click")
             explanation = f"Moved mouse via cubic spline and clicked at ({x}, {y}) on Desktop (drift {driftPx}px, mode {variationMode})."
+        elif action == "move":
+            require_action(move_mouse_human(x, y, drift_px=driftPx), "desktop pointer move")
+            explanation = f"Moved the desktop pointer to ({x}, {y})."
         elif action in ["double_click"]:
             if variationMode == "exact" or driftPx == 0:
-                double_click(x, y)
+                require_action(double_click(x, y), "desktop double click")
             else:
-                move_mouse_human(x, y, drift_px=driftPx)
-                double_click(x, y)
+                require_action(move_mouse_human(x, y, drift_px=driftPx), "desktop pointer move")
+                require_action(double_click(x, y), "desktop double click")
             explanation = f"Double clicked at ({x}, {y}) on Desktop (drift {driftPx}px)."
         elif action in ["right_click"]:
             if driftPx == 0:
-                move_mouse(x, y)
-                right_click(x, y)
+                require_action(move_mouse(x, y), "desktop pointer move")
+                require_action(right_click(x, y), "desktop right click")
             else:
-                move_mouse_human(x, y, drift_px=driftPx)
-                right_click(x, y)
+                require_action(move_mouse_human(x, y, drift_px=driftPx), "desktop pointer move")
+                require_action(right_click(x, y), "desktop right click")
             explanation = f"Right clicked at ({x}, {y}) on Desktop (drift {driftPx}px, mode {variationMode})."
         elif action in ["type", "type_text"]:
-            click_mouse_human(x, y, dwell_ms=120, drift_px=6)
-            time.sleep(0.2)
-            type_text_human(text_payload, base_delay_ms=65, jitter_ms=35)
-            explanation = f"Focused ({x}, {y}) and typed payload \"{text_payload}\"."
+            if has_target_coordinates:
+                require_action(click_mouse_human(x, y, dwell_ms=120, drift_px=6), "desktop field focus")
+                time.sleep(0.2)
+            require_action(type_text_human(text_payload, base_delay_ms=65, jitter_ms=35), "desktop text input")
+            explanation = (
+                f"Focused ({x}, {y}) and typed payload \"{text_payload}\"."
+                if has_target_coordinates
+                else f"Typed payload \"{text_payload}\" into the currently focused control."
+            )
         elif action in ["clear_and_type"]:
-            clear_and_type_at(x, y, text_payload)
-            explanation = f"Cleared existing content and typed \"{text_payload}\" at ({x}, {y})."
+            if has_target_coordinates:
+                require_action(clear_and_type_at(x, y, text_payload), "desktop clear and type")
+                explanation = f"Cleared existing content and typed \"{text_payload}\" at ({x}, {y})."
+            else:
+                require_action(hotkey("ctrl", "a"), "select current field contents")
+                require_action(type_text_human(text_payload, base_delay_ms=65, jitter_ms=35), "desktop text input")
+                explanation = f"Cleared and typed \"{text_payload}\" into the currently focused control."
         elif action in ["drag", "drag_and_drop"]:
             drag_end = task.get("dragEndPosition", {})
             x2 = int(drag_end.get("x", x + 200))
             y2 = int(drag_end.get("y", y))
-            drag_mouse(x, y, x2, y2, duration_sec=0.5)
+            require_action(drag_mouse(x, y, x2, y2, duration_sec=0.5), "desktop drag")
             explanation = f"Dragged from ({x}, {y}) to ({x2}, {y2}) on Desktop."
         elif action in ["key", "press_key"]:
-            press_key(key_payload)
+            require_action(press_key(key_payload), "desktop key press")
             explanation = f"Pressed key \"{key_payload}\" on Desktop."
         elif action in ["hotkey"]:
             keys = text_payload.split("+") if text_payload else [key_payload]
-            hotkey(*keys)
+            require_action(hotkey(*keys), "desktop hotkey")
             explanation = f"Dispatched hotkey \"{'+'.join(keys)}\" on Desktop."
         elif action in ["scroll"]:
-            scroll(-5 if "down" in text_payload.lower() else 5)
-            explanation = f"Scrolled viewport on Desktop."
+            direction_hint = str(
+                task.get("direction", task.get("scrollDirection", ""))
+            ).lower()
+            if not direction_hint:
+                direction_hint = f"{text_payload} {task.get('description', '')}".lower()
+            scroll_down = re.search(r"\bup\b|\bupward(?:s)?\b", direction_hint) is None
+            require_action(
+                scroll(-5 if scroll_down else 5, x, y, "down" if scroll_down else "up"),
+                "desktop scroll",
+            )
+            explanation = f"Scrolled viewport {'down' if scroll_down else 'up'} at ({x}, {y}) on Desktop."
         else:
-            click_mouse_human(x, y, dwell_ms=120, drift_px=6)
-            explanation = f"Executed default click action at ({x}, {y})."
+            raise ValueError(f"Unsupported desktop action: {action}")
 
         print(json.dumps({
             "success": True,
@@ -229,6 +262,7 @@ def main():
 
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

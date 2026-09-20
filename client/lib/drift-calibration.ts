@@ -259,6 +259,7 @@ export async function executeAutoCalibration(options: {
 }): Promise<AutoCalibrationResult> {
   const threshold = options.thresholdPx ?? DEFAULT_DRIFT_THRESHOLD_PX;
   options.onProgress?.(`Initiating UI state scan with ${threshold}px threshold...`);
+  let failureReason = "Calibration service did not return verified element positions.";
 
   try {
     const response = await fetch("/api/ai/auto-calibrate-workflow", {
@@ -296,94 +297,24 @@ export async function executeAutoCalibration(options: {
 
         return result;
       }
+      failureReason = data.error || data.summary || failureReason;
+    } else {
+      const errorBody = await response.json().catch(() => null);
+      failureReason = errorBody?.error || `Calibration service returned HTTP ${response.status}.`;
     }
   } catch (err) {
-    console.warn("Backend calibration endpoint unreachable, using client engine:", err);
+    failureReason = `Calibration service is unavailable: ${err instanceof Error ? err.message : String(err)}`;
   }
 
-  // Client-side fallback calibration engine
-  options.onProgress?.("Evaluating local element vectors & pixel displacements...");
-  let recalibratedCount = 0;
-  const logs: string[] = [];
-
-  const calibrated = options.steps.map((step, idx) => {
-    const stepNum = step.stepNumber || idx + 1;
-    const baseX = step.originalX ?? step.x;
-    const baseY = step.originalY ?? step.y;
-    const curOffsetX = step.offsetX ?? 0;
-    const curOffsetY = step.offsetY ?? 0;
-    const targetX = baseX + curOffsetX;
-    const targetY = baseY + curOffsetY;
-
-    // Simulate realistic UI re-scan shift based on selector type
-    let shiftDx = 0;
-    let shiftDy = 0;
-    if (step.selector?.includes("input") || step.selector?.includes("email")) {
-      shiftDx = 14;
-      shiftDy = -9;
-    } else if (step.selector?.includes("checkbox") || step.selector?.includes("remember")) {
-      shiftDx = 11;
-      shiftDy = 5;
-    } else if (step.selector?.includes("login") || step.selector?.includes("nav")) {
-      shiftDx = 2;
-      shiftDy = 1;
-    } else {
-      shiftDx = Math.round((Math.sin(stepNum) * 12));
-      shiftDy = Math.round((Math.cos(stepNum) * 8));
-    }
-
-    const drift = Math.round(Math.hypot(shiftDx, shiftDy) * 10) / 10;
-    const exceeds = drift > threshold;
-
-    let newOffsetX = curOffsetX;
-    let newOffsetY = curOffsetY;
-    if (exceeds) {
-      newOffsetX = curOffsetX + shiftDx;
-      newOffsetY = curOffsetY + shiftDy;
-      recalibratedCount++;
-      logs.push(
-        `Step #${stepNum} ("${step.name}"): Drift of ${drift}px > threshold ${threshold}px. Offset calibrated to [ΔX:${newOffsetX > 0 ? "+" : ""}${newOffsetX}px, ΔY:${newOffsetY > 0 ? "+" : ""}${newOffsetY}px].`
-      );
-    } else {
-      logs.push(
-        `Step #${stepNum} ("${step.name}"): Drift of ${drift}px <= threshold ${threshold}px. Position is stable.`
-      );
-    }
-
-    return {
-      ...step,
-      originalX: baseX,
-      originalY: baseY,
-      offsetX: newOffsetX,
-      offsetY: newOffsetY,
-      x: baseX + newOffsetX,
-      y: baseY + newOffsetY,
-      driftDistancePx: drift,
-      recalibrated: exceeds || step.recalibrated || false,
-      lastCalibratedAt: Date.now(),
-    };
-  });
-
-  saveStoredWorkflowSteps(calibrated);
-  const driftPoints = computePixelDriftHeatmap(calibrated, threshold, options.elements);
-
-  const result: AutoCalibrationResult = {
-    success: true,
-    calibratedSteps: calibrated,
-    recalibratedCount,
+  options.onProgress?.(failureReason);
+  return {
+    success: false,
+    calibratedSteps: options.steps,
+    recalibratedCount: 0,
     thresholdPx: threshold,
-    driftPoints,
-    summary:
-      recalibratedCount > 0
-        ? `Auto-Calibration re-scanned UI and updated ${recalibratedCount} step(s) with pixel-drift exceeding ${threshold}px.`
-        : `UI re-scan complete: All steps remain within the ${threshold}px drift tolerance limit.`,
+    driftPoints: [],
+    summary: failureReason,
     timestamp: Date.now(),
-    logs,
+    logs: [failureReason],
   };
-
-  window.dispatchEvent(
-    new CustomEvent("workflow-auto-calibrated", { detail: result })
-  );
-
-  return result;
 }

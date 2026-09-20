@@ -3,12 +3,35 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Send, Bot, User, Loader2, RotateCcw } from "lucide-react";
+import { ensureAssistantSession } from "@/lib/assistant-session";
 
 interface Message {
   id: string;
   content: string;
   role: "user" | "assistant" | "system";
   timestamp: Date;
+}
+
+class RequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+async function requestJson(url: string, init?: RequestInit) {
+  const response = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new RequestError(
+      body?.error || `Assistant request failed (${response.status})`,
+      response.status,
+    );
+  }
+  if (!body) throw new Error("Assistant returned an empty response");
+  return body;
 }
 
 export function AIChat() {
@@ -54,11 +77,25 @@ export function AIChat() {
     setIsLoading(true);
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      const sessionId = await ensureAssistantSession({
+        project: { name: "Automation chat" },
+      });
+
+      const planned = await requestJson("/api/assistant/plans", {
+        method: "POST",
+        body: JSON.stringify({ sessionId, instructionText: messageText }),
+      });
+      const steps: Array<{ order: number; title: string }> = planned.plan?.steps;
+      if (!Array.isArray(steps) || steps.length === 0) {
+        throw new Error("The planner returned no reviewable steps.");
+      }
+      const stepSummary = steps
+        .map((step: { order: number; title: string }) => `${step.order}. ${step.title}`)
+        .join("\n");
 
       const response: Message = {
         id: (Date.now() + 1).toString(),
-        content: `I analyzed your automation request for "${messageText}":\n• Verification status: Active\n• Workflow synchronization: Ready\n• AI Vision model: Operational`,
+        content: `Prepared a ${steps.length}-step draft for review. Nothing has executed yet.\n${stepSummary}\nOpen Automation to edit and approve it.`,
         role: "assistant",
         timestamp: new Date(),
       };
@@ -68,7 +105,10 @@ export function AIChat() {
       console.error("Error sending message:", error);
       const errorMessage: Message = {
         id: "error-" + Date.now(),
-        content: "Sorry, I encountered an error. Please try again.",
+        content:
+          error instanceof Error
+            ? `I could not prepare that plan: ${error.message}`
+            : "I could not prepare that plan. Please try again.",
         role: "assistant",
         timestamp: new Date(),
       };

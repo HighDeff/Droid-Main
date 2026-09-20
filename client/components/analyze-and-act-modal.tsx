@@ -27,6 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { playClickPip } from "@/lib/audio-synthesizer";
+import { ensureAssistantSession } from "@/lib/assistant-session";
 
 interface AnalyzeAndActModalProps {
   isOpen: boolean;
@@ -35,7 +36,6 @@ interface AnalyzeAndActModalProps {
   screenStreamUrl?: string | null;
   storedSteps?: any[];
   onAdoptAssembledWorkflow?: (tasks: any[]) => void;
-  onExecutePyAutoGUIOnPC?: (actions: any[]) => void;
 }
 
 export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
@@ -45,16 +45,11 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
   screenStreamUrl,
   storedSteps = [],
   onAdoptAssembledWorkflow,
-  onExecutePyAutoGUIOnPC,
 }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<"analysis" | "tasks" | "tools" | "preferences">("analysis");
 
-  // Companion command & app launcher state
-  const [companionCommand, setCompanionCommand] = useState("echo 'Monitoring system task...'");
-  const [launchAppCommand, setLaunchAppCommand] = useState("gnome-calculator");
-  const [isExecutingBridge, setIsExecutingBridge] = useState(false);
   const [bridgeResultLog, setBridgeResultLog] = useState<string | null>(null);
 
   // Key Point Action Tools State
@@ -68,6 +63,13 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
 
   // Trigger Analyze and Act
   const handleRunAnalyzeAndAct = async () => {
+    const activeImage = [liveScreenUrl, screenStreamUrl].find((url) =>
+      url?.startsWith("data:image/"),
+    );
+    if (!activeImage) {
+      setAnalysisResult({ success: false, error: "Capture a real current screen before running analysis." });
+      return;
+    }
     setIsAnalyzing(true);
     setBridgeResultLog(null);
     try {
@@ -75,64 +77,107 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          liveScreenUrl,
-          screenStreamUrl,
+          liveScreenUrl: activeImage,
           previousTasks: storedSteps,
-          userInstructions: "Automate user login, verify navigation landmarks, and execute checkout dispatch",
-          currentGoals: [
-            { id: "g1", title: "Complete Form Navigation" },
-            { id: "g2", title: "Verify Euclidean Coordinate Stability" },
-          ],
+          userInstructions: "Analyze the current screen and propose the safest reviewable next action.",
         }),
       });
 
-      if (response.ok) {
-        const data = await response.json();
+      const data = await response.json();
+      if (response.ok && data.success) {
         setAnalysisResult(data);
         playClickPip(680);
+      } else {
+        setAnalysisResult({ success: false, error: data.error || "Screen analysis failed." });
       }
     } catch (e: any) {
       console.error("Analyze & Act error:", e);
+      setAnalysisResult({
+        success: false,
+        error: e?.message || "Screen analysis request failed.",
+      });
     } finally {
       setIsAnalyzing(false);
     }
   };
 
-  // Dispatch Native Execution Bridge with companion command / app launch
-  const handleDispatchBridge = async (actionType = "click") => {
-    setIsExecutingBridge(true);
+  const prepareTasksForApproval = async (tasks: any[]) => {
+    if (!tasks.length) {
+      setBridgeResultLog("No reviewed tasks are available to prepare.");
+      return false;
+    }
     try {
-      const response = await fetch("/api/pyautogui/bridge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: actionType,
-          targetPosition: { x: 960, y: 540 },
-          companionCommand: companionCommand || undefined,
-          launchApp: launchAppCommand || undefined,
-          text: liveWriteText,
-        }),
+      const sessionId = await ensureAssistantSession({
+        project: { name: "Analyzed workflow review" },
       });
 
-      const data = await response.json();
-      if (data.success) {
-        setBridgeResultLog(`PyAutoGUI Bridge executed action '${actionType}' + companion tasks successfully.`);
-        playClickPip(880);
+      const draftResponse = await fetch("/api/assistant/plans", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, instructionText: "Review analyzed workflow" }),
+      });
+      const draft = await draftResponse.json();
+      if (!draftResponse.ok || !draft?.plan?.id) {
+        throw new Error(draft?.error || "Could not create a draft plan");
       }
-    } catch (err: any) {
-      setBridgeResultLog(`Bridge notice: ${err.message}`);
-    } finally {
-      setIsExecutingBridge(false);
+      const steps = tasks.map((task, index) => {
+        const x = Number(task.x ?? task.targetPosition?.x ?? task.parameters?.x);
+        const y = Number(task.y ?? task.targetPosition?.y ?? task.parameters?.y);
+        return {
+          id: String(task.id || `analyzed_${index + 1}`),
+          order: index + 1,
+          title: String(task.name || `Analyzed action ${index + 1}`),
+          description: String(task.description || "Review analyzed action"),
+          action: String(task.action || "click"),
+          ...(Number.isFinite(x) && Number.isFinite(y) ? { target: { x, y } } : {}),
+          text: task.text ?? task.parameters?.text,
+          key: task.key ?? task.keyPayload ?? task.parameters?.key,
+          targetDevice: "desktop",
+          timing: "when_ready",
+          confidence: Number(task.confidence ?? 0.5),
+          status: "pending",
+        };
+      });
+      const saveResponse = await fetch(
+        `/api/assistant/plans/${encodeURIComponent(draft.plan.id)}?sessionId=${encodeURIComponent(sessionId)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ steps, timing: "when_ready" }),
+        },
+      );
+      const saved = await saveResponse.json();
+      if (!saveResponse.ok || !saved.success) {
+        throw new Error(saved?.error || "Could not save the draft plan");
+      }
+      setBridgeResultLog(`Prepared ${steps.length} step(s) in a persisted draft. Review and approve them in Automation.`);
+      window.dispatchEvent(new CustomEvent("assistant-session-changed", { detail: { sessionId } }));
+      return true;
+    } catch (error) {
+      setBridgeResultLog(error instanceof Error ? error.message : "Could not prepare the draft plan");
+      return false;
     }
+  };
+
+  // Physical execution is intentionally delegated to the persisted plan approval flow.
+  const handleDispatchBridge = async (actionType = "click") => {
+    const reviewedTask = analysisResult?.autoAssembledTasks?.[0];
+    if (!reviewedTask) {
+      setBridgeResultLog("Run screen analysis and review its proposed task before device control.");
+      return;
+    }
+    const isTextAction = actionType === "type" || actionType === "clear_and_type";
+    await prepareTasksForApproval([{
+      ...reviewedTask,
+      action: actionType,
+      ...(isTextAction ? { text: liveWriteText } : {}),
+    }]);
   };
 
   // Perform Live Web Search tool
   const handleExecuteSearch = () => {
-    playClickPip(540);
     setSearchResults([
-      `Documentation for '${searchQuery}': Coordinate stabilization protocols active.`,
-      `PyAutoGUI API Reference: moveTo(x, y, duration), typewrite(text, interval).`,
-      `Verified optimal landmark offsets: [ΔX: +14px, ΔY: -8px].`,
+      `Web search is not configured in this runtime. No results were invented for "${searchQuery}".`,
     ]);
   };
 
@@ -232,7 +277,7 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
                       {liveScreenUrl ? (
                         <img src={liveScreenUrl} alt="Live Screen" className="w-full h-full object-cover" />
                       ) : (
-                        <span>Simulated Desktop Mirror (1920x1080)</span>
+                        <span>No current screen captured</span>
                       )}
                     </div>
                   </div>
@@ -242,7 +287,7 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
                       {screenStreamUrl ? (
                         <img src={screenStreamUrl} alt="Screen Stream" className="w-full h-full object-cover" />
                       ) : (
-                        <span>Active Stream Ingress (60FPS Feed)</span>
+                        <span>No stream frame available</span>
                       )}
                     </div>
                   </div>
@@ -257,7 +302,8 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
                 </span>
                 <p className="text-slate-200 leading-relaxed">
                   {analysisResult?.visualSummary ||
-                    "Live viewport analyzed: High-resolution form structure active at 1920x1080. 5 primary interactive landmarks verified within Euclidean tolerance."}
+                    analysisResult?.error ||
+                    "Run analysis after capturing a current screen."}
                 </p>
               </div>
 
@@ -272,14 +318,14 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
                     <span className="text-slate-400 font-semibold">What Was Done Before:</span>
                     <p className="text-slate-300">
                       {analysisResult?.crossReferenceAnalysis?.previousActionSummary ||
-                        "Previous session logged 10 steps across form navigation and vector routing."}
+                        "No prior action has been analyzed."}
                     </p>
                   </div>
                   <div className="p-2 bg-slate-950/80 rounded border border-slate-800 space-y-1">
                     <span className="text-slate-400 font-semibold">Current State & Shifts:</span>
                     <p className="text-cyan-300">
                       {analysisResult?.crossReferenceAnalysis?.currentScreenState ||
-                        "Current canvas stabilized. Euclidean template drift monitored at 3.2px average."}
+                        "No verified current screen state is available."}
                     </p>
                   </div>
                 </div>
@@ -292,7 +338,7 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
             <div className="space-y-4 text-xs">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-slate-200">
-                  AI Auto-Assembled Workflow ({analysisResult?.autoAssembledTasks?.length || 4} Steps)
+                  AI Auto-Assembled Workflow ({analysisResult?.autoAssembledTasks?.length ?? 0} Steps)
                 </span>
                 <Button
                   size="sm"
@@ -305,14 +351,7 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
               </div>
 
               <div className="space-y-2">
-                {(
-                  analysisResult?.autoAssembledTasks || [
-                    { id: "1", stepNumber: 1, name: "Focus Customer Identifier Field", action: "click", targetPosition: { x: 960, y: 380 }, confidence: 0.98 },
-                    { id: "2", stepNumber: 2, name: "Live Write Operator Email Address", action: "live_write", targetPosition: { x: 960, y: 380 }, text: "operator.lead@enterprise.ai", confidence: 0.95 },
-                    { id: "3", stepNumber: 3, name: "Verify Session Checkbox with Euclidean Anchor", action: "click", targetPosition: { x: 885, y: 490 }, confidence: 0.93 },
-                    { id: "4", stepNumber: 4, name: "Execute Verification & Dispatch Order", action: "click", targetPosition: { x: 960, y: 560 }, confidence: 0.97 },
-                  ]
-                ).map((task: any, idx: number) => (
+                {(analysisResult?.autoAssembledTasks || []).map((task: any, idx: number) => (
                   <div key={idx} className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <span className="w-5 h-5 rounded-full bg-cyan-950 border border-cyan-500 flex items-center justify-center font-bold text-cyan-300 text-[10px]">
@@ -321,13 +360,13 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
                       <div>
                         <div className="font-bold text-slate-100">{task.name}</div>
                         <div className="text-[10px] text-slate-400">
-                          Action: <span className="text-cyan-300 font-semibold">{task.action}</span> | Target: ({task.targetPosition?.x || 960}, {task.targetPosition?.y || 540})
+                          Action: <span className="text-cyan-300 font-semibold">{task.action}</span> | Target: ({task.targetPosition?.x ?? "?"}, {task.targetPosition?.y ?? "?"})
                           {task.text && <span className="text-amber-300 ml-1">"{task.text}"</span>}
                         </div>
                       </div>
                     </div>
                     <Badge className="bg-slate-800 text-slate-300 text-[10px]">
-                      {Math.round((task.confidence || 0.95) * 100)}% Conf
+                      {Math.round((task.confidence ?? 0) * 100)}% Conf
                     </Badge>
                   </div>
                 ))}
@@ -386,7 +425,7 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
                 <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2 col-span-2">
                   <span className="font-bold text-slate-200 flex items-center gap-1.5">
                     <Search className="w-3.5 h-3.5 text-blue-400" />
-                    Internet Search & Documentation Agent
+                    Web Search Status
                   </span>
                   <div className="flex items-center gap-2">
                     <input
@@ -396,7 +435,7 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
                       className="flex-1 bg-slate-950 border border-slate-700 rounded px-2.5 py-1 text-xs text-slate-200"
                     />
                     <Button size="sm" onClick={handleExecuteSearch} className="h-7 bg-blue-600 hover:bg-blue-500 text-white">
-                      Search
+                      Check availability
                     </Button>
                   </div>
                   {searchResults.length > 0 && (
@@ -456,11 +495,11 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
                     </Button>
                     <Button
                       size="sm"
-                      onClick={() => handleDispatchBridge("hotkey")}
+                      onClick={() => handleDispatchBridge("clear_and_type")}
                       className="h-7 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 flex-1 gap-1"
                     >
                       <Clipboard className="w-3 h-3" />
-                      Paste
+                      Replace Text
                     </Button>
                   </div>
                 </div>
@@ -474,64 +513,45 @@ export const AnalyzeAndActModal: React.FC<AnalyzeAndActModalProps> = ({
               <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-3">
                 <span className="font-bold text-slate-200 flex items-center gap-1.5">
                   <Terminal className="w-3.5 h-3.5 text-yellow-400" />
-                  Native PyAutoGUI & Subprocess Low-Level Bridge
+                  Native Step Review Bridge
                 </span>
                 <p className="text-slate-400 text-[11px]">
-                  Dispatch commands directly through python3 subprocess and pyautogui on physical/virtual desktop hardware.
+                  Prepares the action proposed from the current analyzed screen for approval. Full workflows use fresh-frame checks between steps.
                 </p>
 
                 <div className="space-y-2">
-                  <div>
-                    <label className="text-slate-400 text-[10px] block mb-1">
-                      Companion Command (runs alongside automation workflow):
-                    </label>
-                    <input
-                      type="text"
-                      value={companionCommand}
-                      onChange={(e) => setCompanionCommand(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-200"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-slate-400 text-[10px] block mb-1">
-                      Launch External Application / Window:
-                    </label>
-                    <input
-                      type="text"
-                      value={launchAppCommand}
-                      onChange={(e) => setLaunchAppCommand(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-slate-200"
-                    />
-                  </div>
-
                   <div className="flex items-center gap-2 pt-2">
                     <Button
                       size="sm"
                       onClick={() => handleDispatchBridge("click")}
-                      disabled={isExecutingBridge}
+                      disabled={!analysisResult?.autoAssembledTasks?.length}
                       className="h-8 bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white font-bold gap-1.5 flex-1"
                     >
                       <Zap className="w-3.5 h-3.5 text-yellow-300" />
-                      Execute Single Step via PyAutoGUI
+                      Prepare Single Step for Approval
                     </Button>
 
                     <Button
                       size="sm"
                       onClick={() => {
-                        onExecutePyAutoGUIOnPC?.(analysisResult?.autoAssembledTasks || storedSteps);
-                        onClose();
+                        const tasks = analysisResult?.autoAssembledTasks?.length
+                          ? analysisResult.autoAssembledTasks
+                          : storedSteps;
+                        void prepareTasksForApproval(tasks).then((prepared) => {
+                          if (prepared) onClose();
+                        });
                       }}
+                      disabled={!(analysisResult?.autoAssembledTasks?.length || storedSteps.length)}
                       className="h-8 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold gap-1.5 flex-1"
                     >
                       <Play className="w-3.5 h-3.5" />
-                      Execute Full Workflow on Native PC
+                      Prepare Full Workflow for Approval
                     </Button>
                   </div>
 
                   {bridgeResultLog && (
-                    <div className="p-2 bg-slate-950 rounded border border-emerald-500/50 text-emerald-300 text-[11px] font-mono">
-                      ✓ {bridgeResultLog}
+                    <div className="p-2 bg-slate-950 rounded border border-amber-500/50 text-amber-300 text-[11px] font-mono">
+                      Review required: {bridgeResultLog}
                     </div>
                   )}
                 </div>

@@ -415,7 +415,7 @@ export default function Dashboard({
     snapshotUrl: string | null,
     surface: string | null,
   ) => {
-    setIsLiveDesktopActive(active);
+    setIsLiveDesktopActive(active && surface !== "simulation");
     if (snapshotUrl) setFrozenLiveSnapshot(snapshotUrl);
     if (surface === "monitor" && active) {
       setAntiLoopEnabled(true);
@@ -480,6 +480,16 @@ export default function Dashboard({
       await new Promise((r) => setTimeout(r, stepDelay));
       if (!sequenceRunningRef.current) break;
       try {
+        if (!isLiveDesktopActive) {
+          throw new Error("Start Screen HUD sharing before running the sequence");
+        }
+        const beforeCapture = await (await fetch("/api/capture-screen")).json();
+        if (!beforeCapture.success || !beforeCapture.imageData || !Number.isFinite(beforeCapture.timestamp)) {
+          throw new Error("No live frame is available from the capture service");
+        }
+        if (!Number.isFinite(beforeCapture.ageMs) || beforeCapture.ageMs > 5_000) {
+          throw new Error("The latest shared frame is stale; resume screen sharing");
+        }
         let taskDescription = `Click at ${current.x}, ${current.y}`;
         if (current.action === "right_click")
           taskDescription = `Right click at ${current.x}, ${current.y}`;
@@ -497,7 +507,7 @@ export default function Dashboard({
             : baseDrift;
         const driftToSend =
           movementMode === "live" ? Math.max(variedDrift, 6) : variedDrift;
-        await fetch("/api/execute-task", {
+        const executionResponse = await fetch("/api/execute-task", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -519,12 +529,54 @@ export default function Dashboard({
             },
           }),
         });
+        const executionResult = await executionResponse.json();
+        if (!executionResponse.ok || !executionResult.success) {
+          throw new Error(executionResult.error || "Native action failed");
+        }
+        const frameDeadline = Date.now() + 3_000;
+        let afterCapture: any = null;
+        while (Date.now() < frameDeadline && sequenceRunningRef.current) {
+          const candidate = await (await fetch("/api/capture-screen")).json();
+          if (!sequenceRunningRef.current) break;
+          if (
+            candidate.success &&
+            candidate.imageData &&
+            Number.isFinite(candidate.timestamp) &&
+            candidate.timestamp > beforeCapture.timestamp
+          ) {
+            afterCapture = candidate;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        if (!sequenceRunningRef.current) break;
+        const requiresVisibleChange = new Set([
+          "click",
+          "double_click",
+          "right_click",
+          "clear_and_type",
+          "type_text",
+          "drag",
+          "drag_and_drop",
+          "scroll",
+        ]).has(current.action);
+        if (
+          requiresVisibleChange &&
+          (!afterCapture ||
+            !afterCapture.success ||
+            !afterCapture.imageData ||
+            !Number.isFinite(afterCapture.timestamp) ||
+            afterCapture.timestamp <= beforeCapture.timestamp ||
+            !afterCapture.frameHash ||
+            afterCapture.frameHash === beforeCapture.frameHash)
+        ) {
+          throw new Error("The screen did not visibly change; sequence paused for review");
+        }
         setSequence((prev) =>
           prev.map((s) =>
             s.id === current.id ? { ...s, status: "completed" } : s,
           ),
         );
-
         // Conditional Branching Evaluation (Jump to step, retry, workaround, failover)
         const condType = (current as any).conditionType;
         const condVal = (current as any).conditionValue;
@@ -569,7 +621,11 @@ export default function Dashboard({
             }
           }
         }
-      } catch {
+      } catch (error) {
+        sequenceRunningRef.current = false;
+        toast.error(
+          error instanceof Error ? error.message : "Sequence step failed",
+        );
         setSequence((prev) =>
           prev.map((s) =>
             s.id === current.id ? { ...s, status: "failed" } : s,
@@ -709,31 +765,27 @@ export default function Dashboard({
     return null;
   };
   const handleTriggerPlanAndAct = async () => {
-    let report: any = perceptionReport;
-    if (!report) {
-      const liveImg = aiLiveUrl || screenshotUrl;
-      if (!liveImg) {
-        setVerificationBadge({
-          status: "failed",
-          message: "No live image for planning",
-        });
-        setTimeout(() => setVerificationBadge(null), 2500);
-        return;
-      }
+    const liveImg = aiLiveUrl || screenshotUrl;
+    if (!liveImg?.startsWith("data:image/")) {
       setVerificationBadge({
-        status: "verifying",
-        message: "Perceiving before planning...",
+        status: "failed",
+        message: "Capture a real live frame before planning",
       });
-      const fresh = await handleTriggerDescribeScreen();
-      if (fresh) report = fresh;
-      else {
-        setVerificationBadge({
-          status: "failed",
-          message: "Need perception first",
-        });
-        setTimeout(() => setVerificationBadge(null), 2500);
-        return;
-      }
+      setTimeout(() => setVerificationBadge(null), 2500);
+      return;
+    }
+    setVerificationBadge({
+      status: "verifying",
+      message: "Perceiving fresh screen before planning...",
+    });
+    const report: any = await handleTriggerDescribeScreen();
+    if (!report) {
+      setVerificationBadge({
+        status: "failed",
+        message: "Fresh perception is required before planning",
+      });
+      setTimeout(() => setVerificationBadge(null), 2500);
+      return;
     }
     setVerificationBadge({
       status: "verifying",
@@ -748,6 +800,8 @@ export default function Dashboard({
           userObjective: "auto",
           model: "qwen2.5vl:7b",
           executeImmediately: true,
+          approved: true,
+          preActionImageData: liveImg,
         }),
       });
       const data = await res.json();

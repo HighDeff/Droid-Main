@@ -1,0 +1,42 @@
+# CodeAnt AI configuration
+# This configuration ensures CodeAnt reviews all branches and PRs
+
+review:
+  # Enable review for all branches
+  all_branches: true
+  
+  # Review settings
+  auto_review: true
+  
+  # Check all pull requests
+  pull_requests:
+    enabled: true
+    
+# Code quality settings
+code_quality:
+  # Enable code quality checks
+  enabled: true
+  
+  # Security checks
+  security:
+    enabled: true
+    
+  # Performance checks
+  performance:
+    enabled: true
+
+# Testing requirements
+testing:
+  # Require tests for new features
+  required: true
+  
+  # Check test coverage
+  coverage_threshold: 80
+
+# Documentation requirements
+documentation:
+  # Check for documentation
+  enabled: true
+  
+  # Require README updates for new features
+  readme_updates: true

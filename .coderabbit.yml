@@ -1,0 +1,38 @@
+# CodeRabbit configuration
+# This configuration ensures CodeRabbit reviews all branches and PRs
+
+language: "typescript"
+framework: "react"
+
+# Review all pull requests
+review:
+  # Enable review for all branches
+  all_branches: true
+  
+  # Review settings
+  status_checks:
+    # Require review before merge
+    required: true
+
+# Code quality checks
+code_quality:
+  # Enable code quality checks
+  enabled: true
+  
+  # Security checks
+  security:
+    enabled: true
+    
+  # Performance checks
+  performance:
+    enabled: true
+
+# Documentation checks
+documentation:
+  # Check for documentation
+  enabled: true
+
+# Testing
+testing:
+  # Require tests for new features
+  required: true

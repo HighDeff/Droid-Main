@@ -1,0 +1,14 @@
+{
+  "name": "login_flow",
+  "savedAt": "2026-09-15T03:29:59.044Z",
+  "sequence": [
+    {
+      "id": "s1",
+      "name": "Click Login",
+      "action": "click",
+      "x": 500,
+      "y": 300
+    }
+  ],
+  "metadata": {}
+}

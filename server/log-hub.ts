@@ -22,6 +22,7 @@ export interface SystemLogEntry {
     | "Screen-Detection"
     | "Mobile-Automation"
     | "PC-PyAutoGUI"
+    | "AI-FileSummary"
     | "System";
   level: "INFO" | "WARN" | "ERROR" | "SUCCESS";
   message: string;

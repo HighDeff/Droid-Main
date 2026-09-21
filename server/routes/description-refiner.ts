@@ -460,3 +460,100 @@ Respond ONLY with a valid JSON array of objects matching this exact structure:
   }
 }
 
+export async function handleGenerateFileSummary(req: Request, res: Response) {
+  try {
+    const { fileName, mimeType, size } = req.body;
+    if (!fileName && !mimeType) {
+      return res.status(400).json({ success: false, error: "fileName or mimeType is required" });
+    }
+
+    const safeName = String(fileName || "Unnamed file").trim();
+    const safeMime = String(mimeType || "application/octet-stream").trim();
+
+    const client = getGenAiClient();
+    if (client) {
+      try {
+        const prompt = `You are a concise file summary generator.
+Write a 1-sentence summary of what this file is or contains based on its file name and type.
+
+File Name: "${safeName}"
+MIME Type: "${safeMime}"
+${size ? `File Size: ${size} bytes` : ""}
+
+STRICT CONSTRAINTS:
+1. Output MUST be exactly 1 sentence.
+2. Output MUST be strictly UNDER 10 words (maximum 9 words total).
+3. Do NOT include phrases like "This file is" or quotes.
+4. Output ONLY the plain text sentence.`;
+
+        const response = await client.models.generateContent({
+          model: "gemini-3.8-flash",
+          contents: prompt,
+          config: {
+            temperature: 0.2,
+          },
+        });
+
+        const rawText = response.text?.trim()?.replace(/^["']|["']$/g, "") || "";
+        if (rawText) {
+          const bounded = ensureUnderWordLimit(rawText, 9);
+          return res.json({
+            success: true,
+            summary: bounded.text,
+            wordCount: bounded.wordCount,
+            source: "gemini",
+          });
+        }
+      } catch (geminiError) {
+        console.warn("[File Summary] Gemini error, falling back to heuristic:", geminiError);
+      }
+    }
+
+    // Heuristic fallback
+    let fallbackText = "Document file containing workspace data.";
+    const lowerName = safeName.toLowerCase();
+    const ext = lowerName.split(".").pop() || "";
+
+    if (safeMime.includes("image") || ["jpg", "jpeg", "png", "webp", "gif", "svg"].includes(ext)) {
+      fallbackText = `Visual image asset for workspace design.`;
+    } else if (safeMime.includes("pdf") || ext === "pdf") {
+      fallbackText = `Portable PDF document with formatted records.`;
+    } else if (safeMime.includes("video") || ["mp4", "webm", "mov", "mkv"].includes(ext)) {
+      fallbackText = `Video recording of captured workflow events.`;
+    } else if (safeMime.includes("audio") || ["mp3", "wav", "m4a", "ogg"].includes(ext)) {
+      fallbackText = `Audio recording containing voice or media tracks.`;
+    } else if (safeMime.includes("sheet") || safeMime.includes("csv") || ["csv", "xlsx", "xls"].includes(ext)) {
+      fallbackText = `Tabular data spreadsheet with structured metrics.`;
+    } else if (safeMime.includes("presentation") || ["pptx", "ppt", "key"].includes(ext)) {
+      fallbackText = `Presentation slide deck for team reviews.`;
+    } else if (safeMime.includes("json") || ["json", "yaml", "yml", "xml"].includes(ext)) {
+      fallbackText = `Structured configuration data file for applications.`;
+    } else if (safeMime.includes("zip") || ["zip", "tar", "gz", "7z"].includes(ext)) {
+      fallbackText = `Compressed archive containing bundled project resources.`;
+    } else if (safeMime.includes("text") || ["txt", "md", "log"].includes(ext)) {
+      fallbackText = `Plain text notes and documentation log.`;
+    } else if (["ts", "tsx", "js", "jsx", "py", "rs", "go", "java"].includes(ext)) {
+      fallbackText = `Source code file containing program logic.`;
+    } else if (safeMime.includes("folder")) {
+      fallbackText = `Directory folder organizing related workspace files.`;
+    } else {
+      fallbackText = `Workspace file with ${safeName.split(".").slice(0, -1).join(" ") || safeName} records.`;
+    }
+
+    const bounded = ensureUnderWordLimit(fallbackText, 9);
+    return res.json({
+      success: true,
+      summary: bounded.text,
+      wordCount: bounded.wordCount,
+      source: "heuristic-engine",
+    });
+  } catch (error) {
+    console.error("[File Summary] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error generating file summary",
+      details: String(error),
+    });
+  }
+}
+

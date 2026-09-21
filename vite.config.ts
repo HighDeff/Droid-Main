@@ -1,20 +1,29 @@
 import react from '@vitejs/plugin-react-swc';
 import path from 'path';
 import { defineConfig } from 'vite';
-import { createServer } from './server/index';
 
 export default defineConfig(() => {
-  const apiApp = createServer();
-
   return {
     plugins: [
       react(),
       {
         name: 'api-server-middleware',
-        configureServer(server) {
+        async configureServer(server) {
+          const { createServer } = await import('./server/index');
+          const apiApp = createServer();
           server.middlewares.use((req, res, next) => {
             if (req.url?.startsWith('/api')) {
-              apiApp(req as any, res as any, next);
+              apiApp(req as any, res as any, (err: any) => {
+                if (err) {
+                  res.statusCode = 500;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: String(err) }));
+                } else if (!res.writableEnded) {
+                  res.statusCode = 404;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ error: 'Not found', path: req.url }));
+                }
+              });
             } else {
               next();
             }

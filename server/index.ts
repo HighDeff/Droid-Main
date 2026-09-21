@@ -66,6 +66,7 @@ import {
   handleRefineDescription,
   handleGetSamplePresets,
   handleBulkGenerateNamesDescriptions,
+  handleGenerateFileSummary,
 } from "./routes/description-refiner";
 import {
   handlePyAutoGUIBridge,
@@ -305,6 +306,7 @@ export function createServer() {
   app.post("/api/ai/refine-description", handleRefineDescription);
   app.get("/api/ai/refine-description/sample-presets", handleGetSamplePresets);
   app.post("/api/ai/bulk-generate-names-descriptions", handleBulkGenerateNamesDescriptions);
+  app.post("/api/ai/generate-file-summary", handleGenerateFileSummary);
 
   // PyAutoGUI & Subprocess Low-Level Execution Bridge
   app.post("/api/pyautogui/bridge", handlePyAutoGUIBridge);

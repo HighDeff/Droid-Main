@@ -879,3 +879,131 @@ Return a STRICT JSON response ONLY:
     };
   }
 }
+
+export interface FileSummaryResult {
+  summary: string;
+  wordCount: number;
+  sentenceCount: number;
+  source: "gemini" | "heuristic";
+}
+
+/**
+ * Generates a 1-sentence, under-10-word summary of a file's content based on its name or type.
+ */
+export async function generateFileSummary(params: {
+  fileName: string;
+  mimeType?: string;
+  size?: number;
+  modifiedTime?: string;
+}): Promise<FileSummaryResult> {
+  const { fileName = "", mimeType = "", size } = params;
+  const nameClean = fileName.trim() || "Untitled";
+
+  // Helper to ensure text meets strict constraint: 1 sentence, < 10 words (max 9 words)
+  const sanitizeSummary = (raw: string, fallbackSource: "gemini" | "heuristic"): FileSummaryResult => {
+    let text = raw
+      .replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, "")
+      .replace(/^(summary|description|file summary|file description):\s*/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // Take only the first sentence if multiple
+    const firstSentenceMatch = text.match(/^([^.!?]+[.!?]?)/);
+    if (firstSentenceMatch) {
+      text = firstSentenceMatch[1].trim();
+    }
+
+    // Split words
+    const words = text.split(/\s+/).filter(Boolean);
+    if (words.length >= 10) {
+      // Keep up to 8 words and append period
+      const sliced = words.slice(0, 8).join(" ");
+      text = sliced.replace(/[.,!?;:]*$/, "") + ".";
+    } else if (!/[.!?]$/.test(text)) {
+      text = text + ".";
+    }
+
+    const finalWords = text.replace(/[.!?]/g, "").split(/\s+/).filter(Boolean);
+
+    return {
+      summary: text,
+      wordCount: finalWords.length,
+      sentenceCount: 1,
+      source: fallbackSource,
+    };
+  };
+
+  const ai = getGenAIClient();
+
+  if (ai) {
+    try {
+      const prompt = `You are an AI assistant that writes ultra-concise file descriptions.
+Based on the file name and/or MIME type / metadata provided, generate a 1-sentence summary of the likely contents or purpose of this file:
+- File Name: "${nameClean}"
+- MIME Type: "${mimeType || "unknown"}"
+${size !== undefined ? `- File Size: ${size} bytes` : ""}
+
+CRITICAL STRICT CONSTRAINTS:
+1. The response MUST be exactly ONE complete sentence.
+2. The response MUST be strictly UNDER 10 WORDS total (between 4 and 9 words maximum).
+3. Do NOT include quotation marks, formatting, prefixes like "Summary:", or bullet points.
+4. Output ONLY the single sentence.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: prompt,
+      });
+
+      const outputText = response.text?.trim();
+      if (outputText) {
+        const result = sanitizeSummary(outputText, "gemini");
+        centralLogHub.addLog(
+          "AI-FileSummary",
+          "SUCCESS",
+          `Generated summary for "${nameClean}": "${result.summary}" (${result.wordCount} words)`,
+          { fileName: nameClean, wordCount: result.wordCount }
+        );
+        return result;
+      }
+    } catch (err) {
+      centralLogHub.addLog(
+        "AI-FileSummary",
+        "WARN",
+        `Gemini file summary fallback: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  // Heuristic rule-based summary fallback (guaranteed 1 sentence, strictly < 10 words)
+  const lowerName = nameClean.toLowerCase();
+  const lowerMime = (mimeType || "").toLowerCase();
+
+  let heuristicText = "";
+  if (lowerMime.includes("folder") || !lowerName.includes(".")) {
+    heuristicText = "Folder containing organized project documents.";
+  } else if (lowerMime.includes("image") || /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(lowerName)) {
+    heuristicText = "Visual image asset for graphic presentations.";
+  } else if (lowerMime.includes("spreadsheet") || lowerMime.includes("sheet") || /\.(xlsx?|csv|tsv)$/i.test(lowerName)) {
+    heuristicText = "Data spreadsheet tracking structured table records.";
+  } else if (lowerMime.includes("presentation") || lowerMime.includes("slides") || /\.(pptx?|key)$/i.test(lowerName)) {
+    heuristicText = "Slide presentation deck with overview topics.";
+  } else if (lowerMime.includes("pdf") || lowerName.endsWith(".pdf")) {
+    heuristicText = "Formatted PDF document with structured reference text.";
+  } else if (lowerMime.includes("document") || lowerMime.includes("word") || /\.(docx?|odt|rtf|txt|md)$/i.test(lowerName)) {
+    heuristicText = "Text document containing notes and guidelines.";
+  } else if (lowerMime.includes("video") || /\.(mp4|mov|avi|mkv|webm)$/i.test(lowerName)) {
+    heuristicText = "Media video recording of playback content.";
+  } else if (lowerMime.includes("audio") || /\.(mp3|wav|ogg|m4a|aac)$/i.test(lowerName)) {
+    heuristicText = "Recorded audio track with voice content.";
+  } else if (lowerMime.includes("json") || /\.(json|ya?ml|toml)$/i.test(lowerName)) {
+    heuristicText = "Structured configuration data for application settings.";
+  } else if (/\.(tsx?|jsx?|py|sh|html|css|sql|rs|go|c|cpp)$/i.test(lowerName)) {
+    heuristicText = "Source code module implementing application logic.";
+  } else if (/\.(zip|tar|gz|rar|7z)$/i.test(lowerName)) {
+    heuristicText = "Compressed archive packaging bundled resource files.";
+  } else {
+    heuristicText = "File asset storing user data records.";
+  }
+
+  return sanitizeSummary(heuristicText, "heuristic");
+}

@@ -225,6 +225,7 @@ function startSchedulerDaemon() {
       }
     }
   }, 5000);
+  schedulerInterval?.unref?.();
 }
 
 startSchedulerDaemon();

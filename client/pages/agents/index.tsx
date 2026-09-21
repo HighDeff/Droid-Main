@@ -23,6 +23,7 @@ import {
   Plus,
   ListChecks,
 } from "lucide-react";
+import { ensureAssistantSession } from "@/lib/assistant-session";
 
 type AgentType =
   | "scheduler"
@@ -65,7 +66,6 @@ export default function AgentsPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<AgentType | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [newTask, setNewTask] = useState("");
 
@@ -153,11 +153,22 @@ export default function AgentsPage() {
     setNewTask("");
     addLog(`Created new task: ${newTask}`);
 
-    // Auto-assign to scheduler if available
-    setTimeout(() => assignTask(task.id, "scheduler"), 100);
+    void assignTask(task.id, "scheduler", task.metadata.description);
   };
 
-  const assignTask = (taskId: string, agentType: AgentType) => {
+  const assignTask = async (
+    taskId: string,
+    agentType: AgentType,
+    suppliedDescription?: string,
+  ) => {
+    const startedAt = Date.now();
+    const description =
+      suppliedDescription ||
+      String(tasks.find((task) => task.id === taskId)?.metadata.description || "").trim();
+    if (!description) {
+      addLog(`Task ${taskId} has no instruction to process`);
+      return;
+    }
     setTasks((prev) =>
       prev.map((task) =>
         task.id === taskId
@@ -180,101 +191,64 @@ export default function AgentsPage() {
     );
 
     addLog(`Assigned task ${taskId} to ${agentType}`);
+    let success = false;
+    let result: string | undefined;
+    let error: string | undefined;
+    try {
+      const sessionId = await ensureAssistantSession({
+        project: { name: "Agent task queue" },
+      });
+      const planResponse = await fetch("/api/assistant/plans", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, instructionText: description }),
+      });
+      const planned = await planResponse.json().catch(() => null);
+      if (!planResponse.ok) throw new Error(planned?.error || "Plan preparation failed");
+      if (!planned?.plan?.id || !Array.isArray(planned?.plan?.steps)) {
+        throw new Error("Plan response did not contain reviewable steps");
+      }
+      success = true;
+      result = `Prepared ${planned.plan.steps.length} reviewable step(s) in plan ${planned.plan.id}; approval is still required.`;
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+    }
 
-    // Simulate task processing
-    setTimeout(() => completeTask(taskId), 2000);
-  };
-
-  const completeTask = (taskId: string) => {
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task) return;
-
-    const isSuccess = Math.random() > 0.2; // 80% success rate for demo
-
+    const duration = Date.now() - startedAt;
     setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId
+      prev.map((task) =>
+        task.id === taskId
           ? {
-              ...t,
-              status: isSuccess ? "completed" : "failed",
+              ...task,
+              status: success ? "completed" : "failed",
               updatedAt: new Date(),
-              result: isSuccess ? "Task completed successfully" : undefined,
-              error: isSuccess ? undefined : "Task failed due to unknown error",
+              result,
+              error,
             }
-          : t,
+          : task,
       ),
     );
-
-    if (task.assignedTo) {
-      setAgents((prev) =>
-        prev.map((agent) =>
-          agent.type === task.assignedTo
-            ? {
-                ...agent,
-                status: "idle",
-                lastActive: new Date(),
-                metrics: {
-                  tasksCompleted: agent.metrics.tasksCompleted + 1,
-                  successRate: isSuccess
-                    ? (agent.metrics.successRate *
-                        agent.metrics.tasksCompleted +
-                        100) /
-                      (agent.metrics.tasksCompleted + 1)
-                    : (agent.metrics.successRate *
-                        agent.metrics.tasksCompleted) /
-                      (agent.metrics.tasksCompleted + 1),
-                  avgProcessingTime: 0, // Simplified for demo
-                },
-              }
-            : agent,
-        ),
-      );
-    }
-
-    addLog(`Task ${taskId} ${isSuccess ? "completed" : "failed"}`);
-
-    // If this was a scheduling task, create new tasks
-    if (task.type === "scheduling" && isSuccess) {
-      createChildTasks(taskId);
-    }
-  };
-
-  const createChildTasks = (parentTaskId: string) => {
-    const childTasks: Task[] = [
-      {
-        id: `task-${Date.now()}-1`,
-        type: "analysis",
-        status: "pending",
-        priority: 2,
-        assignedTo: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        metadata: {
-          parentTaskId,
-          description: "Analyze game state",
-          dependencies: [],
-        },
-      },
-      {
-        id: `task-${Date.now()}-2`,
-        type: "execution",
-        status: "pending",
-        priority: 1,
-        assignedTo: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        metadata: {
-          parentTaskId,
-          description: "Execute game actions",
-          dependencies: [`task-${Date.now()}-1`],
-        },
-      },
-    ];
-
-    setTasks((prev) => [...childTasks, ...prev]);
-    childTasks.forEach((task) =>
-      addLog(`Created child task: ${task.metadata.description}`),
+    setAgents((prev) =>
+      prev.map((agent) => {
+        if (agent.type !== agentType) return agent;
+        const completed = agent.metrics.tasksCompleted + 1;
+        return {
+          ...agent,
+          status: success ? "idle" : "error",
+          lastActive: new Date(),
+          metrics: {
+            tasksCompleted: completed,
+            successRate:
+              (agent.metrics.successRate * agent.metrics.tasksCompleted + (success ? 100 : 0)) /
+              completed,
+            avgProcessingTime:
+              (agent.metrics.avgProcessingTime * agent.metrics.tasksCompleted + duration) /
+              completed,
+          },
+        };
+      }),
     );
+    addLog(`Task ${taskId} ${success ? "prepared for review" : `failed: ${error}`}`);
   };
 
   const getStatusColor = (status: string) => {

@@ -9,12 +9,20 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import os from "os";
+import { dispatchActionToPython } from "./dual-ai-pipeline";
+import {
+  AUTOMATION_BOUNDS,
+  validateHotkey,
+  validateKey,
+  validateText,
+} from "../automation-adapters";
+import { validatePoint } from "../../shared/coordinates";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export interface BridgeActionItem {
   id?: string;
-  type: "click" | "move" | "double_click" | "right_click" | "drag" | "type" | "hotkey" | "press_key" | "launch_app" | "run_command" | "wait";
+  type: "click" | "move" | "double_click" | "right_click" | "drag" | "type" | "clear_and_type" | "hotkey" | "press_key" | "wait" | "scroll";
   x?: number;
   y?: number;
   toX?: number;
@@ -90,6 +98,62 @@ const bridgeLogs: BridgeLogEntry[] = [
 let isExecutionBridgePaused = false;
 let lastHeartbeatTimestamp = Date.now();
 const runningChildProcesses = new Set<any>();
+class BridgeValidationError extends Error {}
+const MAX_WAIT_MS = 120_000;
+const MAX_TOTAL_WAIT_MS = 120_000;
+const MAX_BRIDGE_DURATION_MS = 180_000;
+
+function validateAction(action: BridgeActionItem) {
+  const coordinateActions = new Set(["click", "move", "double_click", "right_click", "drag", "scroll"]);
+  const optionalCoordinateActions = new Set(["type", "clear_and_type"]);
+  const hasCoordinate = action.x !== undefined || action.y !== undefined;
+  if (coordinateActions.has(action.type) || (optionalCoordinateActions.has(action.type) && hasCoordinate)) {
+    if (typeof action.x !== "number" || !Number.isFinite(action.x) || typeof action.y !== "number" || !Number.isFinite(action.y)) {
+      throw new BridgeValidationError("Bridge coordinates must be finite numbers");
+    }
+    validatePoint({ x: action.x, y: action.y }, AUTOMATION_BOUNDS, "bridge coordinates");
+  }
+  if (action.type === "drag") {
+    if (typeof action.toX !== "number" || !Number.isFinite(action.toX) || typeof action.toY !== "number" || !Number.isFinite(action.toY)) {
+      throw new BridgeValidationError("Bridge drag end coordinates must be finite numbers");
+    }
+    validatePoint({ x: action.toX, y: action.toY }, AUTOMATION_BOUNDS, "bridge drag end coordinates");
+  }
+  if (action.type === "type" || action.type === "clear_and_type") validateText(String(action.text ?? ""));
+  if (action.type === "press_key") validateKey(String(action.key ?? ""));
+  if (action.type === "hotkey") validateHotkey(String(action.key ?? ""));
+  if (action.type === "wait") {
+    const delayMs = Number(action.delayMs);
+    if (typeof action.delayMs !== "number" || !Number.isFinite(delayMs) || delayMs < 0 || delayMs > MAX_WAIT_MS) {
+      throw new BridgeValidationError(`Wait must be a finite number between 0 and ${MAX_WAIT_MS}ms`);
+    }
+  }
+}
+
+function launchApplication(application: string) {
+  let allowlist: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(process.env.AUTOMATION_APP_ALLOWLIST || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid");
+    allowlist = parsed as Record<string, unknown>;
+  } catch {
+    throw new BridgeValidationError("AUTOMATION_APP_ALLOWLIST must be a JSON object of approved application names to executable paths");
+  }
+  const executable = Object.prototype.hasOwnProperty.call(allowlist, application)
+    ? allowlist[application]
+    : undefined;
+  if (!executable || typeof executable !== "string") {
+    throw new BridgeValidationError(`Application "${application}" is not in the server-side allowlist`);
+  }
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(executable, [], { detached: true, stdio: "ignore", shell: false });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
 
 export function addBridgeLog(
   action: string,
@@ -274,181 +338,106 @@ export async function executePyAutoGUIActions(actions: any[]): Promise<{ success
  * Low-level execution endpoint for single or batch PyAutoGUI actions
  */
 export const handlePyAutoGUIBridge: RequestHandler = async (req, res) => {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once("aborted", abort);
+  res.once("close", abort);
+  const deadline = setTimeout(abort, MAX_BRIDGE_DURATION_MS);
+  deadline.unref();
   try {
-    const {
-      action,
-      actions = [],
-      intercept = false,
-      companionCommand,
-      launchApp,
-      targetPosition = { x: 960, y: 540 },
-      text,
-      key,
-    } = req.body;
-
-    const actionList: BridgeActionItem[] = actions.length > 0
-      ? actions
-      : [
-          {
-            type: action || "click",
-            x: targetPosition.x,
-            y: targetPosition.y,
-            text,
-            key,
-            command: companionCommand,
-          },
-        ];
-
-    // Execute companion command or app launch via subprocess if requested
-    if (companionCommand) {
-      addBridgeLog("COMPANION_COMMAND", "success", `Launching secondary command: ${companionCommand}`);
-      try {
-        const parts = companionCommand.split(" ");
-        const bin = parts[0];
-        const args = parts.slice(1);
-        spawn(bin, args, { detached: true, stdio: "ignore" }).unref();
-      } catch (cmdErr: any) {
-        addBridgeLog("COMPANION_COMMAND", "warning", `Command execution warning: ${cmdErr.message}`);
-      }
+    if (req.body.approved !== true) {
+      return res.status(400).json({ success: false, error: "Explicit bridge approval is required" });
     }
-
-    if (launchApp) {
-      addBridgeLog("LAUNCH_APP", "success", `Opening application: ${launchApp}`);
-      try {
-        spawn(launchApp, [], { detached: true, stdio: "ignore" }).unref();
-      } catch (appErr: any) {
-        addBridgeLog("LAUNCH_APP", "warning", `App launch fallback: ${appErr.message}`);
-      }
+    if (req.body.companionCommand) {
+      return res.status(400).json({
+        success: false,
+        error: "Arbitrary companion commands are disabled; choose an allowlisted device action instead",
+      });
     }
-
-    // Build PyAutoGUI Python code to handle interaction natively
-    const pythonLines: string[] = [
-      "import sys",
-      "import time",
-      "try:",
-      "    import pyautogui",
-      "    pyautogui.FAILSAFE = False",
-      "    pyautogui.PAUSE = 0.02",
-      "except Exception as e:",
-      "    pyautogui = None",
-      "",
-    ];
-
-    for (const act of actionList) {
-      const x = act.x ?? 960;
-      const y = act.y ?? 540;
-      const actText = (act.text || "").replace(/"/g, '\\"');
-      const actKey = act.key || "enter";
-
-      if (act.type === "click") {
-        pythonLines.push(`if pyautogui:`);
-        pythonLines.push(`    pyautogui.moveTo(${x}, ${y}, duration=0.15)`);
-        pythonLines.push(`    pyautogui.click(${x}, ${y})`);
-        pythonLines.push(`print("CLICKED_${x}_${y}")`);
-      } else if (act.type === "double_click") {
-        pythonLines.push(`if pyautogui:`);
-        pythonLines.push(`    pyautogui.doubleClick(${x}, ${y})`);
-        pythonLines.push(`print("DOUBLE_CLICKED_${x}_${y}")`);
-      } else if (act.type === "right_click") {
-        pythonLines.push(`if pyautogui:`);
-        pythonLines.push(`    pyautogui.rightClick(${x}, ${y})`);
-        pythonLines.push(`print("RIGHT_CLICKED_${x}_${y}")`);
-      } else if (act.type === "move") {
-        pythonLines.push(`if pyautogui:`);
-        pythonLines.push(`    pyautogui.moveTo(${x}, ${y}, duration=0.2)`);
-        pythonLines.push(`print("MOVED_${x}_${y}")`);
-      } else if (act.type === "drag") {
-        const toX = act.toX ?? x + 50;
-        const toY = act.toY ?? y + 50;
-        pythonLines.push(`if pyautogui:`);
-        pythonLines.push(`    pyautogui.moveTo(${x}, ${y})`);
-        pythonLines.push(`    pyautogui.dragTo(${toX}, ${toY}, duration=0.3, button='left')`);
-        pythonLines.push(`print("DRAGGED_${x}_${y}_TO_${toX}_${toY}")`);
-      } else if (act.type === "type") {
-        pythonLines.push(`if pyautogui:`);
-        pythonLines.push(`    pyautogui.typewrite("${actText}", interval=0.03)`);
-        pythonLines.push(`print("TYPED_${actText}")`);
-      } else if (act.type === "hotkey") {
-        const keys = (act.key || "ctrl+a").split("+").map((k) => `'${k.trim()}'`).join(", ");
-        pythonLines.push(`if pyautogui:`);
-        pythonLines.push(`    pyautogui.hotkey(${keys})`);
-        pythonLines.push(`print("HOTKEY_${act.key}")`);
-      } else if (act.type === "press_key") {
-        pythonLines.push(`if pyautogui:`);
-        pythonLines.push(`    pyautogui.press('${actKey}')`);
-        pythonLines.push(`print("PRESSED_${actKey}")`);
-      } else if (act.type === "wait") {
-        const delaySec = (act.delayMs ?? 500) / 1000;
-        pythonLines.push(`time.sleep(${delaySec})`);
-      }
+    const target = req.body.targetPosition ?? {};
+    const suppliedActions: BridgeActionItem[] | undefined = Array.isArray(req.body.actions)
+      ? req.body.actions
+      : undefined;
+    const launchOnly =
+      req.body.action === "launch_app" && Boolean(req.body.launchApp) && suppliedActions === undefined;
+    const actionList: BridgeActionItem[] = suppliedActions ?? (launchOnly
+      ? []
+      : [{
+          type: req.body.action,
+          x: target.x,
+          y: target.y,
+          text: req.body.text,
+          key: req.body.key,
+          delayMs: req.body.delayMs,
+          toX: req.body.toX ?? req.body.dragEndPosition?.x,
+          toY: req.body.toY ?? req.body.dragEndPosition?.y,
+        }]);
+    const supported = new Set(["click", "move", "double_click", "right_click", "drag", "type", "clear_and_type", "hotkey", "press_key", "wait", "scroll"]);
+    if (actionList.length > 100) {
+      return res.status(400).json({ success: false, error: "The bridge is limited to 100 reviewed actions per request" });
     }
-
-    const script = pythonLines.join("\n");
-    const startTime = Date.now();
-    const pyResult = await executePythonPyAutoGUI(script);
-    const durationMs = Date.now() - startTime;
-    const currentPid = 14200 + Math.floor(Math.random() * 500);
-
-    // Add high-fidelity stdout/stderr logs for individual commands
-    for (const act of actionList) {
-      const summaryDetail = act.type === "click"
-        ? `[MOUSE] Click at coordinate (${act.x ?? 960}, ${act.y ?? 540})`
-        : act.type === "type"
-        ? `[KEYBOARD] Type text "${act.text || ""}"`
-        : act.type === "drag"
-        ? `[MOUSE] Drag from (${act.x ?? 960}, ${act.y ?? 540}) to (${act.toX ?? (act.x ?? 960) + 50}, ${act.toY ?? (act.y ?? 540) + 50})`
-        : act.type === "hotkey"
-        ? `[KEYBOARD] Hotkey chord: ${act.key || "ctrl+a"}`
-        : act.type === "press_key"
-        ? `[KEYBOARD] Keypress: ${act.key || "enter"}`
-        : `[COMMAND] Action type: ${act.type}`;
-
-      addBridgeLog(
-        act.type.toUpperCase(),
-        pyResult.error ? "warning" : "success",
-        summaryDetail,
-        {
-          type: "command",
-          command: `pyautogui.${act.type}(${act.x ?? 960}, ${act.y ?? 540})`,
-          stdout: pyResult.output,
-          stderr: pyResult.error,
-          durationMs: Math.round(durationMs / Math.max(1, actionList.length)),
-          pid: currentPid,
-          exitCode: pyResult.error ? 0 : 0,
-        }
+    if (!launchOnly && actionList.some((item) => !item || typeof item !== "object" || !supported.has(item.type))) {
+      return res.status(400).json({ success: false, error: "The bridge action is missing or unsupported" });
+    }
+    try {
+      actionList.forEach(validateAction);
+      const totalWaitMs = actionList.reduce(
+        (total, item) => total + (item.type === "wait" ? Number(item.delayMs) : 0),
+        0,
       );
-    }
-
-    addBridgeLog(
-      action || "BATCH_EXECUTION",
-      pyResult.error ? "warning" : "success",
-      `Dispatched ${actionList.length} action(s) via PyAutoGUI bridge in ${durationMs}ms. Output: ${pyResult.output}`,
-      {
-        type: "stdout",
-        stdout: pyResult.output,
-        stderr: pyResult.error,
-        durationMs,
-        pid: currentPid,
+      if (totalWaitMs > MAX_TOTAL_WAIT_MS) {
+        throw new BridgeValidationError(`Combined waits must not exceed ${MAX_TOTAL_WAIT_MS}ms`);
       }
+    } catch (cause) {
+      if (cause instanceof BridgeValidationError) throw cause;
+      throw new BridgeValidationError(cause instanceof Error ? cause.message : String(cause));
+    }
+    if (req.body.launchApp) await launchApplication(String(req.body.launchApp));
+    const results = [];
+    for (const item of actionList) {
+      const result = await dispatchActionToPython({
+        id: item.id,
+        action: item.type,
+        x: item.x,
+        y: item.y,
+        textPayload: item.type === "hotkey" ? undefined : item.text,
+        keyPayload: item.key,
+        delayMs: item.delayMs,
+        dragEndPosition:
+          item.toX === undefined || item.toY === undefined
+            ? undefined
+            : { x: item.toX, y: item.toY },
+        driftPx: 0,
+      }, controller.signal);
+      results.push(result);
+      if (!result.success) break;
+    }
+    const success = results.every((result) => result.success);
+    addBridgeLog(
+      actionList.map((item) => item.type).join(",") || "LAUNCH_APP",
+      success ? "success" : "error",
+      success ? `Executed ${actionList.length} native action(s)` : "At least one native action failed",
     );
-
-    res.json({
-      success: true,
-      executedCount: actionList.length,
+    res.status(success ? 200 : 502).json({
+      success,
+      executedCount: results.filter((result) => result.success).length,
       actions: actionList,
-      pyResult,
-      durationMs,
-      pid: currentPid,
-      intercepted: intercept,
-      companionExecuted: !!companionCommand || !!launchApp,
+      results,
+      companionExecuted: Boolean(req.body.launchApp),
       timestamp: Date.now(),
     });
-  } catch (err: any) {
-    addBridgeLog("BRIDGE_ERROR", "error", err.message, {
-      type: "stderr",
-      stderr: err.stack || err.message,
-    });
-    res.status(500).json({ success: false, error: err.message });
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    addBridgeLog("BRIDGE_ERROR", "error", message);
+    if (cause instanceof BridgeValidationError) {
+      res.status(400).json({ success: false, error: message });
+    } else {
+      res.status(500).json({ success: false, error: "The bridge request failed" });
+    }
+  } finally {
+    clearTimeout(deadline);
+    req.off("aborted", abort);
+    res.off("close", abort);
   }
 };
 
@@ -1517,6 +1506,4 @@ export const handleAiAutoRecordStep: RequestHandler = async (req, res) => {
     message: `Recorded step #${stepNumber} successfully.`,
   });
 };
-
-
 

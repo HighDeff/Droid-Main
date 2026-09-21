@@ -156,14 +156,24 @@ pip install -r requirements.txt
 cd ..
 ```
 
-### Step 4: Configure Environment (Optional)
+### Step 4: Configure Vision Environment
 
-Create `.env` file:
+Set an explicit provider before using screenshot perception. The application
+fails closed when `OLLAMA_ENDPOINT` is absent so screen frames are never sent to
+an undeclared service. Create a `.env` file with the provider you approve:
 
 ```env
 OLLAMA_ENDPOINT=https://remote.quantumpass.io/ollama/api/chat
 OLLAMA_MODEL=qwen2.5vl:7b
 ```
+
+Protected browser APIs also require `ASSISTANT_API_KEY`. A trusted login or
+bootstrap flow must exchange that key with `POST /api/browser-session`; loading
+the HTML alone never grants a device-control session.
+
+When `TRUST_PROXY_HTTPS=true`, also set `ASSISTANT_PUBLIC_ORIGIN` to the exact
+public origin (for example, `https://assistant.example.com`). Forwarded host and
+protocol headers are never used to authorize a browser-session cookie.
 
 #### OCR providers
 

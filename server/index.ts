@@ -5,6 +5,8 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { spawn } from "child_process";
+import crypto from "node:crypto";
+import { TLSSocket } from "node:tls";
 
 // === Master App (unified_ai_master_app1) core imports ===
 import { handleDemo } from "./routes/demo";
@@ -14,7 +16,7 @@ import {
 } from "./routes/screen-capture";
 import { handleAnalyzeScreenshot as handleMasterAnalyzeScreenshot } from "./routes/analyze-screenshot";
 import { centralLogHub } from "./log-hub";
-import { assistantRouter } from "./routes/assistant";
+import { createAssistantRouter } from "./routes/assistant";
 import { assistantSourcesRouter } from "./routes/assistant-sources";
 import { analysisRouter } from "./routes/analysis";
 import { assistantPlansRouter } from "./routes/assistant-plans";
@@ -52,6 +54,7 @@ import {
   handleAdaptiveRetry,
   handleReplayDriftActions,
   handleQwenGuideStep,
+  configureLatestFrameProvider,
 } from "./routes/dual-ai-pipeline";
 import {
   handleVerifyStep,
@@ -128,13 +131,76 @@ import {
 } from "./routes/video-breakdown-and-integrity";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export const BROWSER_SESSION_COOKIE = "droid_browser_session";
+
+export interface ServerOptions {
+  browserSessionToken?: string;
+}
+
+function readCookie(header: string | undefined, name: string) {
+  if (!header) return "";
+  for (const part of header.split(";")) {
+    const [key, ...value] = part.trim().split("=");
+    if (key !== name) continue;
+    try {
+      return decodeURIComponent(value.join("="));
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function equalCredential(leftValue: string, rightValue: string) {
+  const left = crypto.createHash("sha256").update(leftValue).digest();
+  const right = crypto.createHash("sha256").update(rightValue).digest();
+  return crypto.timingSafeEqual(left, right);
+}
+
+function isSameOriginRequest(req: express.Request) {
+  const source = req.headers.origin ?? req.headers.referer;
+  if (!source) return false;
+  const trustProxy = process.env.TRUST_PROXY_HTTPS === "true";
+  try {
+    const configuredOrigin = process.env.ASSISTANT_PUBLIC_ORIGIN?.trim();
+    if (trustProxy && !configuredOrigin) return false;
+    const expectedOrigin = configuredOrigin
+      ? new URL(configuredOrigin).origin
+      : req.headers.host
+        ? `${req.socket instanceof TLSSocket || process.env.BROWSER_FACING_HTTPS === "true" ? "https" : "http"}://${req.headers.host}`
+        : "";
+    return Boolean(expectedOrigin) && new URL(String(source)).origin === expectedOrigin;
+  } catch {
+    return false;
+  }
+}
 
 // In-memory store for last synced real frame (AppBrief HUD sync)
 let lastSyncedFrame: string | null = null;
 let lastSyncedTimestamp = Date.now();
 
-export function createServer() {
+export function createServer(options: ServerOptions = {}) {
   const app = express();
+  const issueBrowserSession = (req: express.Request, res: express.Response) => {
+    if (!options.browserSessionToken) return;
+    const secure =
+      process.env.BROWSER_FACING_HTTPS === "true" ||
+      process.env.TRUST_PROXY_HTTPS === "true" ||
+      process.env.ASSISTANT_PUBLIC_ORIGIN?.startsWith("https://") === true ||
+      req.socket instanceof TLSSocket;
+    res.cookie(BROWSER_SESSION_COOKIE, options.browserSessionToken, {
+      httpOnly: true,
+      sameSite: "strict",
+      secure,
+      path: "/",
+      maxAge: 8 * 60 * 60 * 1_000,
+    });
+  };
+  configureLatestFrameProvider(() =>
+    lastSyncedFrame
+      ? { imageData: lastSyncedFrame, timestamp: lastSyncedTimestamp }
+      : null,
+  );
 
   // Middleware - merge master security + appbrief permissive CORS
   // Use master security cors if configured, fallback to permissive
@@ -146,8 +212,76 @@ export function createServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+  app.post("/api/browser-session", (req, res) => {
+    const expected = process.env.ASSISTANT_API_KEY;
+    if (!expected || !options.browserSessionToken) {
+      return res.status(503).json({ success: false, error: "Browser session exchange is not configured" });
+    }
+    const bearer = req.headers.authorization?.startsWith("Bearer ")
+      ? req.headers.authorization.slice(7)
+      : undefined;
+    const supplied = String(
+      req.headers["x-assistant-api-key"] ??
+        req.headers["x-api-key"] ??
+        bearer ??
+        req.body?.apiKey ??
+        "",
+    );
+    if (!supplied || !equalCredential(expected, supplied)) {
+      return res.status(401).json({ success: false, error: "Invalid assistant API key" });
+    }
+    issueBrowserSession(req, res);
+    return res.json({ success: true });
+  });
+  app.use("/api", (req, res, next) => {
+    if (req.path === "/ping" || req.path === "/health" || req.path === "/browser-session") return next();
+    const expected = process.env.ASSISTANT_API_KEY;
+    if (!expected && !options.browserSessionToken) {
+      return res.status(503).json({
+        success: false,
+        error: "Protected APIs require ASSISTANT_API_KEY or a browser session token",
+      });
+    }
+    const bearer = req.headers.authorization?.startsWith("Bearer ")
+      ? req.headers.authorization.slice(7)
+      : undefined;
+    const supplied = String(
+      req.headers["x-assistant-api-key"] ?? req.headers["x-api-key"] ?? bearer ?? "",
+    );
+    const browserSession = readCookie(req.headers.cookie, BROWSER_SESSION_COOKIE);
+    if (
+      !expected &&
+      process.env.NODE_ENV !== "production" &&
+      options.browserSessionToken &&
+      isSameOriginRequest(req)
+    ) {
+      issueBrowserSession(req, res);
+      res.locals.apiAuthenticated = true;
+      return next();
+    }
+    const credentials: Array<{ credential: string; secret: string }> = [];
+    if (expected && supplied) credentials.push({ credential: supplied, secret: expected });
+    if (options.browserSessionToken && browserSession && isSameOriginRequest(req)) {
+      credentials.push({ credential: browserSession, secret: options.browserSessionToken });
+    }
+    if (!credentials.some(({ credential, secret }) => equalCredential(secret, credential))) {
+      return res.status(401).json({ success: false, error: "Invalid assistant API key" });
+    }
+    res.locals.apiAuthenticated = true;
+    next();
+  });
+
   // === Master assistant routes (protected) ===
-  app.use("/api/assistant", requireApiAccess, assistantRouter);
+  app.use(
+    "/api/assistant",
+    requireApiAccess,
+    createAssistantRouter({
+      getLatestFrame: () =>
+        lastSyncedFrame
+          ? { imageData: lastSyncedFrame, timestamp: lastSyncedTimestamp }
+          : null,
+    }),
+  );
   app.use("/api/assistant/sources", requireApiAccess, assistantSourcesRouter);
   app.use("/api/assistant/analysis", requireApiAccess, analysisRouter);
   app.use("/api/assistant/plans", requireApiAccess, assistantPlansRouter);
@@ -199,6 +333,7 @@ export function createServer() {
           success: true,
           imageData: lastSyncedFrame,
           timestamp: lastSyncedTimestamp,
+          ageMs: Math.max(0, Date.now() - lastSyncedTimestamp),
           source: "live_hud_sync",
         });
       }
@@ -210,6 +345,7 @@ export function createServer() {
         success: true,
         imageData: null,
         timestamp: Date.now(),
+        ageMs: 0,
         source: "standby",
         message: "Waiting for HUD screen share frame",
       });

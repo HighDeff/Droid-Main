@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Bookmark, CalendarClock, RefreshCw, ShieldCheck, ArrowUpDown } from "lucide-react";
 import type { AssistantWorkflow } from "@shared/assistant";
 import { Badge } from "@/components/ui/badge";
@@ -50,6 +50,15 @@ export function WorkflowLibraryPanel() {
     });
   }, [workflows, sortBy]);
 
+  useEffect(() => {
+    const updateSession = (event: Event) => {
+      const next = (event as CustomEvent<{ sessionId?: string }>).detail?.sessionId;
+      if (next) setSessionId(next);
+    };
+    window.addEventListener("assistant-session-changed", updateSession);
+    return () => window.removeEventListener("assistant-session-changed", updateSession);
+  }, []);
+
   const loadWorkflows = async () => {
     setError("");
     setLoading(true);
@@ -78,8 +87,8 @@ export function WorkflowLibraryPanel() {
       <CardHeader>
         <CardTitle>Workflow library</CardTitle>
         <CardDescription className="text-slate-400">
-          Saved operation packs, checkpoints, schedules, and progress. Execution
-          is intentionally disabled.
+          Successful confirmed runs are saved here with schedules, checkpoints,
+          progress, and measured success history.
         </CardDescription>
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
           <div className="flex flex-1 gap-2 min-w-[240px]">

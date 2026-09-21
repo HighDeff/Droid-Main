@@ -1,4 +1,4 @@
-import type { FrameAnalysis } from "@shared/assistant";
+import type { FrameAnalysis } from "../shared/assistant";
 
 const createId = () =>
   `analysis_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;

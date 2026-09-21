@@ -39,6 +39,66 @@ export interface ScreenPerceptionReport {
   primarySuggestion: string;
   confidence: number;
   rawAnalysis?: string;
+  degraded?: boolean;
+  error?: string;
+}
+
+export function resolveAIEndpoint(candidate?: string): URL {
+  const configured = process.env.OLLAMA_ENDPOINT;
+  if (!configured) {
+    throw new Error(
+      "OLLAMA_ENDPOINT must be configured before screen frames are sent to a vision provider",
+    );
+  }
+  const selected = process.env.ALLOW_CUSTOM_AI_ENDPOINTS === "true" && candidate
+    ? candidate
+    : configured;
+  let selectedUrl: URL;
+  try {
+    selectedUrl = new URL(selected);
+  } catch {
+    throw new Error("The configured AI endpoint is not a valid URL");
+  }
+  if (!new Set(["http:", "https:"]).has(selectedUrl.protocol)) {
+    throw new Error("AI endpoint must use HTTP or HTTPS");
+  }
+  if (selected !== configured) {
+    const allowed = [
+      configured,
+      ...(process.env.AI_ENDPOINT_ALLOWLIST ?? "").split(","),
+    ]
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value, index) => {
+        try {
+          return new URL(value).href;
+        } catch {
+          throw new Error(`Invalid AI endpoint allowlist entry at index ${index}`);
+        }
+      });
+    if (!allowed.includes(selectedUrl.href)) {
+      throw new Error("The requested AI endpoint is not in the server-side allowlist");
+    }
+  }
+  return selectedUrl;
+}
+
+function createAnalysisSignal(parent?: AbortSignal) {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new Error("Vision analysis timed out")),
+    30_000,
+  );
+  const abortFromParent = () => controller.abort(parent?.reason);
+  if (parent?.aborted) abortFromParent();
+  else parent?.addEventListener("abort", abortFromParent, { once: true });
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      parent?.removeEventListener("abort", abortFromParent);
+    },
+  };
 }
 
 export class QwenVisionPerceptionEngine {
@@ -50,6 +110,7 @@ export class QwenVisionPerceptionEngine {
     endpoint?: string,
     model = "qwen2.5vl:7b",
     browserContext?: AiMonitorBrowserContext | null,
+    signal?: AbortSignal,
   ): Promise<ScreenPerceptionReport> {
     const resolvedEndpoint = resolveAiEndpoint(endpoint);
     if (!resolvedEndpoint) {
@@ -93,6 +154,7 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
       : systemPrompt;
 
     try {
+      const endpointUrl = resolveAIEndpoint(resolvedEndpoint);
       const payload = {
         model,
         messages: [
@@ -108,33 +170,53 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
         format: "json",
       };
 
-      const response = await fetch(resolvedEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(30000),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Ollama Vision API returned ${response.statusText}`);
+      const requestSignal = createAnalysisSignal(signal);
+      let response: Response;
+      let data: any;
+      try {
+        response = await fetch(endpointUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: requestSignal.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Ollama Vision API returned ${response.statusText}`);
+        }
+        data = await response.json();
+      } finally {
+        requestSignal.cleanup();
       }
-
-      const data = await response.json();
-      const rawContent = data.message?.content || "{}";
+      const providerContent = data.message?.content;
+      const normalizedContent =
+        typeof providerContent === "string" ? providerContent.trim() : "";
+      const contentMissing = !normalizedContent || normalizedContent === "{}";
+      const rawContent = normalizedContent || "{}";
 
       let parsed: any;
+      let parsedFailed = contentMissing;
       try {
         const cleaned = rawContent
           .replace(/```json/g, "")
           .replace(/```/g, "")
           .trim();
         parsed = JSON.parse(cleaned);
+        if (!parsed || typeof parsed !== "object" || Object.keys(parsed).length === 0) {
+          parsedFailed = true;
+        }
       } catch (parseErr) {
+        parsedFailed = true;
         console.warn(
-          "Failed to parse pure JSON from vision response, using fallback heuristic",
+          "Failed to parse vision JSON; returning a degraded report",
           parseErr,
         );
-        parsed = this.fallbackExtraction(rawContent);
+      }
+
+      if (parsedFailed) {
+        const error = contentMissing
+          ? "Vision returned an empty analysis payload"
+          : `Vision returned invalid JSON (${rawContent.length} characters)`;
+        return { ...this.generateFallbackReport(error), rawAnalysis: rawContent };
       }
 
       const report: ScreenPerceptionReport = {
@@ -164,7 +246,7 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
                 interactive: el.interactive !== false,
                 textValue: el.textValue || "",
               }))
-            : this.generateDefaultElements(),
+            : [],
           browserContext,
         ),
         feedbackPosition: parsed.feedbackPosition || { x: 960, y: 540 },
@@ -174,6 +256,7 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
         confidence:
           typeof parsed.confidence === "number" ? parsed.confidence : 0.88,
         rawAnalysis: rawContent,
+        degraded: false,
       };
 
       this.lastDescription = report.screenDescription;
@@ -380,13 +463,15 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
   private generateFallbackReport(errorMsg: string): ScreenPerceptionReport {
     return {
       timestamp: Date.now(),
-      screenDescription: `Perception online. Live frame captured. (${errorMsg})`,
-      activeWindow: "Active Target App",
-      visualStateChange: "Ready for user commands",
-      elements: this.generateDefaultElements(),
+      screenDescription: "Vision provider unavailable; the screen has not been interpreted.",
+      activeWindow: "Unknown",
+      visualStateChange: "Unverified",
+      elements: [],
       feedbackPosition: { x: 960, y: 540 },
-      primarySuggestion: "Click on the live HUD or define a sequence.",
-      confidence: 0.8,
+      primarySuggestion: "Reconnect vision or use explicitly reviewed coordinates.",
+      confidence: 0,
+      degraded: true,
+      error: errorMsg,
     };
   }
 }

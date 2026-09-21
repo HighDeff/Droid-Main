@@ -22,6 +22,7 @@ function hasValidApiKey(req: Request, expected: string): boolean {
 }
 
 export const requireApiAccess: RequestHandler = (req, res, next) => {
+  if (res.locals?.apiAuthenticated === true) return next();
   if (req.path === "/ping" || req.path === "/demo") return next();
   const expected = configuredApiKey();
   if (expected && hasValidApiKey(req, expected)) return next();

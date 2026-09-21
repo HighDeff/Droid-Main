@@ -1,33 +1,32 @@
 import react from '@vitejs/plugin-react-swc';
+import crypto from 'node:crypto';
 import path from 'path';
 import { defineConfig } from 'vite';
 
-export default defineConfig(() => {
+export default defineConfig(async () => {
+  const browserSessionToken = crypto.randomBytes(32).toString('base64url');
+  const { createServer } = await import('./server/index');
+  const apiApp = createServer({ browserSessionToken });
+  const mountApplication = (server: { middlewares: { use: (handler: any) => void } }) => {
+    server.middlewares.use((req: any, res: any, next: any) => {
+      if (/^\/api(?:\/|[?]|$)/.test(req.url ?? '')) {
+        apiApp(req, res, next);
+      } else {
+        next();
+      }
+    });
+  };
+
   return {
     plugins: [
       react(),
       {
         name: 'api-server-middleware',
-        async configureServer(server) {
-          const { createServer } = await import('./server/index');
-          const apiApp = createServer();
-          server.middlewares.use((req, res, next) => {
-            if (req.url?.startsWith('/api')) {
-              apiApp(req as any, res as any, (err: any) => {
-                if (err) {
-                  res.statusCode = 500;
-                  res.setHeader('Content-Type', 'application/json');
-                  res.end(JSON.stringify({ error: String(err) }));
-                } else if (!res.writableEnded) {
-                  res.statusCode = 404;
-                  res.setHeader('Content-Type', 'application/json');
-                  res.end(JSON.stringify({ error: 'Not found', path: req.url }));
-                }
-              });
-            } else {
-              next();
-            }
-          });
+        configureServer(server) {
+          mountApplication(server);
+        },
+        configurePreviewServer(server) {
+          mountApplication(server);
         },
       },
     ],

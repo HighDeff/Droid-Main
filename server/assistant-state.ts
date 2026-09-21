@@ -10,7 +10,10 @@ import {
   UserInstruction,
   WaitCondition,
   WaitConditionStatusEvent,
-} from "@shared/assistant";
+  AssistantExecution,
+  FrameAnalysis,
+} from "../shared/assistant";
+import type { RecordedSession } from "../shared/recordings";
 import { DurableStore, type StorageOptions } from "./durable-store";
 
 type ResourceMap = {
@@ -23,6 +26,9 @@ type ResourceMap = {
   workflows: AssistantWorkflow;
   waitConditions: WaitCondition;
   conditionEvents: WaitConditionStatusEvent;
+  executions: AssistantExecution;
+  analyses: FrameAnalysis;
+  recordings: RecordedSession;
 };
 
 const now = () => new Date().toISOString();
@@ -44,6 +50,9 @@ export class AssistantStateRepository {
     workflows: new Map(),
     waitConditions: new Map(),
     conditionEvents: new Map(),
+    executions: new Map(),
+    analyses: new Map(),
+    recordings: new Map(),
   };
 
   constructor(options: StorageOptions = {}) {
@@ -51,31 +60,83 @@ export class AssistantStateRepository {
     this.load();
   }
 
-  private load() {
+  private load(forWrite = false) {
     this.sessions = new Map(
-      this.store
-        .readCollection<AssistantSession>("sessions")
+      (forWrite
+        ? this.store.readCollectionForWrite<AssistantSession>("sessions")
+        : this.store.readCollection<AssistantSession>("sessions"))
         .map((item) => [item.id, item]),
     );
     for (const kind of Object.keys(this.resources) as Array<
       keyof ResourceMap
     >) {
-      this.loadResource(kind);
+      this.loadResource(kind, forWrite);
     }
   }
 
-  private loadResource<K extends keyof ResourceMap>(kind: K) {
-    const values = this.store.readCollection<ResourceMap[K]>(kind);
+  private loadResource<K extends keyof ResourceMap>(kind: K, forWrite = false) {
+    const values = forWrite
+      ? this.store.readCollectionForWrite<ResourceMap[K]>(kind)
+      : this.store.readCollection<ResourceMap[K]>(kind);
+    let assignedLegacyIds = false;
+    const normalized = kind === "analyses"
+      ? values.map((item, recordIndex) => {
+          const analysis = item as FrameAnalysis;
+          if (!analysis.id) assignedLegacyIds = true;
+          const analysisId = analysis.id || `legacy_analysis_${recordIndex + 1}`;
+          const rawOcr = Array.isArray(analysis.ocrText)
+            ? analysis.ocrText
+            : analysis.ocrText == null
+              ? []
+              : [analysis.ocrText];
+          return {
+            ...analysis,
+            id: analysisId,
+            ocrText: rawOcr.flatMap((entry, index) => {
+              if (typeof entry === "string") {
+                return [{ id: `${analysisId}_legacy_ocr_${index + 1}`, text: entry }];
+              }
+              if (entry && typeof entry === "object" && typeof (entry as any).text === "string") {
+                return [{
+                  id: String((entry as any).id || `${analysisId}_legacy_ocr_${index + 1}`),
+                  text: (entry as any).text,
+                }];
+              }
+              return [];
+            }),
+            notes: Array.isArray(analysis.notes)
+              ? analysis.notes.map(String)
+              : analysis.notes == null
+                ? []
+                : [String(analysis.notes)],
+            regionsOfInterest: Array.isArray(analysis.regionsOfInterest)
+              ? analysis.regionsOfInterest
+              : [],
+            detectedElements: Array.isArray(analysis.detectedElements)
+              ? analysis.detectedElements
+              : [],
+          } as ResourceMap[K];
+        })
+      : values;
+    if (kind === "analyses" && assignedLegacyIds) {
+      this.store.writeCollection(kind, normalized);
+    }
     this.resources[kind] = new Map(
-      values.map((item) => [item.id, item]),
+      normalized.map((item) => [item.id, item]),
     ) as (typeof this.resources)[K];
   }
 
-  private persist() {
-    this.store.writeCollection("sessions", [...this.sessions.values()]);
-    for (const kind of Object.keys(this.resources) as Array<
-      keyof ResourceMap
-    >) {
+  private persist(kinds?: Array<keyof ResourceMap | "sessions">) {
+    const selected = kinds ?? [
+      "sessions",
+      ...(Object.keys(this.resources) as Array<keyof ResourceMap>),
+    ];
+    if (selected.includes("sessions")) {
+      this.store.writeCollection("sessions", [...this.sessions.values()]);
+    }
+    for (const kind of selected.filter(
+      (entry): entry is keyof ResourceMap => entry !== "sessions",
+    )) {
       this.store.writeCollection(kind, [...this.resources[kind].values()]);
     }
   }
@@ -93,6 +154,11 @@ export class AssistantStateRepository {
   createSession(
     input: Omit<AssistantSession, "id" | "createdAt" | "updatedAt">,
   ): AssistantSession {
+    this.sessions = new Map(
+      this.store
+        .readCollectionForWrite<AssistantSession>("sessions")
+        .map((item) => [item.id, item]),
+    );
     const timestamp = now();
     const session = {
       ...input,
@@ -101,7 +167,7 @@ export class AssistantStateRepository {
       updatedAt: timestamp,
     };
     this.sessions.set(session.id, session);
-    this.persist();
+    this.persist(["sessions"]);
     return session;
   }
 
@@ -111,15 +177,21 @@ export class AssistantStateRepository {
       Pick<AssistantSession, "project" | "status" | "goals" | "savedStateIds">
     >,
   ): AssistantSession | undefined {
+    this.sessions = new Map(
+      this.store
+        .readCollectionForWrite<AssistantSession>("sessions")
+        .map((item) => [item.id, item]),
+    );
     const session = this.sessions.get(id);
     if (!session) return undefined;
     const updated = { ...session, ...updates, updatedAt: now() };
     this.sessions.set(id, updated);
-    this.persist();
+    this.persist(["sessions"]);
     return updated;
   }
 
   deleteSession(id: string): boolean {
+    this.load(true);
     if (!this.sessions.delete(id)) return false;
     for (const resourceMap of Object.values(this.resources)) {
       for (const [resourceId, resource] of resourceMap) {
@@ -130,8 +202,8 @@ export class AssistantStateRepository {
           resourceMap.delete(resourceId);
         }
       }
-      this.persist();
     }
+    this.persist();
     return true;
   }
 
@@ -161,12 +233,17 @@ export class AssistantStateRepository {
       : undefined;
   }
 
+  findExecution(id: string): AssistantExecution | undefined {
+    this.load();
+    return this.resources.executions.get(id);
+  }
+
   createResource<K extends keyof ResourceMap>(
     kind: K,
     sessionId: string,
     input: unknown,
   ): ResourceMap[K] {
-    this.load();
+    this.loadResource(kind, true);
     const timestamp = now();
     const inputRecord = input as Record<string, unknown>;
     const resource = {
@@ -200,7 +277,7 @@ export class AssistantStateRepository {
         : {}),
     } as ResourceMap[K];
     this.resources[kind].set(resource.id, resource);
-    this.persist();
+    this.persist([kind]);
     return resource;
   }
 
@@ -210,8 +287,13 @@ export class AssistantStateRepository {
     sessionId: string,
     updates: unknown,
   ): ResourceMap[K] | undefined {
-    this.load();
-    const resource = this.getResource(kind, id, sessionId);
+    this.loadResource(kind, true);
+    const candidate = this.resources[kind].get(id);
+    const resource = candidate &&
+      "sessionId" in candidate &&
+      (candidate as { sessionId?: string }).sessionId === sessionId
+      ? candidate
+      : undefined;
     if (!resource) return undefined;
     const updated = {
       ...resource,
@@ -221,7 +303,7 @@ export class AssistantStateRepository {
         : {}),
     } as ResourceMap[K];
     this.resources[kind].set(id, updated);
-    this.persist();
+    this.persist([kind]);
     return updated;
   }
 
@@ -230,10 +312,14 @@ export class AssistantStateRepository {
     id: string,
     sessionId: string,
   ): boolean {
-    const exists = this.getResource(kind, id, sessionId);
+    this.loadResource(kind, true);
+    const candidate = this.resources[kind].get(id);
+    const exists = candidate &&
+      "sessionId" in candidate &&
+      (candidate as { sessionId?: string }).sessionId === sessionId;
     if (!exists) return false;
     const deleted = this.resources[kind].delete(id);
-    this.persist();
+    this.persist([kind]);
     return deleted;
   }
 
@@ -264,9 +350,20 @@ export class AssistantStateRepository {
 
   createPlan(
     sessionId: string,
-    plan: Omit<AssistantPlan, "id" | "sessionId" | "createdAt" | "updatedAt">,
+    plan: Omit<AssistantPlan, "id" | "sessionId" | "createdAt" | "updatedAt" | "title" | "goal" | "status" | "steps"> &
+      Partial<Pick<AssistantPlan, "title" | "goal" | "status" | "steps">>,
   ): AssistantPlan {
-    return this.createResource("plans", sessionId, plan);
+    return this.createResource("plans", sessionId, {
+      ...plan,
+      title: plan.title ?? "Assistant plan",
+      goal:
+        plan.goal ??
+        (typeof plan.instruction === "string"
+          ? plan.instruction
+          : plan.instruction?.text ?? "Complete the approved workflow"),
+      status: plan.status ?? "draft",
+      steps: Array.isArray(plan.steps) ? plan.steps : [],
+    });
   }
 
   updatePlan(
@@ -291,10 +388,13 @@ export class AssistantStateRepository {
     sessionId: string,
     workflow: Omit<
       AssistantWorkflow,
-      "id" | "sessionId" | "createdAt" | "updatedAt"
-    >,
+      "id" | "sessionId" | "createdAt" | "updatedAt" | "steps"
+    > & { steps?: AssistantWorkflow["steps"] },
   ): AssistantWorkflow {
-    return this.createResource("workflows", sessionId, workflow);
+    return this.createResource("workflows", sessionId, {
+      ...workflow,
+      steps: Array.isArray(workflow.steps) ? workflow.steps : [],
+    });
   }
 
   updateWorkflow(

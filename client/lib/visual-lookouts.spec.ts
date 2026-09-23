@@ -35,6 +35,15 @@ describe("visual lookout evaluation", () => {
     expect(result.shouldRetry).toBe(true);
   });
 
+  it("accepts a labeled element shifted a few pixels beyond the drawn region", () => {
+    const result = evaluateVisualLookouts(
+      [lookout()],
+      [{ textValue: "Saved", confidence: 0.91, center: { x: 91, y: 145 } }],
+      false,
+    );
+    expect(result.allSatisfied).toBe(true);
+  });
+
   it("supports stop-on-match and screen-change lookouts", () => {
     const result = evaluateVisualLookouts(
       [lookout({ expectation: "changed", onMatch: "stop", expectedText: undefined })],

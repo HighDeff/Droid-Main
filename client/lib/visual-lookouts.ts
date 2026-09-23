@@ -28,7 +28,11 @@ function isInsideLookout(element: VisualElementCandidate, lookout: VisualLookout
   const center = elementCenter(element);
   if (!center) return false;
   const { x, y, width, height } = lookout.region;
-  return center.x >= x && center.x <= x + width && center.y >= y && center.y <= y + height;
+  const tolerance = lookout.expectedText?.trim()
+    ? Math.min(24, Math.max(8, Math.round(Math.min(width, height) * 0.1)))
+    : 0;
+  return center.x >= x - tolerance && center.x <= x + width + tolerance &&
+    center.y >= y - tolerance && center.y <= y + height + tolerance;
 }
 
 export function evaluateVisualLookouts(

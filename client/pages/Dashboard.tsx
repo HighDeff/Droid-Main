@@ -138,6 +138,7 @@ import { TaskInspector } from "@/components/task-inspector";
 import { AssistantWorkspace } from "@/components/assistant-workspace";
 import { DeviceCommandComposer } from "@/components/device-command-composer";
 import { evaluateVisualLookouts } from "@/lib/visual-lookouts";
+import { captureReplayFrame } from "@/lib/replay-capture";
 export default function Dashboard({
   initialTab,
 }: { initialTab?: string } = {}) {
@@ -472,17 +473,7 @@ export default function Dashboard({
       copy[t] = tmp;
       return copy.map((s, i) => ({ ...s, stepNumber: i + 1 }));
     });
-  const captureFreshFrame = async () => {
-    const response = await fetch("/api/capture-screen");
-    const capture = await response.json();
-    if (!response.ok || !capture.success || !capture.imageData || !Number.isFinite(capture.timestamp)) {
-      throw new Error(capture.error || "No live frame is available from the capture service");
-    }
-    if (!Number.isFinite(capture.ageMs) || capture.ageMs > 5_000) {
-      throw new Error("The latest shared frame is stale; resume screen sharing");
-    }
-    return capture;
-  };
+  const captureFreshFrame = () => captureReplayFrame(targetDevice, selectedAdbDevice || undefined);
 
   const perceiveFrame = async (imageData: string) => {
     const response = await fetch("/api/ai/describe-screen", {
@@ -549,6 +540,10 @@ export default function Dashboard({
 
   const handleRunSequence = async () => {
     if (sequence.length === 0 || isSequenceRunning) return;
+    if (targetDevice === "android" && !selectedAdbDevice) {
+      toast.error("Select an authorized Android device before running the sequence");
+      return;
+    }
     if (!isLiveDesktopActive) {
       toast.error("Start Screen HUD sharing before running the sequence");
       return;
@@ -569,6 +564,8 @@ export default function Dashboard({
 
         const attemptLimit = Math.min(5, recordedStep.retryLimit ?? maxStepAttempts);
         for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
+          let actionSubmitted = false;
+          let preflightVerified = false;
           try {
             setAiThinking({
               x: recordedStep.x,
@@ -584,6 +581,7 @@ export default function Dashboard({
             const needsPerception = Boolean(current.targetOcrLabel?.trim() || preLookouts.length);
             if (needsPerception) {
               const report = await perceiveFrame(before.imageData);
+              preflightVerified = true;
               const evaluation = evaluateVisualLookouts(
                 preLookouts,
                 report.elements ?? [],
@@ -599,28 +597,36 @@ export default function Dashboard({
                 throw new Error(evaluation.results.filter((result) => !result.satisfied).map((result) => result.reason).join(" "));
               }
               const targetText = current.targetOcrLabel?.trim().toLowerCase();
-              const matched =
-                evaluation.results.find((result) => result.matchedElement)?.matchedElement ??
-                (targetText
-                  ? report.elements?.find((element) => `${element.name ?? ""} ${element.textValue ?? ""}`.toLowerCase().includes(targetText))
-                  : undefined);
+              const matched = targetText
+                ? report.elements?.find((element) =>
+                    (element.confidence ?? 0) >= 0.7 &&
+                    `${element.name ?? ""} ${element.textValue ?? ""}`.toLowerCase().includes(targetText),
+                  )
+                : evaluation.results.find((result) => result.matchedElement)?.matchedElement;
+              if (targetText && !matched?.center) {
+                throw new Error(`Target “${current.targetOcrLabel}” was not located in the current screenshot`);
+              }
               if (matched?.center) {
                 current = { ...current, x: Math.round(matched.center.x), y: Math.round(matched.center.y), recalibrated: true };
                 setSequence((previous) => previous.map((step) => step.id === current.id ? { ...step, x: current.x, y: current.y, recalibrated: true } : step));
               }
+            } else {
+              preflightVerified = true;
             }
 
             const delay = driftRandomInterval ? Math.max(250, current.delayMs + Math.floor(Math.random() * 500)) : current.delayMs;
             await new Promise((resolve) => setTimeout(resolve, delay));
             if (!sequenceRunningRef.current) break runs;
+            actionSubmitted = true;
             await dispatchReviewedAction(current, attempt);
 
             const requiresVisibleChange = new Set(["click", "double_click", "right_click", "clear_and_type", "type_text", "scroll"]).has(current.action);
             const deadline = Date.now() + 3_000;
-            let after: any = null;
+            let after: Awaited<ReturnType<typeof captureFreshFrame>> | null = null;
             while (Date.now() < deadline && sequenceRunningRef.current) {
               const candidate = await captureFreshFrame();
-              if (candidate.timestamp > before.timestamp) {
+              if (candidate.timestamp > before.timestamp &&
+                (!requiresVisibleChange || candidate.frameHash !== before.frameHash)) {
                 after = candidate;
                 break;
               }
@@ -647,6 +653,16 @@ export default function Dashboard({
             break;
           } catch (error) {
             const message = error instanceof Error ? error.message : "Sequence step failed";
+            if (actionSubmitted) {
+              stopReason = `${recordedStep.name}: action was submitted but its result could not be verified (${message}). Stopped without repeating it; inspect the selected device before retrying.`;
+              setVerificationBadge({ status: "failed", message: stopReason });
+              break;
+            }
+            if (!preflightVerified) {
+              stopReason = `${recordedStep.name}: screen capture or AI inspection failed (${message}). Stopped without dispatching any recovery actions.`;
+              setVerificationBadge({ status: "failed", message: stopReason });
+              break;
+            }
             setVerificationBadge({ status: attempt < attemptLimit ? "retrying" : "failed", message });
             if (attempt < attemptLimit) {
               try {
@@ -687,6 +703,7 @@ export default function Dashboard({
     setActiveStepId(null);
   };
   const captureScreen = async () => {
+    if (targetDevice === "android") return;
     try {
       const response = await fetch("/api/capture-screen");
       const data = await response.json();
@@ -731,7 +748,7 @@ export default function Dashboard({
     return () => {
       if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
     };
-  }, [isCapturing]);
+  }, [isCapturing, targetDevice]);
   useEffect(() => {
     if (targetDevice === "android") {
       fetch("/api/adb/devices")
@@ -1069,12 +1086,19 @@ export default function Dashboard({
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1 bg-slate-950 p-1.5 rounded-lg border border-slate-800 shadow-inner">
                 <button
-                  onClick={() => setTargetDevice("desktop")}
+                  disabled={isSequenceRunning}
+                  onClick={() => {
+                    if (mobileIntervalRef.current) clearInterval(mobileIntervalRef.current);
+                    mobileIntervalRef.current = null;
+                    setIsLiveDesktopActive(false);
+                    setTargetDevice("desktop");
+                  }}
                   className={`px-3 py-1 rounded-md text-xs font-mono font-bold flex items-center gap-1.5 transition-colors ${targetDevice === "desktop" ? "bg-cyan-600 text-white shadow-sm" : "text-slate-300 hover:text-white"}`}
                 >
                   <Monitor className="w-3.5 h-3.5" /> Desktop
                 </button>
                 <button
+                  disabled={isSequenceRunning}
                   onClick={() => {
                     setTargetDevice("android");
                     fetch("/api/adb/devices")
@@ -1095,6 +1119,7 @@ export default function Dashboard({
               </div>
               {targetDevice === "android" && adbDevices.length > 0 && (
                 <select
+                  disabled={isSequenceRunning}
                   value={selectedAdbDevice || ""}
                   onChange={(e) => setSelectedAdbDevice(e.target.value)}
                   className="h-8 text-xs bg-slate-900 border border-slate-700 rounded px-1.5 font-mono"
@@ -1119,13 +1144,14 @@ export default function Dashboard({
                       return;
                     }
                     try {
-                      const devId = selectedAdbDevice || adbDevices[0];
+                      let devId = selectedAdbDevice || adbDevices[0];
                       if (!devId) {
                         const dr = await fetch("/api/adb/devices");
                         const dj = await dr.json();
                         if (dj.devices?.[0]) {
+                          devId = dj.devices[0];
                           setAdbDevices(dj.devices);
-                          setSelectedAdbDevice(dj.devices[0]);
+                          setSelectedAdbDevice(devId);
                         } else {
                           alert(
                             "No Android device found. Connect phone via USB or WiFi IP above (Wireless Debugging).",
@@ -1134,7 +1160,7 @@ export default function Dashboard({
                         }
                       }
                       const capRes = await fetch(
-                        `/api/adb/capture${selectedAdbDevice ? `?deviceId=${selectedAdbDevice}` : ""}`,
+                        `/api/adb/capture?deviceId=${encodeURIComponent(devId)}`,
                       );
                       const capData = await capRes.json();
                       if (capData.success && capData.imageData) {
@@ -1147,20 +1173,21 @@ export default function Dashboard({
                           [capData.imageData, ...prev].slice(0, 30),
                         );
                         setWifiStatus(
-                          `Phone live: ${selectedAdbDevice || devId}`,
+                          `Phone live: ${devId}`,
                         );
                         fetch("/api/sync-real-frame", {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({
                             imageData: capData.imageData,
+                            source: "android",
                           }),
                         }).catch(() => {});
                         mobileIntervalRef.current = window.setInterval(
                           async () => {
                             try {
                               const r = await fetch(
-                                `/api/adb/capture${selectedAdbDevice ? `?deviceId=${selectedAdbDevice}` : ""}`,
+                                `/api/adb/capture?deviceId=${encodeURIComponent(devId)}`,
                               );
                               const d = await r.json();
                               if (d.success && d.imageData) {
@@ -1177,6 +1204,7 @@ export default function Dashboard({
                                   },
                                   body: JSON.stringify({
                                     imageData: d.imageData,
+                                    source: "android",
                                   }),
                                 }).catch(() => {});
                               }

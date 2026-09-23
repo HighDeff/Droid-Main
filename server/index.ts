@@ -178,6 +178,7 @@ function isSameOriginRequest(req: express.Request) {
 // In-memory store for last synced real frame (AppBrief HUD sync)
 let lastSyncedFrame: string | null = null;
 let lastSyncedTimestamp = Date.now();
+let lastSyncedSource: "desktop" | "android" = "desktop";
 
 export function createServer(options: ServerOptions = {}) {
   const app = express();
@@ -197,7 +198,7 @@ export function createServer(options: ServerOptions = {}) {
     });
   };
   configureLatestFrameProvider(() =>
-    lastSyncedFrame
+    lastSyncedFrame && lastSyncedSource === "desktop"
       ? { imageData: lastSyncedFrame, timestamp: lastSyncedTimestamp }
       : null,
   );
@@ -277,7 +278,7 @@ export function createServer(options: ServerOptions = {}) {
     requireApiAccess,
     createAssistantRouter({
       getLatestFrame: () =>
-        lastSyncedFrame
+        lastSyncedFrame && lastSyncedSource === "desktop"
           ? { imageData: lastSyncedFrame, timestamp: lastSyncedTimestamp }
           : null,
     }),
@@ -328,19 +329,26 @@ export function createServer(options: ServerOptions = {}) {
   // AppBrief HUD sync (in-memory)
   app.get("/api/capture-screen", async (_req, res) => {
     try {
-      if (lastSyncedFrame) {
+      if (lastSyncedFrame && lastSyncedSource === "desktop") {
         return res.json({
           success: true,
           imageData: lastSyncedFrame,
           timestamp: lastSyncedTimestamp,
           ageMs: Math.max(0, Date.now() - lastSyncedTimestamp),
+          frameHash: crypto.createHash("sha256").update(lastSyncedFrame).digest("hex"),
           source: "live_hud_sync",
         });
       }
       // Fallback to master desktop capture if no HUD frame
       const master = await import("./routes/screen-capture");
-      const result = await master.captureDesktopFrame();
-      if (result.success) return res.json(result);
+      const result = await master.captureDesktopFrame({ freshOnly: true });
+      if (result.success && result.imageData) return res.json({
+        ...result,
+        timestamp: Date.now(),
+        ageMs: 0,
+        frameHash: crypto.createHash("sha256").update(result.imageData).digest("hex"),
+        source: "desktop_capture",
+      });
       res.json({
         success: true,
         imageData: null,
@@ -355,10 +363,14 @@ export function createServer(options: ServerOptions = {}) {
   });
   app.post("/api/sync-real-frame", (req, res) => {
     try {
-      const { imageData, metadata } = req.body;
-      if (imageData) {
+      const { imageData } = req.body;
+      if (typeof imageData === "string" && imageData.startsWith("data:image/")) {
         lastSyncedFrame = imageData;
         lastSyncedTimestamp = Date.now();
+        lastSyncedSource = req.body.source === "android" ? "android" : "desktop";
+        if (lastSyncedSource === "android") {
+          return res.json({ success: true, timestamp: lastSyncedTimestamp });
+        }
         // Also sync to master store for parity
         handleMasterSyncRealFrame(req as any, res as any).catch(() => {
           if (!res.headersSent) res.json({ success: true, timestamp: lastSyncedTimestamp });
@@ -366,7 +378,7 @@ export function createServer(options: ServerOptions = {}) {
         if (!res.headersSent) res.json({ success: true, timestamp: lastSyncedTimestamp });
         return;
       }
-      res.status(400).json({ success: false, error: "Missing imageData" });
+      res.status(400).json({ success: false, error: "Missing imageData or invalid image format" });
     } catch (e) {
       res.status(500).json({ success: false, error: String(e) });
     }
@@ -692,17 +704,36 @@ except Exception as e:
       args.push("exec-out", "screencap", "-p");
       const py = spawn("adb", args, { stdio: ["pipe", "pipe", "pipe"] });
       let out: Buffer[] = []; let er = "";
+      let settled = false;
+      const reply = (body: object) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        res.json(body);
+      };
       py.stdout.on("data", (d) => out.push(d as Buffer));
       py.stderr.on("data", (d) => (er += d.toString()));
-      py.on("close", () => {
+      py.on("close", (code) => {
         try {
-          const buf = Buffer.concat(out as any);
-          if (buf.length > 0) res.json({ success: true, imageData: "data:image/png;base64," + buf.toString("base64") });
-          else res.json({ success: false, error: er || "no output" });
-        } catch (e) { res.json({ success: false, error: String(e) }); }
+          const buf = Buffer.concat(out);
+          if (code === 0 && buf.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+            reply({
+              success: true,
+              imageData: "data:image/png;base64," + buf.toString("base64"),
+              frameHash: crypto.createHash("sha256").update(buf).digest("hex"),
+              timestamp: Date.now(),
+              ageMs: 0,
+              source: "android_capture",
+              deviceId,
+            });
+          } else reply({ success: false, error: er || "ADB did not return a valid PNG screenshot" });
+        } catch (e) { reply({ success: false, error: String(e) }); }
       });
-      py.on("error", (e) => res.json({ success: false, error: String(e) }));
-      setTimeout(() => { try { py.kill(); } catch {} }, 8000);
+      py.on("error", (e) => reply({ success: false, error: String(e) }));
+      const timeout = setTimeout(() => {
+        reply({ success: false, error: "ADB screenshot timed out" });
+        try { py.kill(); } catch {}
+      }, 8000);
     } catch (e) { res.json({ success: false, error: String(e) }); }
   });
   app.post("/api/adb/connect", async (req, res) => {

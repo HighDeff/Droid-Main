@@ -1,4 +1,5 @@
 import type { AddressInfo } from "node:net";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer } from "./index";
 
@@ -19,6 +20,42 @@ afterEach(() => {
 });
 
 describe("API authentication", () => {
+  it("returns a stable fingerprint and frame freshness for a synced desktop screenshot", async () => {
+    process.env.ASSISTANT_API_KEY = "test-only-key";
+    process.env.NODE_ENV = "production";
+    const server = createServer().listen(0);
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const headers = { "Content-Type": "application/json", "x-assistant-api-key": "test-only-key" };
+    const imageData = "data:image/png;base64,iVBORw0KGgo=";
+    try {
+      const sync = await fetch(`${baseUrl}/api/sync-real-frame`, {
+        method: "POST", headers, body: JSON.stringify({ imageData }),
+      });
+      expect(sync.status).toBe(200);
+      const capture = await fetch(`${baseUrl}/api/capture-screen`, { headers });
+      const frame = await capture.json();
+      expect(frame).toMatchObject({ success: true, imageData, source: "live_hud_sync" });
+      expect(frame.timestamp).toBeGreaterThan(0);
+      expect(frame.ageMs).toBeGreaterThanOrEqual(0);
+      expect(frame.frameHash).toBe(createHash("sha256").update(imageData).digest("hex"));
+
+      const phoneFrame = "data:image/png;base64,iVBORw0KGgoAAA==";
+      const phoneSync = await fetch(`${baseUrl}/api/sync-real-frame`, {
+        method: "POST", headers, body: JSON.stringify({ imageData: phoneFrame, source: "android" }),
+      });
+      expect(phoneSync.status).toBe(200);
+      const desktopCapture = await fetch(`${baseUrl}/api/capture-screen`, { headers });
+      const desktopFrame = await desktopCapture.json();
+      expect(desktopFrame.imageData).not.toBe(phoneFrame);
+      expect(desktopFrame.source).not.toBe("live_hud_sync");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  }, 10_000);
+
   it("bootstraps a same-origin browser session only in local development", async () => {
     delete process.env.ASSISTANT_API_KEY;
     process.env.NODE_ENV = "development";

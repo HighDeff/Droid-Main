@@ -1,0 +1,16 @@
+[
+  {
+    "project": {
+      "id": "project",
+      "name": "Persistent project",
+      "createdAt": "2026-09-22T23:34:38.268Z",
+      "updatedAt": "2026-09-22T23:34:38.268Z"
+    },
+    "status": "active",
+    "goals": [],
+    "savedStateIds": [],
+    "id": "session_1790120078268_virphtmw",
+    "createdAt": "2026-09-22T23:34:38.268Z",
+    "updatedAt": "2026-09-22T23:34:38.268Z"
+  }
+]

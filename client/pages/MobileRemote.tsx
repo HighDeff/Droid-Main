@@ -190,7 +190,7 @@ export default function MobileRemote() {
   const [fps, setFps] = useState(15);
   const [targetFps, setTargetFps] = useState<number>(15);
   const [framesSent, setFramesSent] = useState(0);
-  const [status, setStatus] = useState<string>("● LIVE: Interactive Phone OS Active");
+  const [status, setStatus] = useState<string>("● LIVE: 📱 Interactive Phone OS Active");
   const [lastTouch, setLastTouch] = useState<{ x: number; y: number } | null>(null);
   const [connected, setConnected] = useState(true);
   const [activeActionIndicator, setActiveActionIndicator] = useState<ExecutedActionIndicator | null>(null);
@@ -208,6 +208,13 @@ export default function MobileRemote() {
   const [liveViewZoom, setLiveViewZoom] = useState<number>(1);
   const [showAiBoundingBoxes, setShowAiBoundingBoxes] = useState<boolean>(true);
   const [showGridOverlay, setShowGridOverlay] = useState<boolean>(false);
+  const [liveViewNotice, setLiveViewNotice] = useState<boolean>(false);
+
+  // Workflow Recording inside Interactive Phone
+  const [isRecordingWorkflow, setIsRecordingWorkflow] = useState<boolean>(false);
+  const [recordedSteps, setRecordedSteps] = useState<
+    Array<{ id: string; type: string; description: string; x?: number; y?: number; text?: string; time: string }>
+  >([]);
 
   // Synced Workflows state
   const [workflows, setWorkflows] = useState<SyncedWorkflow[]>([]);
@@ -237,147 +244,133 @@ export default function MobileRemote() {
 
   // Simulated live UI detection boxes for Live View mode
   const detectedLiveElements = [
-    { id: "e1", label: "Search Bar", x: 0.1, y: 0.1, w: 0.8, h: 0.06, type: "input", conf: "99%" },
-    { id: "e2", label: "Submit Button", x: 0.2, y: 0.85, w: 0.6, h: 0.08, type: "button", conf: "97%" },
-    { id: "e3", label: "App Icon Grid", x: 0.08, y: 0.25, w: 0.84, h: 0.55, type: "container", conf: "95%" },
+    { id: "e1", label: "Search Bar", x: 0.1, y: 0.08, w: 0.8, h: 0.06, type: "input", conf: "99%" },
+    { id: "e2", label: "Google Chrome", x: 0.12, y: 0.38, w: 0.16, h: 0.1, type: "app", conf: "98%" },
+    { id: "e3", label: "Calculator", x: 0.36, y: 0.38, w: 0.16, h: 0.1, type: "app", conf: "98%" },
+    { id: "e4", label: "Notes App", x: 0.60, y: 0.38, w: 0.16, h: 0.1, type: "app", conf: "97%" },
+    { id: "e5", label: "Camera", x: 0.84, y: 0.38, w: 0.16, h: 0.1, type: "app", conf: "99%" },
+    { id: "e6", label: "Navigation Dock", x: 0.1, y: 0.92, w: 0.8, h: 0.06, type: "nav", conf: "100%" },
   ];
 
-  // Linked Template Apps list
+  // Linked Template Apps list (Template Connect)
   const [templateApps] = useState<LinkedTemplateApp[]>([
     {
       id: "app_crm_lead",
       name: "Customer CRM & Lead Submitter",
-      category: "crm",
+      category: "CRM & Sales",
       description: "Automate customer record creation, contact logging, and follow-up alerts from this linked app only",
       icon: "Users",
       color: "from-blue-600 to-indigo-700",
       isolatedAutomation: true,
       capabilities: ["Form Filling", "Contact Import", "Status Tags", "Auto-Submit"],
-      sampleWorkflows: ["Auto-Fill Client Intake", "Export CRM Contacts"],
+      sampleWorkflows: ["Auto-Fill Client Intake", "Export CRM Contacts", "Trigger Follow-up SMS"],
     },
     {
       id: "app_inventory",
       name: "Barcode & Inventory Scanner",
-      category: "inventory",
-      description: "Scan product barcodes via camera, auto-lookup stock, and update inventory counters",
+      category: "Logistics",
+      description: "Perform real-time item lookups, SKU scanning, quantity adjustments, and warehouse stock reconciliation",
       icon: "Scan",
-      color: "from-emerald-600 to-teal-700",
-      isolatedAutomation: true,
-      capabilities: ["Camera Barcode Read", "SKU Lookup", "Differential Diff", "Stock Sync"],
-      sampleWorkflows: ["Rapid Shelf Stock Count", "Audit Differential Diff"],
-    },
-    {
-      id: "app_notes_sync",
-      name: "Quick Notes & Action Ledger",
-      category: "notes",
-      description: "Live interactive notes environment with bi-directional clipboard sync and AI summary generation",
-      icon: "FileText",
       color: "from-amber-600 to-orange-700",
       isolatedAutomation: true,
-      capabilities: ["Live Text Editing", "CoT Export", "Markdown Support", "Auto-Save"],
-      sampleWorkflows: ["Log Screen Action Items", "Export Daily Bug Report"],
-      appCode: "notes",
+      capabilities: ["Barcode Decoding", "SKU Lookup", "Stock Delta", "Batch Export"],
+      sampleWorkflows: ["Scan Received Shipment", "Reconcile Stock Count", "Flag Damaged Inventory"],
     },
     {
-      id: "app_calc_engine",
-      name: "Dynamic Calculator & Formula Engine",
-      category: "calculator",
-      description: "Real-time mathematical formula runner, unit conversions, and automated calculation routines",
+      id: "app_social_poster",
+      name: "Social Media Multi-Poster",
+      category: "Marketing",
+      description: "Queue, preview, and auto-dispatch promotional posts across linked brand accounts with media uploads",
+      icon: "Share2",
+      color: "from-pink-600 to-rose-700",
+      isolatedAutomation: true,
+      capabilities: ["Multi-Account Sync", "Image Attachment", "Schedule Queue", "Hashtag Auto-Fill"],
+      sampleWorkflows: ["Broadcast Flash Sale", "Publish Daily Update", "Check Account Insights"],
+    },
+    {
+      id: "app_form_intake",
+      name: "Smart Form Intake & Validator",
+      category: "Operations",
+      description: "Parse structured form entries, execute automated verification checks, and dispatch records to database",
+      icon: "FileText",
+      color: "from-emerald-600 to-teal-700",
+      isolatedAutomation: true,
+      capabilities: ["Field Extraction", "Format Validation", "Webhook Dispatch", "Error Highlight"],
+      sampleWorkflows: ["Validate Incoming Submissions", "Auto-Fill Employee Onboarding", "Batch CSV Import"],
+    },
+    {
+      id: "app_invoice_extract",
+      name: "Invoice & Receipt Auto-Processor",
+      category: "Finance",
+      description: "Extract line items, tax breakdowns, totals, and vendor details from receipts with automatic expense ledger entry",
       icon: "Calculator",
       color: "from-purple-600 to-violet-700",
       isolatedAutomation: true,
-      capabilities: ["Keypad Typing", "Formula Memory", "Step Replay", "Verification Diff"],
-      sampleWorkflows: ["Calculate Tax & Discount", "Verify Currency Conversion"],
-      appCode: "calculator",
+      capabilities: ["OCR Parsing", "Expense Categorization", "Tax Extraction", "Ledger Sync"],
+      sampleWorkflows: ["Process Weekly Receipts", "Reconcile Card Expenses", "Export Month-End Tax Report"],
     },
     {
-      id: "app_adb_terminal",
-      name: "ADB Terminal & Shell Runner",
-      category: "terminal",
-      description: "Direct ADB shell commands runner, keycode dispatches, and logcat monitoring",
-      icon: "Terminal",
-      color: "from-slate-800 to-slate-950",
+      id: "app_order_tracker",
+      name: "E-Commerce Fulfillment Tracker",
+      category: "E-Commerce",
+      description: "Track shipment milestones, update package tracking numbers, and send instant fulfillment confirmation alerts",
+      icon: "Folder",
+      color: "from-cyan-600 to-blue-700",
       isolatedAutomation: true,
-      capabilities: ["Shell Execution", "Keycode Input", "Package Manager", "Log Stream"],
-      sampleWorkflows: ["Dump Device UI Tree", "Simulate Screen Rotation"],
-      appCode: "terminal",
-    },
-    {
-      id: "app_web_automation",
-      name: "Web Browser & DOM Scraper",
-      category: "web",
-      description: "Google Chrome headless & interactive web navigator with element coordinates detection",
-      icon: "Globe",
-      color: "from-sky-600 to-cyan-700",
-      isolatedAutomation: true,
-      capabilities: ["URL Navigation", "Search Query Injection", "DOM Element Click", "Snapshot Feed"],
-      sampleWorkflows: ["Search & Validate Results", "Web Form Automation"],
-      appCode: "chrome",
-      targetUrl: "https://google.com",
+      capabilities: ["Carrier API Sync", "Tracking Notification", "Status Refresh", "Exception Alerts"],
+      sampleWorkflows: ["Check Delayed Shipments", "Send Delivery Confirmations", "Update Tracking URLs"],
     },
   ]);
 
   const [isApkModalOpen, setIsApkModalOpen] = useState(false);
-  const { isInstallable } = usePWAInstall();
+  const [deviceName] = useState("Mobile Phone (Sightline Bridge)");
+  const { isInstallable, install } = usePWAInstall();
 
-  const [deviceName] = useState(() =>
-    typeof navigator !== "undefined" && navigator.userAgent.includes("Android")
-      ? "Android Phone"
-      : typeof navigator !== "undefined" && navigator.userAgent.includes("iPhone")
-      ? "iPhone"
-      : "Mobile Device"
-  );
-
-  // Video, Canvas and Container Refs
+  // Refs for camera / screen capture
   const primaryVideoRef = useRef<HTMLVideoElement | null>(null);
   const secondaryCamVideoRef = useRef<HTMLVideoElement | null>(null);
-  const pcMirrorContainerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const touchAreaRef = useRef<HTMLDivElement | null>(null);
-
-  // Streams
   const primaryStreamRef = useRef<MediaStream | null>(null);
   const secondaryStreamRef = useRef<MediaStream | null>(null);
-
-  // Background keepalive and scheduler refs
-  const workerRef = useRef<Worker | null>(null);
-  const wakeLockRef = useRef<any>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const silentOscillatorRef = useRef<OscillatorNode | null>(null);
-  const isSendingFrameRef = useRef<boolean>(false);
-
-  const isStreamingRef = useRef<boolean>(true);
-  const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
   const frameRequestRef = useRef<number | null>(null);
   const vfcCallbackRef = useRef<number | null>(null);
-  const streamModeRef = useRef<StreamMode>(streamMode);
-  const targetFpsRef = useRef<number>(targetFps);
   const lastSentTimeRef = useRef<number>(0);
-  const sendLockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const isSendingFrameRef = useRef<boolean>(false);
+  const isStreamingRef = useRef<boolean>(true);
+  const targetFpsRef = useRef<number>(15);
+  const streamModeRef = useRef<StreamMode>("interactive_phone");
+  const wakeLockRef = useRef<any>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const silentOscillatorRef = useRef<OscillatorNode | null>(null);
+  const sendLockTimeoutRef = useRef<any>(null);
+  const pcMirrorContainerRef = useRef<HTMLDivElement | null>(null);
 
   isStreamingRef.current = isStreaming;
-  lastTouchRef.current = lastTouch;
-  streamModeRef.current = streamMode;
   targetFpsRef.current = targetFps;
+  streamModeRef.current = streamMode;
+  lastTouchRef.current = lastTouch;
 
-  // Initialize Web Worker and PiP check
+  // Background Web Worker Frame Scheduler for resilient 15-60 FPS
   useEffect(() => {
     const workerCode = `
-      let timer = null;
+      let intervalId = null;
       self.onmessage = function(e) {
-        if (e.data === "start") {
-          if (timer) clearInterval(timer);
-          const interval = e.data.interval || 66;
-          timer = setInterval(function() {
-            self.postMessage("tick");
-          }, interval);
-        } else if (e.data === "stop") {
-          if (timer) clearInterval(timer);
-          timer = null;
-        } else if (e.data.command === "setInterval") {
-          if (timer) clearInterval(timer);
-          timer = setInterval(function() {
-            self.postMessage("tick");
+        if (e.data.command === 'start') {
+          if (intervalId) clearInterval(intervalId);
+          intervalId = setInterval(() => {
+            self.postMessage('tick');
+          }, e.data.interval || 66);
+        } else if (e.data.command === 'stop') {
+          if (intervalId) {
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+        } else if (e.data.command === 'setInterval') {
+          if (intervalId) clearInterval(intervalId);
+          intervalId = setInterval(() => {
+            self.postMessage('tick');
           }, e.data.interval || 66);
         }
       };
@@ -726,7 +719,7 @@ export default function MobileRemote() {
     };
 
     setActiveActionIndicator(indicator);
-    setStatus(`🤖 Executed: ${indicator.description}`);
+    setStatus(`🤖 Dispatched: ${indicator.description}`);
     setActionHistory((prev) => [
       { id: indicator.id, desc: indicator.description || indicator.type, time: new Date().toLocaleTimeString() },
       ...prev.slice(0, 15),
@@ -842,20 +835,18 @@ export default function MobileRemote() {
         ctx.fillText(`94% ⚡ ${timeStr}`, canvas.width - 96, 23);
 
         // Content
-        if (virtualOsActiveApp === "home") {
-          ctx.fillStyle = "rgba(30, 41, 59, 0.7)";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 50, canvas.width - 32, 130, 16) : ctx.rect(16, 50, canvas.width - 32, 130);
-          ctx.fill();
+        ctx.fillStyle = "rgba(30, 41, 59, 0.7)";
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(16, 50, canvas.width - 32, 130, 16) : ctx.rect(16, 50, canvas.width - 32, 130);
+        ctx.fill();
 
-          ctx.fillStyle = "#f8fafc";
-          ctx.font = "bold 16px sans-serif";
-          ctx.fillText("📱 Connected Phone Screen", 32, 85);
+        ctx.fillStyle = "#f8fafc";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillText("📱 Connected Phone Screen", 32, 85);
 
-          ctx.fillStyle = "#38bdf8";
-          ctx.font = "12px sans-serif";
-          ctx.fillText("AI Vision & Automation Active • Full OS Mirror", 32, 110);
-        }
+        ctx.fillStyle = "#38bdf8";
+        ctx.font = "12px sans-serif";
+        ctx.fillText("AI Vision & Automation Active • Full OS Mirror", 32, 110);
 
         const qualityVal = streamQuality === "hd" ? 0.75 : streamQuality === "fast" ? 0.45 : 0.6;
         const imageData = canvas.toDataURL("image/jpeg", qualityVal);
@@ -1033,6 +1024,7 @@ export default function MobileRemote() {
         setStatus("● LIVE: 📱 Interactive Phone OS Active");
         requestWakeLock();
         startBackgroundAudioKeepalive();
+        toast.success("📱 Interactive Phone OS: Tap, type & automate");
         return;
       }
 
@@ -1040,6 +1032,7 @@ export default function MobileRemote() {
         setStatus("● LIVE: 👀 Live Telepresence Mirror • Read-Only Inspection");
         requestWakeLock();
         startBackgroundAudioKeepalive();
+        toast.info("👀 Live View Mirror: Read-Only inspection feed");
         return;
       }
 
@@ -1047,6 +1040,7 @@ export default function MobileRemote() {
         setStatus("● LIVE: 🖥️ PC Desktop Screen Mirror & Remote Controller");
         requestWakeLock();
         startBackgroundAudioKeepalive();
+        toast.info("🖥️ PC Mirror Active: Control PC from phone");
         return;
       }
 
@@ -1098,213 +1092,18 @@ export default function MobileRemote() {
       startBackgroundAudioKeepalive();
     } catch (err: any) {
       setStatus("Notice: " + (err?.message || String(err)));
+      toast.error("Stream access: " + (err?.message || "Unavailable in this browser"));
       setStreamMode("interactive_phone");
+      setIsStreaming(true);
     }
   };
 
-  const handleSwitchStreamSource = async (newMode: StreamMode) => {
-    toast.info(`Switching mode to: ${newMode.replace("_", " ").toUpperCase()}`, { duration: 1500 });
-    await startStream(newMode);
+  const handleSwitchStreamSource = (mode: StreamMode) => {
+    startStream(mode);
   };
 
-  // Replay Synced Workflow
-  const handleReplayWorkflow = async (wf: SyncedWorkflow) => {
-    setExecutingWorkflowId(wf.id);
-    toast.info(`▶ Executing workflow: "${wf.name}" (${wf.actions.length} steps)...`);
-    try {
-      const res = await fetch(`/api/mobile-stream/workflows/${wf.id}/replay`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ speedMultiplier: 1 }),
-      });
-      if (res.ok) {
-        toast.success(`Dispatched "${wf.name}" to device queue!`);
-      }
-    } catch {
-      toast.error("Failed to replay workflow");
-    } finally {
-      setTimeout(() => setExecutingWorkflowId(null), 1500);
-    }
-  };
-
-  // Forward Workflow to Desktop Vision HUD
-  const handleForwardToDesktopHud = async (wf: SyncedWorkflow) => {
-    try {
-      const res = await fetch("/api/mobile-stream/forward-to-desktop-hud", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workflow: wf }),
-      });
-      if (res.ok) {
-        toast.success(`🚀 Forwarded "${wf.name}" to Live Desktop Vision HUD!`);
-      }
-    } catch {
-      toast.error("Failed to forward to desktop");
-    }
-  };
-
-  // Scheduled Workflow Action
-  const handleScheduledWorkflowAction = async (
-    scheduledWfId: string,
-    action: "continue" | "restart" | "pause" | "step"
-  ) => {
-    setActiveScheduledActionId(scheduledWfId);
-    try {
-      const res = await fetch(`/api/mobile-stream/scheduled-workflows/${scheduledWfId}/action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        toast.success(data.message || `Scheduled action "${action}" executed!`);
-        fetchScheduledWorkflows();
-      }
-    } catch {
-      toast.error(`Failed to ${action} scheduled workflow`);
-    } finally {
-      setTimeout(() => setActiveScheduledActionId(null), 1000);
-    }
-  };
-
-  // 10-Screenshot Differential Recorder Engine
-  const handleRecord10DifferentialScreenshots = async () => {
-    if (isRecording10Pack) return;
-    setIsRecording10Pack(true);
-    setPackProgress(0);
-    const collected: DifferentialFrame[] = [];
-
-    toast.info("📸 Capturing 10 Differential Screenshots with action annotations...", { duration: 3000 });
-
-    for (let i = 1; i <= 10; i++) {
-      setPackProgress(i);
-      setStatus(`Capturing frame #${i}/10 for Screenshot Workflow Pack...`);
-
-      let currentImageData = "";
-      if (canvasRef.current) {
-        currentImageData = canvasRef.current.toDataURL("image/jpeg", 0.85);
-      }
-
-      const normX = Math.round((0.2 + (i % 3) * 0.3) * 100) / 100;
-      const normY = Math.round((0.15 + Math.floor(i / 3) * 0.25) * 100) / 100;
-
-      const actionTypes = ["tap", "swipe", "type_text", "key", "double_tap", "open_app"];
-      const currentAction = i === 1 ? "open_app" : i === 10 ? "key" : actionTypes[i % actionTypes.length];
-
-      const frameObj: DifferentialFrame = {
-        id: `diff_frame_${Date.now()}_${i}`,
-        stepNumber: i,
-        imageData: currentImageData || `frame_${i}`,
-        actionType: currentAction,
-        x: normX,
-        y: normY,
-        description:
-          i === 1
-            ? "Step 1: Open Target App"
-            : i === 10
-            ? "Step 10: Complete Verification & Press HOME"
-            : `Step ${i}: Execute ${currentAction} @ (${Math.round(normX * 100)}%, ${Math.round(normY * 100)}%)`,
-        timestamp: Date.now(),
-      };
-
-      collected.push(frameObj);
-      setTenFramesPack([...collected]);
-
-      await new Promise((r) => setTimeout(r, 400));
-    }
-
-    setIsRecording10Pack(false);
-    toast.success("✅ 10 Differential Screenshots Captured! Ready to compile workflow.");
-    setActiveTab("pack10");
-  };
-
-  // Compile 10-Screenshot Pack
-  const handleCompile10PackWorkflow = async () => {
-    if (tenFramesPack.length === 0) {
-      toast.error("Please capture screenshots first");
-      return;
-    }
-
-    try {
-      const res = await fetch("/api/mobile-stream/screenshot-pack-workflow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: `10-Step Screenshot Pack (${new Date().toLocaleTimeString()})`,
-          description: "10 differential screenshot steps with automated waypoints and execution plan",
-          frames: tenFramesPack.map((f) => ({
-            imageData: f.imageData,
-            touchX: f.x,
-            touchY: f.y,
-            note: f.description,
-          })),
-          steps: tenFramesPack.map((f) => ({
-            type: f.actionType,
-            x: f.x,
-            y: f.y,
-            description: f.description,
-          })),
-          autoForwardToDesktop: true,
-        }),
-      });
-
-      if (res.ok) {
-        toast.success(`💾 Compiled & Saved 10-Step Workflow! Forwarded to Desktop HUD.`);
-        fetchSyncedWorkflows();
-        setActiveTab("workflows");
-      }
-    } catch {
-      toast.error("Failed to compile workflow pack");
-    }
-  };
-
-  // Create custom new workflow
-  const handleSaveCustomWorkflow = async () => {
-    if (!newWfName.trim()) {
-      toast.error("Workflow name is required");
-      return;
-    }
-
-    try {
-      const actions =
-        actionHistory.length > 0
-          ? actionHistory.slice(0, 10).map((a, i) => ({
-              id: `act_${Date.now()}_${i}`,
-              type: "tap",
-              x: 0.5,
-              y: 0.5,
-              description: a.desc,
-            }))
-          : [
-              { id: "act_init", type: "tap", x: 0.5, y: 0.5, description: "Tap Target Button" },
-              { id: "act_done", type: "key", key: "HOME", description: "Press HOME" },
-            ];
-
-      const res = await fetch("/api/mobile-stream/workflows", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: newWfName.trim(),
-          description: newWfDesc.trim() || `Workflow with ${actions.length} action steps`,
-          tags: ["mobile", "custom"],
-          actions,
-        }),
-      });
-
-      if (res.ok) {
-        toast.success(`💾 Saved "${newWfName}"!`);
-        setIsCreateWfModalOpen(false);
-        setNewWfName("");
-        setNewWfDesc("");
-        fetchSyncedWorkflows();
-      }
-    } catch {
-      toast.error("Failed to save workflow");
-    }
-  };
-
-  // Touch handler for PC Mirror
-  const handlePcMirrorTouch = (e: React.TouchEvent | React.MouseEvent) => {
+  // PC Mirror Click Dispatch
+  const handlePcMirrorTouch = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
     if (!pcMirrorContainerRef.current) return;
     const rect = pcMirrorContainerRef.current.getBoundingClientRect();
     let clientX = 0;
@@ -1318,126 +1117,220 @@ export default function MobileRemote() {
       clientY = (e as React.MouseEvent).clientY;
     }
 
-    const normX = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const normY = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    const relX = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const relY = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
 
-    setLastTouch({ x: normX, y: normY });
-    setTimeout(() => setLastTouch(null), 800);
+    setLastTouch({ x: relX, y: relY });
 
-    fetch("/api/pyautogui/interactive-action", {
+    fetch("/api/interactive/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "click",
-        x: Math.round(normX * 1920),
-        y: Math.round(normY * 1080),
-        deviceMode: "desktop_mirror",
+        x: relX,
+        y: relY,
+        button: "left",
       }),
     }).catch(() => {});
 
-    toast.success(`Tapped PC @ (${Math.round(normX * 100)}%, ${Math.round(normY * 100)}%)`);
+    toast.success(`🖥️ Dispatched Click to PC at (${Math.round(relX * 100)}%, ${Math.round(relY * 100)}%)`);
   };
 
-  // Live View Touch Interceptor (Protected Mode)
-  const handleLiveViewTouch = (e: React.TouchEvent | React.MouseEvent) => {
-    let clientX = 0;
-    let clientY = 0;
-    if ("touches" in e && e.touches.length > 0) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else if ("clientX" in e) {
-      clientX = (e as React.MouseEvent).clientX;
-      clientY = (e as React.MouseEvent).clientY;
-    }
-
-    const targetEl = e.currentTarget as HTMLElement;
-    const rect = targetEl.getBoundingClientRect();
-    const normX = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const normY = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-
-    setLastTouch({ x: normX, y: normY });
-    setTimeout(() => setLastTouch(null), 800);
-
-    toast.info("👀 Live View is in Viewing-Only mode. Switch to Interactive Phone to send touches.", {
-      duration: 2000,
-    });
+  // Live View Touch Handler (Protected Inspection Notice)
+  const handleLiveViewTouch = () => {
+    setLiveViewNotice(true);
+    setTimeout(() => setLiveViewNotice(false), 4000);
   };
 
-  // Generic Touch handler for Camera & Video modes
-  const handleTouch = (e: React.TouchEvent | React.MouseEvent) => {
-    if (!touchAreaRef.current) return;
-    const rect = touchAreaRef.current.getBoundingClientRect();
-    let clientX = 0;
-    let clientY = 0;
+  // Record 10-Screenshot Differential Workflow Pack
+  const handleRecord10DifferentialScreenshots = async () => {
+    if (isRecording10Pack) return;
+    setIsRecording10Pack(true);
+    setPackProgress(0);
+    const frames: DifferentialFrame[] = [];
+    toast.info("📸 Starting 10-Screenshot Workflow Sequence Recording...");
 
-    if ("touches" in e && e.touches.length > 0) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else if ("clientX" in e) {
-      clientX = (e as React.MouseEvent).clientX;
-      clientY = (e as React.MouseEvent).clientY;
-    }
-
-    const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-
-    setLastTouch({ x, y });
-    setTimeout(() => setLastTouch(null), 900);
-  };
-
-  const handleCaptureSnapshot = () => {
-    if (!canvasRef.current) {
-      toast.error("Stream canvas not ready");
-      return;
-    }
     try {
-      const dataUrl = canvasRef.current.toDataURL("image/jpeg", 0.9);
-      sendFrameToPC(dataUrl);
-      toast.success("📸 High-res snapshot captured & synced to Desktop HUD!");
-      setStatus("📸 Snapshot synced to Desktop Vision HUD!");
+      const actionsSequence = [
+        { type: "tap", x: 0.15, y: 0.35, desc: "Open Google Chrome Browser" },
+        { type: "type", text: "Autonomous Vision AI", desc: "Input Search Query" },
+        { type: "tap", x: 0.85, y: 0.12, desc: "Submit Search Request" },
+        { type: "swipe", x: 0.5, y: 0.7, desc: "Scroll Search Results" },
+        { type: "key", key: "HOME", desc: "Return to Phone Main Menu" },
+        { type: "tap", x: 0.38, y: 0.35, desc: "Launch Calculator Tool" },
+        { type: "type", text: "450 * 1.25", desc: "Calculate Ledger Multiplier" },
+        { type: "tap", x: 0.85, y: 0.85, desc: "Evaluate Math Result" },
+        { type: "key", key: "HOME", desc: "Minimize Calculator" },
+        { type: "tap", x: 0.62, y: 0.35, desc: "Open Notes & Sync Telemetry" },
+      ];
+
+      for (let i = 0; i < 10; i++) {
+        setPackProgress(i + 1);
+        const act = actionsSequence[i];
+
+        let snapshotData = "";
+        if (canvasRef.current) {
+          snapshotData = canvasRef.current.toDataURL("image/jpeg", 0.65);
+        } else {
+          snapshotData = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iIzBkMTExNyIvPjwvc3ZnPg==";
+        }
+
+        frames.push({
+          id: `diff_frame_${Date.now()}_${i + 1}`,
+          stepNumber: i + 1,
+          imageData: snapshotData,
+          actionType: act.type,
+          x: act.x || 0.5,
+          y: act.y || 0.5,
+          description: act.desc,
+          timestamp: Date.now(),
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+
+      setTenFramesPack(frames);
+      setActiveTab("pack10");
+      toast.success("✅ Recorded 10-Differential Frame Sequence Pack!");
+
+      await fetch("/api/mobile-stream/pack10", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          packName: `Mobile 10-Pack - ${new Date().toLocaleTimeString()}`,
+          frames,
+          device: deviceName,
+        }),
+      }).catch(() => {});
+    } catch (e) {
+      toast.error("Failed recording 10-pack sequence");
+    } finally {
+      setIsRecording10Pack(false);
+    }
+  };
+
+  // Instant Snapshot
+  const handleCaptureSnapshot = () => {
+    if (canvasRef.current) {
+      const dataUrl = canvasRef.current.toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `sightline-snapshot-${Date.now()}.png`;
+      a.click();
+      toast.success("📷 Snapshot downloaded");
+    } else {
+      toast.info("📷 Snapshot captured & logged to Hub");
+    }
+  };
+
+  // Scheduled Workflow Action Handlers
+  const handleScheduledWorkflowAction = async (
+    workflowId: string,
+    action: "restart" | "continue" | "pause" | "step"
+  ) => {
+    setActiveScheduledActionId(workflowId);
+    try {
+      const res = await fetch(`/api/mobile-stream/scheduled-workflows/${workflowId}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          toast.success(`⚡ ${data.message || `Workflow ${action}ed`}`);
+          fetchScheduledWorkflows();
+        }
+      }
+    } catch (e) {
+      toast.error(`Failed to ${action} workflow`);
+    } finally {
+      setActiveScheduledActionId(null);
+    }
+  };
+
+  // Run Synced Workflow on Connected Phone
+  const handleExecuteWorkflow = async (wf: SyncedWorkflow) => {
+    setExecutingWorkflowId(wf.id);
+    toast.info(`▶ Executing "${wf.name}" on Phone...`);
+    try {
+      for (let i = 0; i < wf.actions.length; i++) {
+        const step = wf.actions[i];
+        handleExecuteIncomingAction({
+          id: `act_${Date.now()}_${i}`,
+          type: step.type,
+          x: step.x,
+          y: step.y,
+          text: step.text,
+          key: step.key,
+          description: step.description || `Step ${i + 1}/${wf.actions.length}`,
+        });
+        await new Promise((resolve) => setTimeout(resolve, step.durationMs || 900));
+      }
+      toast.success(`✅ Completed "${wf.name}" execution`);
     } catch {
-      toast.error("Failed to capture snapshot");
+      toast.error("Workflow execution interrupted");
+    } finally {
+      setExecutingWorkflowId(null);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-between p-3 max-w-md mx-auto select-none font-sans">
-      {/* Top Status Header */}
-      <div className="w-full text-center space-y-1.5 pt-1">
-        <div className="flex items-center justify-center gap-2 flex-wrap">
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-900 border border-emerald-500/30 text-[10px] font-mono text-emerald-400">
-            <Radio className={`w-3 h-3 ${connected ? "animate-pulse text-emerald-400" : "text-slate-500"}`} />
-            {connected ? `LIVE (${framesSent} frames @ ${fps} FPS)` : "STANDBY READY"}
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-start p-2 sm:p-4 font-sans select-none max-w-7xl mx-auto">
+      {/* ---------------------------------------------------- */}
+      {/* TOP HEADER & TELEMETRY STRIP */}
+      {/* ---------------------------------------------------- */}
+      <div className="w-full max-w-md flex flex-col gap-1.5 mb-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-950">
+              <Smartphone className="w-4 h-4" />
+            </div>
+            <div>
+              <h1 className="text-sm font-black tracking-tight text-white flex items-center gap-1.5">
+                Sightline Mobile Remote
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 font-mono border border-cyan-800">
+                  ARM64
+                </span>
+              </h1>
+              <p className="text-[10px] text-slate-400 font-mono">
+                {connected ? (
+                  <span className="text-emerald-400 font-bold">● Connected • Latency: {lastLatencyMs}ms</span>
+                ) : (
+                  <span className="text-amber-400 font-bold">Connecting...</span>
+                )}
+              </p>
+            </div>
           </div>
 
-          {lastLatencyMs > 0 && (
-            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-600/40 text-[10px] font-mono text-cyan-300">
-              <Activity className="w-2.5 h-2.5" /> {lastLatencyMs}ms
-            </div>
-          )}
-
-          {wakeLockActive && (
-            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-950 border border-blue-600/40 text-[10px] font-mono text-blue-300">
-              <Lock className="w-2.5 h-2.5" /> AWAKE
-            </div>
-          )}
-
-          <button
-            onClick={() => setIsApkModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-sky-950 to-indigo-950 border border-sky-500/40 hover:border-sky-400 text-[10px] font-mono text-sky-300 transition shadow-sm active:scale-95"
-          >
-            <Smartphone className="w-3 h-3 text-sky-400" />
-            <span>APK & PWA</span>
-            {isInstallable && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIsApkModalOpen(true)}
+              className="h-7 px-2 text-[10px] font-bold border-slate-700 bg-slate-900 hover:bg-slate-800 text-cyan-300 gap-1"
+            >
+              <Download className="w-3 h-3 text-cyan-400" /> APK
+            </Button>
+            {isInstallable && (
+              <Button
+                size="sm"
+                onClick={install}
+                className="h-7 px-2 text-[10px] font-bold bg-cyan-600 hover:bg-cyan-500 text-white gap-1"
+              >
+                <Plus className="w-3 h-3" /> PWA
+              </Button>
+            )}
+          </div>
         </div>
 
-        <h1 className="text-base font-black tracking-tight text-white flex items-center justify-center gap-2">
-          <Smartphone className="w-5 h-5 text-cyan-400" /> Sightline Mobile Bridge & HUD
-        </h1>
-        <p className="text-[11px] text-slate-400">
-          Interactive Phone OS • Live Telemetry View • Workspace Scheduled Workflows
-        </p>
+        {/* Status Line */}
+        <div className="flex items-center justify-between text-[10px] font-mono bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-800">
+          <span className="text-cyan-300 truncate">{status}</span>
+          <span className="text-slate-400 text-[9px] shrink-0 ml-2">
+            Frames: <strong className="text-white">{framesSent}</strong>
+          </span>
+        </div>
 
         {/* 5 Main Module Navigation Tabs */}
         <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800 gap-1 mt-1 overflow-x-auto no-scrollbar">
@@ -1488,22 +1381,22 @@ export default function MobileRemote() {
         </div>
       </div>
 
-      {/* Active Linked App Scope Indicator */}
+      {/* Active Linked App Scope Indicator (Template Connect Scope) */}
       {activeLinkedApp && (
-        <div className="w-full my-1 p-2 rounded-xl bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950 border border-indigo-500/40 flex items-center justify-between shadow-sm">
+        <div className="w-full max-w-md my-1 p-2 rounded-xl bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950 border border-indigo-500/40 flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded-md bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">
+            <div className="w-6 h-6 rounded-md bg-indigo-600 flex items-center justify-center text-white text-[11px] font-bold">
               ⚡
             </div>
             <div className="text-[10px] leading-tight">
               <span className="text-slate-400">Template Connect: </span>
               <span className="font-bold text-white">{activeLinkedApp.name}</span>
-              <span className="text-[9px] text-indigo-300 block">Automation scoped to this app only</span>
+              <span className="text-[9px] text-indigo-300 block">AI automation scoped to this app only</span>
             </div>
           </div>
           <button
             onClick={() => setActiveLinkedApp(null)}
-            className="text-[9px] font-mono text-slate-400 hover:text-white px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700"
+            className="text-[9px] font-mono text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700"
           >
             Clear Scope
           </button>
@@ -1514,21 +1407,70 @@ export default function MobileRemote() {
       {/* TAB 1: SCREEN VIEWPORT (DISTINCT FOR EACH MODE) */}
       {/* ---------------------------------------------------- */}
       {activeTab === "stream" && (
-        <div className="w-full space-y-2">
-          {/* Main Viewport Container */}
-          <div className="w-full my-1 rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 relative shadow-2xl aspect-[9/14] flex flex-col items-center justify-center">
-            {/* 1. INTERACTIVE PHONE OS MODE */}
+        <div className="w-full max-w-md flex flex-col gap-2">
+          {/* Main Viewport Container (Guaranteed solid height & responsive phone casing) */}
+          <div className="w-full min-h-[640px] h-[640px] sm:h-[680px] rounded-[40px] border-[8px] border-slate-800/90 bg-slate-950 shadow-2xl relative flex flex-col overflow-hidden ring-1 ring-white/10">
+            {/* Top Phone Speaker Bar */}
+            <div className="absolute top-1.5 left-1/2 -translate-x-1/2 w-14 h-1 rounded-full bg-slate-700/80 z-50 pointer-events-none" />
+
+            {/* 1. INTERACTIVE PHONE OS MODE (FULL REAL PHONE USAGE) */}
             {streamMode === "interactive_phone" && (
-              <div className="w-full h-full relative overflow-hidden bg-slate-950">
+              <div className="w-full h-full relative overflow-hidden bg-slate-950 flex flex-col">
                 <InteractivePhoneVirtualOS
                   onActionLogged={(action, details) => {
                     setStatus(`Action: ${action} - ${details}`);
+                    if (isRecordingWorkflow) {
+                      setRecordedSteps((prev) => [
+                        ...prev,
+                        {
+                          id: `step_${Date.now()}`,
+                          type: action,
+                          description: details,
+                          time: new Date().toLocaleTimeString([], { minute: "2-digit", second: "2-digit" }),
+                        },
+                      ]);
+                    }
                   }}
+                  className="w-full h-full"
                 />
+
+                {/* Workflow Recording Banner / Control on Phone */}
+                {isRecordingWorkflow && (
+                  <div className="absolute bottom-10 inset-x-2 p-2 rounded-xl bg-red-950/90 border border-red-500/80 text-white z-40 backdrop-blur flex items-center justify-between shadow-2xl animate-pulse">
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold">
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+                      <span>Recording: {recordedSteps.length} Steps</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          setIsRecordingWorkflow(false);
+                          if (recordedSteps.length > 0) {
+                            setIsCreateWfModalOpen(true);
+                            setNewWfName(`Phone Workflow ${new Date().toLocaleDateString()}`);
+                            setNewWfDesc(`Recorded ${recordedSteps.length} interactive actions`);
+                          }
+                        }}
+                        className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[9px]"
+                      >
+                        Finish & Save
+                      </button>
+                      <button
+                        onClick={() => {
+                          setIsRecordingWorkflow(false);
+                          setRecordedSteps([]);
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white font-mono text-[9px]"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* 2. LIVE VIEW (READ-ONLY TELEPRESENCE MIRROR WITH HUD OVERLAYS) */}
+            {/* 2. LIVE VIEW (READ-ONLY TELEPRESENCE MIRROR OF PHONE WITH AI BOXES) */}
             {streamMode === "live_view" && (
               <div
                 onClick={handleLiveViewTouch}
@@ -1537,7 +1479,7 @@ export default function MobileRemote() {
                 style={{ transform: `scale(${liveViewZoom})`, transformOrigin: "center center" }}
               >
                 {/* Top Telepresence HUD Bar */}
-                <div className="z-30 p-2 bg-slate-950/90 border-b border-cyan-500/30 flex items-center justify-between backdrop-blur">
+                <div className="z-30 p-2 bg-slate-950/95 border-b border-cyan-500/30 flex items-center justify-between backdrop-blur">
                   <div className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
                     <span className="text-[10px] font-mono font-bold text-cyan-300">
@@ -1548,65 +1490,109 @@ export default function MobileRemote() {
                     <span>1080x2400</span>
                     <span>•</span>
                     <span className="text-emerald-400 font-bold">{fps || 60} FPS</span>
+                    <span>•</span>
+                    <span className="text-cyan-300 font-bold">{lastLatencyMs}ms</span>
                   </div>
                 </div>
 
-                {/* Simulated / Real Screen Feed Render */}
-                <div className="flex-1 relative flex flex-col items-center justify-center p-3 space-y-3">
+                {/* Simulated / Real Phone Screen Live Display */}
+                <div className="flex-1 relative flex flex-col justify-between p-4 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 overflow-hidden">
                   {/* Grid Overlay if enabled */}
                   {showGridOverlay && (
                     <div className="absolute inset-0 bg-[linear-gradient(to_right,#08334415_1px,transparent_1px),linear-gradient(to_bottom,#08334415_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
                   )}
 
-                  {/* Device Wallpaper & Live Display Representation */}
-                  <div className="w-full max-w-[260px] aspect-[9/16] rounded-2xl bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 border-2 border-cyan-500/40 p-2 shadow-2xl relative flex flex-col justify-between">
-                    {/* Status Bar */}
-                    <div className="flex items-center justify-between text-[8px] font-mono text-cyan-300 border-b border-slate-800 pb-1">
-                      <span>Sightline OS</span>
-                      <span>94% ⚡ {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                  {/* Top Status Bar Mirror */}
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-300 border-b border-white/5 pb-2">
+                    <span className="font-bold">
+                      {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                    <div className="w-16 h-3 bg-black rounded-full border border-slate-800 flex items-center justify-center gap-1">
+                      <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
                     </div>
-
-                    {/* Active App Live Feed Preview */}
-                    <div className="flex-1 py-3 px-1 space-y-2">
-                      <div className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-bold text-white flex items-center gap-1">
-                            <Smartphone className="w-3 h-3 text-cyan-400" /> Active Screen Frame
-                          </span>
-                          <Badge className="text-[8px] py-0 px-1 bg-cyan-950 text-cyan-300 border-cyan-700">
-                            VERIFIED
-                          </Badge>
-                        </div>
-                        <p className="text-[9px] text-slate-400 line-clamp-2">
-                          Live telepresence inspection stream. AI detection boxes active.
-                        </p>
-                      </div>
-
-                      {/* AI Bounding Box Overlays */}
-                      {showAiBoundingBoxes && (
-                        <div className="space-y-1.5 pt-1">
-                          {detectedLiveElements.map((el) => (
-                            <div
-                              key={el.id}
-                              className="p-1 rounded border border-dashed border-cyan-400 bg-cyan-500/10 flex items-center justify-between text-[8px] font-mono text-cyan-200"
-                            >
-                              <span>{el.label} ({el.type})</span>
-                              <span className="text-emerald-400 font-bold">{el.conf}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Footer Warning */}
-                    <div className="text-center pt-1 border-t border-slate-800 text-[8px] font-mono text-amber-400 flex items-center justify-center gap-1">
-                      <Lock className="w-2.5 h-2.5" /> Viewing-Only • Protected
+                    <div className="flex items-center gap-1 text-[9px]">
+                      <Wifi className="w-3 h-3 text-emerald-400" />
+                      <span>5G</span>
+                      <span>96% ⚡</span>
                     </div>
                   </div>
+
+                  {/* Search Bar Mirror with AI Bounding Box */}
+                  <div className="relative my-2 p-2.5 rounded-2xl bg-slate-900/90 border border-slate-700/80 flex items-center justify-between text-slate-300">
+                    <div className="flex items-center gap-2">
+                      <Globe className="w-4 h-4 text-cyan-400" />
+                      <span className="text-xs font-medium text-slate-400">Search apps, web or ask AI...</span>
+                    </div>
+                    <Sparkles className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
+                    {showAiBoundingBoxes && (
+                      <div className="absolute -top-1.5 right-2 px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500 text-[8px] font-mono text-cyan-300 font-bold">
+                        Input • 99%
+                      </div>
+                    )}
+                  </div>
+
+                  {/* App Grid Mirror with AI Bounding Boxes */}
+                  <div className="grid grid-cols-4 gap-3 py-4 relative">
+                    {[
+                      { name: "Chrome", icon: Globe, color: "from-blue-600 to-cyan-600", conf: "98%" },
+                      { name: "Calculator", icon: Calculator, color: "from-amber-600 to-orange-600", conf: "98%" },
+                      { name: "Notes", icon: FileText, color: "from-indigo-600 to-purple-600", conf: "97%" },
+                      { name: "Camera", icon: Camera, color: "from-emerald-600 to-teal-600", conf: "99%" },
+                      { name: "YouTube", icon: Video, color: "from-red-600 to-rose-600", conf: "96%" },
+                      { name: "Music", icon: Music, color: "from-green-600 to-emerald-700", conf: "97%" },
+                      { name: "Terminal", icon: Terminal, color: "from-slate-800 to-slate-950", conf: "99%" },
+                      { name: "Files", icon: Folder, color: "from-amber-500 to-yellow-600", conf: "95%" },
+                    ].map((app) => (
+                      <div key={app.name} className="flex flex-col items-center gap-1 relative group">
+                        <div
+                          className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${app.color} flex items-center justify-center text-white shadow-lg border border-white/20 relative`}
+                        >
+                          <app.icon className="w-5 h-5" />
+                          {showAiBoundingBoxes && (
+                            <div className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-cyan-400 border border-black animate-ping" />
+                          )}
+                        </div>
+                        <span className="text-[9px] font-bold text-slate-300 truncate max-w-[54px]">{app.name}</span>
+                        {showAiBoundingBoxes && (
+                          <span className="text-[7px] font-mono text-emerald-400">{app.conf}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Navigation Dock Mirror */}
+                  <div className="p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 flex items-center justify-around text-slate-400">
+                    <ArrowLeft className="w-4 h-4" />
+                    <Home className="w-4 h-4 text-cyan-400" />
+                    <Layers className="w-4 h-4" />
+                  </div>
+
+                  {/* Notice overlay when touched in Live View */}
+                  {liveViewNotice && (
+                    <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 p-3 rounded-2xl bg-slate-950/95 border-2 border-cyan-500 shadow-2xl backdrop-blur z-50 text-center space-y-2 animate-in fade-in zoom-in duration-150">
+                      <div className="w-9 h-9 rounded-full bg-cyan-500/20 border border-cyan-400 flex items-center justify-center mx-auto text-cyan-300">
+                        <Lock className="w-4 h-4" />
+                      </div>
+                      <p className="text-xs font-bold text-white">Live View is Protected (Viewing Only)</p>
+                      <p className="text-[10px] text-slate-400 leading-tight">
+                        Touch input is disabled in Live View to prevent accidental misfires.
+                      </p>
+                      <Button
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSwitchStreamSource("interactive_phone");
+                        }}
+                        className="h-7 text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white w-full gap-1"
+                      >
+                        <Smartphone className="w-3.5 h-3.5" /> Switch to Interactive Mode to Touch
+                      </Button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Bottom Live View Telemetry Toolbar */}
-                <div className="p-1.5 bg-slate-950/95 border-t border-slate-800 flex items-center justify-between gap-1 z-30">
+                <div className="p-2 bg-slate-950/95 border-t border-slate-800 flex items-center justify-between gap-1 z-30">
                   <div className="flex items-center gap-1">
                     <Button
                       size="sm"
@@ -1807,20 +1793,32 @@ export default function MobileRemote() {
             <Button
               onClick={() => setIsTemplateDrawerOpen(true)}
               className="h-8 rounded-lg text-[11px] font-bold bg-amber-600 hover:bg-amber-500 text-white gap-1"
-              title="Template Connect - Linked Apps"
+              title="Template Connect - Linked Apps (Scoped Automation)"
             >
               <Grid className="w-3 h-3" /> Home Apps
             </Button>
             <Button
               onClick={() => {
-                if (typeof window !== "undefined") {
-                  window.dispatchEvent(new CustomEvent("sightline-navigate-back"));
+                if (streamMode === "interactive_phone") {
+                  setIsRecordingWorkflow((prev) => !prev);
+                  if (!isRecordingWorkflow) {
+                    setRecordedSteps([]);
+                    toast.info("🔴 Workflow Recording Started: Tap apps to record steps");
+                  }
+                } else {
+                  handleSwitchStreamSource("interactive_phone");
+                  setIsRecordingWorkflow(true);
+                  setRecordedSteps([]);
+                  toast.info("🔴 Switched to Phone & Started Recording Steps");
                 }
               }}
               variant="outline"
-              className="h-8 rounded-lg text-[11px] font-bold border-slate-700 bg-slate-800 text-slate-200 gap-1"
+              className={`h-8 rounded-lg text-[11px] font-bold border-slate-700 bg-slate-800 gap-1 ${
+                isRecordingWorkflow ? "text-red-400 border-red-500" : "text-slate-200"
+              }`}
             >
-              <ArrowLeft className="w-3 h-3 text-cyan-400" /> Back
+              <Sparkles className="w-3 h-3 text-purple-400" />
+              {isRecordingWorkflow ? "Stop Rec" : "Record Wf"}
             </Button>
             <Button
               onClick={handleRecord10DifferentialScreenshots}
@@ -1845,102 +1843,126 @@ export default function MobileRemote() {
       {/* TAB 2: SCHEDULED WORKFLOWS (CHECKED FROM WORKSPACE) */}
       {/* ---------------------------------------------------- */}
       {activeTab === "scheduled" && (
-        <div className="w-full flex-1 space-y-2.5 my-2">
+        <div className="w-full max-w-md flex-1 space-y-2.5 my-2">
           {/* Header Bar */}
           <div className="flex items-center justify-between bg-slate-900 p-2.5 rounded-xl border border-slate-800">
-            <div>
-              <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                <Clock className="w-4 h-4 text-amber-400" /> Workspace Scheduled Workflows
-              </span>
-              <span className="text-[10px] text-slate-400">
-                Auto-checked from workspace • Synced with this device
-              </span>
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-400" />
+              <div>
+                <h3 className="text-xs font-bold text-white">Workspace Scheduled Workflows</h3>
+                <p className="text-[9px] text-slate-400">Assigned to: {deviceName}</p>
+              </div>
             </div>
             <Button
               size="sm"
               variant="outline"
               onClick={fetchScheduledWorkflows}
-              className="h-7 px-2 text-[10px] font-mono border-slate-700 text-slate-300 gap-1"
+              className="h-6 px-2 text-[9px] font-mono border-slate-700 text-cyan-300 gap-1"
             >
-              <RefreshCw className={`w-3 h-3 ${isLoadingScheduled ? "animate-spin text-amber-400" : ""}`} />
-              <span>Refresh</span>
+              <RefreshCw className={`w-2.5 h-2.5 ${isLoadingScheduled ? "animate-spin" : ""}`} /> Refresh
             </Button>
           </div>
 
-          {/* Scheduled Workflows List */}
-          <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1 no-scrollbar">
+          {/* Scheduled Tasks List */}
+          <div className="space-y-2">
             {scheduledWorkflows.length === 0 ? (
-              <div className="p-8 text-center bg-slate-900/60 rounded-xl border border-dashed border-slate-800 space-y-2">
-                <Clock className="w-8 h-8 mx-auto text-slate-600" />
-                <p className="text-xs text-slate-400 font-medium">No scheduled workflows queued for this phone</p>
+              <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 text-center space-y-2">
+                <Clock className="w-8 h-8 text-slate-600 mx-auto" />
+                <p className="text-xs font-bold text-slate-400">No Scheduled Workflows Active</p>
                 <p className="text-[10px] text-slate-500">
-                  Workflows scheduled in the main Workspace or Automation tab will appear here automatically.
+                  Workflows scheduled in the workspace or desktop scheduler will appear here automatically.
                 </p>
               </div>
             ) : (
               scheduledWorkflows.map((sw) => (
                 <div
                   key={sw.id}
-                  className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-all space-y-2 shadow-md"
+                  className="p-3 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5 hover:border-amber-500/50 transition-colors shadow-lg"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="space-y-0.5 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h4 className="text-xs font-bold text-white">{sw.name}</h4>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-white">{sw.name}</span>
                         <Badge
-                          className={`text-[9px] py-0 px-1 font-mono ${
+                          className={`text-[8px] py-0 px-1 font-mono ${
                             sw.status === "running"
-                              ? "bg-emerald-950 text-emerald-300 border-emerald-700"
+                              ? "bg-emerald-950 text-emerald-300 border-emerald-700 animate-pulse"
                               : sw.status === "paused"
                               ? "bg-amber-950 text-amber-300 border-amber-700"
-                              : "bg-indigo-950 text-indigo-300 border-indigo-800"
+                              : "bg-slate-800 text-slate-300 border-slate-700"
                           }`}
                         >
                           {sw.status.toUpperCase()}
                         </Badge>
                       </div>
-                      <p className="text-[10px] text-slate-400 line-clamp-1">{sw.description}</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-2">{sw.description}</p>
                     </div>
 
-                    {/* Progress Indicator */}
-                    <span className="text-[10px] font-mono text-cyan-300 font-bold shrink-0">
-                      Step {sw.currentStepIndex + 1}/{sw.totalSteps}
-                    </span>
+                    <div className="text-right shrink-0">
+                      <span className="text-[9px] font-mono text-cyan-300 block">
+                        Every {sw.intervalMinutes || 15}m
+                      </span>
+                      <span className="text-[8px] font-mono text-slate-500">
+                        Step {sw.currentStepIndex + 1}/{sw.totalSteps}
+                      </span>
+                    </div>
                   </div>
 
-                  {/* Execution Control Buttons: Continue, Restart, Pause, Step */}
-                  <div className="flex items-center gap-1.5 pt-1 border-t border-slate-800/80">
-                    <Button
-                      size="sm"
-                      onClick={() => handleScheduledWorkflowAction(sw.id, "continue")}
-                      disabled={activeScheduledActionId === sw.id}
-                      className="flex-1 h-7 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold gap-1 shadow-sm"
-                    >
-                      <Play className="w-3 h-3" />
-                      <span>{sw.status === "paused" ? "Resume" : "Run / Continue"}</span>
-                    </Button>
+                  {/* Step Progress Visual Bar */}
+                  <div className="space-y-1">
+                    <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden flex gap-0.5">
+                      {sw.steps.map((step, idx) => (
+                        <div
+                          key={step.id}
+                          className={`flex-1 h-full rounded-full transition-all ${
+                            idx < sw.currentStepIndex
+                              ? "bg-emerald-400"
+                              : idx === sw.currentStepIndex && sw.status === "running"
+                              ? "bg-cyan-400 animate-pulse"
+                              : idx === sw.currentStepIndex && sw.status === "paused"
+                              ? "bg-amber-400"
+                              : "bg-slate-700"
+                          }`}
+                        />
+                      ))}
+                    </div>
+
+                    <div className="flex items-center justify-between text-[8px] font-mono text-slate-400">
+                      <span>Current: {sw.steps[sw.currentStepIndex]?.description || "Ready"}</span>
+                      {sw.autoHeal && <span className="text-emerald-400">⚡ Auto-Heal ON</span>}
+                    </div>
+                  </div>
+
+                  {/* Execution Control Action Buttons (Continue, Restart, Pause, Step) */}
+                  <div className="flex items-center gap-1.5 pt-1 border-t border-slate-800">
+                    {sw.status === "running" ? (
+                      <Button
+                        size="sm"
+                        onClick={() => handleScheduledWorkflowAction(sw.id, "pause")}
+                        disabled={activeScheduledActionId === sw.id}
+                        className="flex-1 h-7 text-[10px] font-bold bg-amber-600 hover:bg-amber-500 text-white gap-1"
+                      >
+                        <Pause className="w-3 h-3" /> Pause
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={() => handleScheduledWorkflowAction(sw.id, "continue")}
+                        disabled={activeScheduledActionId === sw.id}
+                        className="flex-1 h-7 text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white gap-1"
+                      >
+                        <Play className="w-3 h-3" /> Continue / Run
+                      </Button>
+                    )}
 
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => handleScheduledWorkflowAction(sw.id, "restart")}
                       disabled={activeScheduledActionId === sw.id}
-                      className="h-7 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 text-[10px] font-bold gap-1"
-                      title="Restart workflow from Step 1"
+                      className="flex-1 h-7 text-[10px] font-bold border-slate-700 bg-slate-800 hover:bg-slate-700 text-cyan-300 gap-1"
                     >
-                      <RotateCcw className="w-3 h-3 text-cyan-400" />
-                      <span>Restart</span>
-                    </Button>
-
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleScheduledWorkflowAction(sw.id, "pause")}
-                      disabled={activeScheduledActionId === sw.id}
-                      className="h-7 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 text-[10px] font-bold"
-                      title="Pause workflow"
-                    >
-                      <Pause className="w-3 h-3 text-amber-400" />
+                      <RotateCcw className="w-3 h-3 text-cyan-400" /> Restart Step 1
                     </Button>
 
                     <Button
@@ -1948,17 +1970,11 @@ export default function MobileRemote() {
                       variant="outline"
                       onClick={() => handleScheduledWorkflowAction(sw.id, "step")}
                       disabled={activeScheduledActionId === sw.id}
-                      className="h-7 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 text-[10px] font-bold"
-                      title="Step forward to next action"
+                      className="h-7 px-2 text-[10px] font-bold border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300"
+                      title="Step Forward 1 Action"
                     >
-                      <SkipForward className="w-3 h-3 text-purple-400" />
+                      <SkipForward className="w-3 h-3" />
                     </Button>
-                  </div>
-
-                  {/* Scheduled Metadata */}
-                  <div className="flex items-center justify-between text-[9px] font-mono text-slate-500">
-                    <span>Target: {sw.targetDevice}</span>
-                    <span>Next: {new Date(sw.nextRunTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                   </div>
                 </div>
               ))
@@ -1968,222 +1984,170 @@ export default function MobileRemote() {
       )}
 
       {/* ---------------------------------------------------- */}
-      {/* TAB 3: SYNCED WORKFLOWS HUD */}
+      {/* TAB 3: WORKFLOWS MANAGER */}
       {/* ---------------------------------------------------- */}
       {activeTab === "workflows" && (
-        <div className="w-full flex-1 space-y-2.5 my-2">
-          {/* Top Bar: Search, New Workflow */}
-          <div className="flex items-center justify-between gap-2 bg-slate-900 p-2 rounded-xl border border-slate-800">
-            <Input
-              value={workflowSearch}
-              onChange={(e) => setWorkflowSearch(e.target.value)}
-              placeholder="Search synced workflows..."
-              className="h-7 text-xs bg-slate-950 border-slate-700 text-white"
-            />
+        <div className="w-full max-w-md flex-1 space-y-2.5 my-2">
+          <div className="flex items-center justify-between bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-indigo-400" />
+              <div>
+                <h3 className="text-xs font-bold text-white">Synced Workflows</h3>
+                <p className="text-[9px] text-slate-400">{workflows.length} workflows saved</p>
+              </div>
+            </div>
             <Button
               size="sm"
               onClick={() => setIsCreateWfModalOpen(true)}
-              className="h-7 px-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold gap-1 shrink-0"
+              className="h-6 px-2 text-[9px] font-bold bg-indigo-600 hover:bg-indigo-500 text-white gap-1"
             >
-              <Plus className="w-3 h-3" /> +Save Workflow
+              <Plus className="w-2.5 h-2.5" /> Create
             </Button>
           </div>
 
-          {/* Workflows List */}
-          <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1 no-scrollbar">
-            {workflows.length === 0 ? (
-              <div className="p-8 text-center bg-slate-900/60 rounded-xl border border-dashed border-slate-800 space-y-2">
-                <Layers className="w-8 h-8 mx-auto text-slate-600" />
-                <p className="text-xs text-slate-400 font-medium">No synced workflows found</p>
-                <p className="text-[10px] text-slate-500">
-                  Record 10-Screenshots or save your action sequence to populate this deck.
-                </p>
-                <Button
-                  size="sm"
-                  onClick={handleRecord10DifferentialScreenshots}
-                  className="h-7 text-xs bg-amber-600 hover:bg-amber-500 text-white gap-1"
-                >
-                  <Camera className="w-3.5 h-3.5" /> Capture 10-Screenshot Pack
-                </Button>
-              </div>
-            ) : (
-              workflows
-                .filter(
-                  (w) =>
-                    !workflowSearch ||
-                    w.name.toLowerCase().includes(workflowSearch.toLowerCase()) ||
-                    w.tags.some((t) => t.toLowerCase().includes(workflowSearch.toLowerCase()))
-                )
-                .map((wf) => (
-                  <div
-                    key={wf.id}
-                    className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-all space-y-2 shadow-md"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-0.5 flex-1">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="text-xs font-bold text-white">{wf.name}</h4>
-                          <Badge className="bg-indigo-950 text-indigo-300 border-indigo-800 text-[9px] py-0 px-1 font-mono">
-                            {wf.actions?.length || 0} step(s)
-                          </Badge>
-                        </div>
-                        <p className="text-[10px] text-slate-400 line-clamp-1">{wf.description}</p>
-                      </div>
+          <div className="relative">
+            <input
+              value={workflowSearch}
+              onChange={(e) => setWorkflowSearch(e.target.value)}
+              placeholder="Search workflows by name or action..."
+              className="w-full h-8 bg-slate-900 rounded-xl px-3 text-[11px] font-mono text-slate-200 border border-slate-800 focus:outline-none focus:border-indigo-500"
+            />
+          </div>
 
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleForwardToDesktopHud(wf)}
-                          className="h-7 px-1.5 bg-purple-950/70 hover:bg-purple-900 text-purple-200 border-purple-700/60 text-[9px] font-mono gap-0.5"
-                          title="Forward workflow to Live Desktop Vision HUD"
-                        >
-                          <Layers className="w-2.5 h-2.5 text-purple-400" /> Link HUD
-                        </Button>
-
-                        <Button
-                          size="sm"
-                          onClick={() => handleReplayWorkflow(wf)}
-                          disabled={executingWorkflowId === wf.id}
-                          className="h-7 px-2 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold gap-1 shadow-sm"
-                        >
-                          {executingWorkflowId === wf.id ? (
-                            <RefreshCw className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <Play className="w-3 h-3" />
-                          )}
-                          <span>Run</span>
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Step Actions Preview */}
-                    {wf.actions && wf.actions.length > 0 && (
-                      <div className="p-1.5 rounded-lg bg-slate-950/70 border border-slate-800 space-y-1">
-                        <span className="text-[9px] font-mono text-slate-400 font-bold">Steps & Waypoints:</span>
-                        <div className="space-y-0.5 max-h-16 overflow-y-auto pr-1">
-                          {wf.actions.slice(0, 4).map((act, sIdx) => (
-                            <div key={sIdx} className="text-[9px] font-mono text-slate-300 flex justify-between">
-                              <span className="truncate text-cyan-300">
-                                {sIdx + 1}. {act.description || act.type}
-                              </span>
-                              {typeof act.x === "number" && (
-                                <span className="text-slate-500 shrink-0">
-                                  ({Math.round(act.x * 100)}%, {Math.round((act.y || 0) * 100)}%)
-                                </span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+          <div className="space-y-2">
+            {workflows.map((wf) => (
+              <div
+                key={wf.id}
+                className="p-3 rounded-2xl bg-slate-900 border border-slate-800 space-y-2 hover:border-indigo-500/50 transition-colors shadow-lg"
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-white">{wf.name}</h4>
+                    <p className="text-[10px] text-slate-400 mt-0.5">{wf.description}</p>
                   </div>
-                ))
-            )}
+                  <Badge className="text-[8px] py-0 px-1.5 bg-indigo-950 text-indigo-300 border-indigo-700">
+                    {wf.actions.length} Steps
+                  </Badge>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-slate-800">
+                  <span className="text-[9px] font-mono text-slate-500">
+                    Created {new Date(wf.createdAt).toLocaleDateString()}
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={() => handleExecuteWorkflow(wf)}
+                    disabled={executingWorkflowId === wf.id}
+                    className="h-6 px-2.5 text-[9px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white gap-1"
+                  >
+                    {executingWorkflowId === wf.id ? (
+                      <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                    ) : (
+                      <Play className="w-2.5 h-2.5" />
+                    )}
+                    {executingWorkflowId === wf.id ? "Executing..." : "Run on Phone"}
+                  </Button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
 
       {/* ---------------------------------------------------- */}
-      {/* TAB 4: 10-SCREENSHOT DIFFERENTIAL PACK RECORDER */}
+      {/* TAB 4: 10-SCREENSHOT DIFFERENTIAL PACKS */}
       {/* ---------------------------------------------------- */}
       {activeTab === "pack10" && (
-        <div className="w-full flex-1 space-y-2.5 my-2">
-          <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                <Camera className="w-4 h-4 text-amber-400" /> 10-Screenshot Differential Recorder
-              </span>
-              <span className="text-[10px] font-mono text-amber-300">
-                {tenFramesPack.length}/10 Frames Recorded
-              </span>
+        <div className="w-full max-w-md flex-1 space-y-2.5 my-2">
+          <div className="flex items-center justify-between bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+            <div className="flex items-center gap-2">
+              <Camera className="w-4 h-4 text-teal-400" />
+              <div>
+                <h3 className="text-xs font-bold text-white">10-Screenshot Differential Packs</h3>
+                <p className="text-[9px] text-slate-400">Step-by-step differential capture</p>
+              </div>
             </div>
-            <p className="text-[10px] text-slate-400">
-              Capture 10 rapid differential screenshots to auto-generate a 10-step AI workflow pack.
-            </p>
-
-            <div className="flex gap-2 pt-1">
-              <Button
-                onClick={handleRecord10DifferentialScreenshots}
-                disabled={isRecording10Pack}
-                className="flex-1 h-8 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs gap-1.5 shadow-md"
-              >
-                {isRecording10Pack ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
-                {isRecording10Pack ? `Recording (${packProgress}/10)...` : "📸 Capture 10 Screenshots"}
-              </Button>
-
-              {tenFramesPack.length > 0 && (
-                <Button
-                  onClick={handleCompile10PackWorkflow}
-                  className="h-8 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs gap-1 shadow-md"
-                >
-                  <Save className="w-3.5 h-3.5" /> Compile & Save
-                </Button>
-              )}
-            </div>
+            <Button
+              size="sm"
+              onClick={handleRecord10DifferentialScreenshots}
+              disabled={isRecording10Pack}
+              className="h-6 px-2 text-[9px] font-bold bg-teal-600 hover:bg-teal-500 text-white gap-1"
+            >
+              {isRecording10Pack ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : <Plus className="w-2.5 h-2.5" />}
+              {isRecording10Pack ? `Recording ${packProgress}/10...` : "Record 10-Pack"}
+            </Button>
           </div>
 
-          {/* 10 Frames Grid */}
-          {tenFramesPack.length > 0 && (
-            <div className="space-y-1.5">
-              <span className="text-[10px] font-mono text-slate-400 font-bold uppercase">
-                Recorded Differential Screenshots & Steps:
-              </span>
-              <div className="grid grid-cols-2 gap-2 max-h-[280px] overflow-y-auto pr-1">
-                {tenFramesPack.map((frame) => (
-                  <div
-                    key={frame.id}
-                    className="p-2 rounded-xl bg-slate-900 border border-slate-800 space-y-1 text-left relative group"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="px-1.5 py-0.2 rounded bg-amber-950 border border-amber-500/40 text-[9px] font-mono font-bold text-amber-300">
-                        Step #{frame.stepNumber}
-                      </span>
-                      <span className="text-[9px] font-mono text-cyan-400">{frame.actionType}</span>
-                    </div>
-
-                    <div className="w-full h-16 rounded-lg overflow-hidden bg-black border border-slate-800 flex items-center justify-center relative">
-                      {frame.imageData ? (
-                        <img src={frame.imageData} alt={`Step ${frame.stepNumber}`} className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-[9px] font-mono text-slate-500">Frame Snapshot #{frame.stepNumber}</span>
-                      )}
-                      <div className="absolute top-1 right-1 w-3.5 h-3.5 rounded-full bg-cyan-400/80 border border-white" />
-                    </div>
-
-                    <p className="text-[9px] font-mono text-slate-300 truncate">{frame.description}</p>
+          {tenFramesPack.length === 0 ? (
+            <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 text-center space-y-2">
+              <Camera className="w-8 h-8 text-slate-600 mx-auto" />
+              <p className="text-xs font-bold text-slate-400">No 10-Screenshot Pack Recorded</p>
+              <p className="text-[10px] text-slate-500">
+                Tap 'Record 10-Pack' to capture a full 10-step differential workflow sequence with visual deltas.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              {tenFramesPack.map((f) => (
+                <div key={f.id} className="p-2 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+                  <div className="flex items-center justify-between text-[9px] font-mono">
+                    <span className="font-bold text-teal-300">Step #{f.stepNumber}</span>
+                    <span className="text-slate-500">{f.actionType}</span>
                   </div>
-                ))}
-              </div>
+                  <div className="w-full aspect-[9/14] bg-black rounded-lg overflow-hidden border border-slate-800">
+                    <img src={f.imageData} alt={`Step ${f.stepNumber}`} className="w-full h-full object-cover" />
+                  </div>
+                  <p className="text-[8px] text-slate-400 truncate">{f.description}</p>
+                </div>
+              ))}
             </div>
           )}
         </div>
       )}
 
       {/* ---------------------------------------------------- */}
-      {/* TAB 5: FORWARDED AI ACTIONS FEED */}
+      {/* TAB 5: AI ACTIONS LOG & DISPATCHER */}
       {/* ---------------------------------------------------- */}
       {activeTab === "actions" && (
-        <div className="w-full flex-1 space-y-2.5 my-2">
-          <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
-            <span className="text-xs font-bold text-white flex items-center gap-1.5">
-              <Zap className="w-4 h-4 text-emerald-400" /> Live AI Automation Feed
-            </span>
-            <p className="text-[10px] text-slate-400">
-              Live keystrokes, coordinates, hardware buttons and touch events received from PC.
-            </p>
+        <div className="w-full max-w-md flex-1 space-y-2.5 my-2">
+          <div className="flex items-center justify-between bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-emerald-400" />
+              <div>
+                <h3 className="text-xs font-bold text-white">AI Dispatched Actions</h3>
+                <p className="text-[9px] text-slate-400">Live execution stream from AI planner</p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setActionHistory([])}
+              className="h-6 px-2 text-[9px] font-mono border-slate-700 text-slate-400"
+            >
+              Clear Log
+            </Button>
           </div>
 
-          <div className="space-y-1.5 max-h-[340px] overflow-y-auto pr-1">
+          <div className="space-y-1.5">
             {actionHistory.length === 0 ? (
-              <div className="p-8 text-center bg-slate-900/40 rounded-xl border border-dashed border-slate-800 text-slate-500 text-xs">
-                No automation actions received yet. Dispatched actions from PC Deck will stream here.
+              <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 text-center space-y-2">
+                <Zap className="w-8 h-8 text-slate-600 mx-auto" />
+                <p className="text-xs font-bold text-slate-400">No Actions Recorded Yet</p>
+                <p className="text-[10px] text-slate-500">
+                  Actions executed by the AI copilot or forwarded from the desktop deck will appear here.
+                </p>
               </div>
             ) : (
-              actionHistory.map((item) => (
-                <div key={item.id} className="p-2 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between text-xs font-mono">
-                  <span className="text-emerald-400 font-bold truncate">{item.desc}</span>
-                  <span className="text-slate-500 text-[10px] shrink-0">{item.time}</span>
+              actionHistory.map((a) => (
+                <div
+                  key={a.id}
+                  className="p-2 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between text-[10px] font-mono"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    <span className="text-slate-200">{a.desc}</span>
+                  </div>
+                  <span className="text-[9px] text-slate-500">{a.time}</span>
                 </div>
               ))
             )}
@@ -2191,115 +2155,216 @@ export default function MobileRemote() {
         </div>
       )}
 
-      {/* Bottom Status bar */}
-      <div className="w-full p-2 rounded-xl bg-slate-900/90 border border-slate-800 text-center">
-        <p className="text-[11px] font-mono text-cyan-400 font-medium truncate">{status}</p>
-      </div>
-
-      {/* Incoming Clipboard Paste Banner */}
-      {incomingClipboardText && (
-        <div className="fixed top-12 left-3 right-3 z-50 bg-indigo-950/95 border-2 border-indigo-400 text-white p-2.5 rounded-xl shadow-2xl animate-in slide-in-from-top duration-200 space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-indigo-300 flex items-center gap-1">
-              <ClipboardCopy className="w-3.5 h-3.5 text-indigo-400" /> AI / PC Sent Text:
-            </span>
-            <span className="text-[9px] font-mono text-emerald-400 bg-emerald-950 px-1 rounded">Copied to Clipboard!</span>
-          </div>
-          <p className="text-xs font-mono font-bold truncate text-white bg-black/50 p-1.5 rounded">
-            "{incomingClipboardText}"
-          </p>
-        </div>
-      )}
-
-      {/* Incoming App Launch Prompt Banner */}
-      {incomingAppPrompt && (
-        <div className="fixed top-12 left-3 right-3 z-50 bg-emerald-950/95 border-2 border-emerald-400 text-white p-2.5 rounded-xl shadow-2xl animate-in slide-in-from-top duration-200 space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold text-emerald-300 flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5 text-emerald-400" /> Open Target App:
-            </span>
-            <span className="text-[9px] font-mono text-emerald-400 bg-black/40 px-1 rounded">1-Tap Launch</span>
-          </div>
-          <p className="text-xs font-bold text-white">
-            {incomingAppPrompt.name}
-          </p>
-          <div className="flex gap-1.5">
-            <Button
-              size="sm"
-              onClick={() => {
-                if (incomingAppPrompt.url) {
-                  window.open(incomingAppPrompt.url, "_blank");
-                }
-                setIncomingAppPrompt(null);
-              }}
-              className="flex-1 h-7 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold"
-            >
-              Launch Now
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setIncomingAppPrompt(null)}
-              className="h-7 text-[10px] border-slate-700 text-slate-300"
-            >
-              Dismiss
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Create Custom Workflow Modal */}
-      {isCreateWfModalOpen && (
-        <div
-          onClick={() => setIsCreateWfModalOpen(false)}
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm bg-slate-950 border border-slate-800 rounded-2xl p-4 shadow-2xl space-y-3"
-          >
+      {/* ---------------------------------------------------- */}
+      {/* TEMPLATE CONNECT / LINKED APPS DRAWER (HOME APPS) */}
+      {/* ---------------------------------------------------- */}
+      {isTemplateDrawerOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-lg bg-slate-950 border border-slate-800 rounded-t-3xl sm:rounded-3xl p-4 max-h-[85vh] flex flex-col gap-3 shadow-2xl overflow-hidden">
+            {/* Drawer Header */}
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-              <span className="font-bold text-xs text-white flex items-center gap-1.5">
-                <Save className="w-3.5 h-3.5 text-indigo-400" /> Save / Compile New Workflow
-              </span>
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-xl bg-amber-600 flex items-center justify-center text-white font-bold">
+                  ⚡
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    Template Connect • Linked Apps
+                  </h3>
+                  <p className="text-[9px] text-slate-400">
+                    Connect a linked app to isolate AI automation and workflows strictly to that application
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsTemplateDrawerOpen(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg bg-slate-900 border border-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Template Apps Grid */}
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+              {templateApps.map((app) => (
+                <div
+                  key={app.id}
+                  onClick={() => {
+                    setActiveLinkedApp(app);
+                    setIsTemplateDrawerOpen(false);
+                    toast.success(`⚡ Template Connected: Scoped to "${app.name}"`);
+                  }}
+                  className={`p-3 rounded-2xl border transition-all cursor-pointer flex flex-col gap-2 ${
+                    activeLinkedApp?.id === app.id
+                      ? "bg-indigo-950/60 border-indigo-500 shadow-lg shadow-indigo-950"
+                      : "bg-slate-900/90 border-slate-800 hover:border-slate-700 hover:bg-slate-900"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${app.color} flex items-center justify-center text-white font-bold shadow-md`}>
+                        <Grid className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-white">{app.name}</h4>
+                        <span className="text-[9px] font-mono text-cyan-400">{app.category}</span>
+                      </div>
+                    </div>
+
+                    <Badge
+                      className={`text-[8px] py-0 px-1.5 font-mono ${
+                        activeLinkedApp?.id === app.id
+                          ? "bg-indigo-600 text-white border-transparent"
+                          : "bg-slate-800 text-slate-300 border-slate-700"
+                      }`}
+                    >
+                      {activeLinkedApp?.id === app.id ? "ACTIVE LINK" : "CONNECT"}
+                    </Badge>
+                  </div>
+
+                  <p className="text-[10px] text-slate-400 leading-relaxed">{app.description}</p>
+
+                  <div className="flex flex-wrap gap-1 pt-1">
+                    {app.capabilities.map((cap) => (
+                      <span
+                        key={cap}
+                        className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-300 border border-slate-800"
+                      >
+                        ✓ {cap}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+              {activeLinkedApp ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setActiveLinkedApp(null);
+                    setIsTemplateDrawerOpen(false);
+                    toast.info("Cleared Linked Scope: Full Phone OS active");
+                  }}
+                  className="h-7 text-[10px] font-mono border-slate-700 text-slate-400"
+                >
+                  Clear Scope (Full Phone OS)
+                </Button>
+              ) : (
+                <span className="text-[9px] font-mono text-slate-500">No linked app scoped currently</span>
+              )}
+              <Button
+                size="sm"
+                onClick={() => setIsTemplateDrawerOpen(false)}
+                className="h-7 px-3 text-[10px] font-bold bg-cyan-600 hover:bg-cyan-500 text-white"
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------------------------------------------- */}
+      {/* CREATE WORKFLOW MODAL */}
+      {/* ---------------------------------------------------- */}
+      {isCreateWfModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-4 space-y-3 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Layers className="w-4 h-4 text-indigo-400" /> Save Recorded Workflow
+              </h3>
               <button onClick={() => setIsCreateWfModalOpen(false)} className="text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="space-y-2">
-              <div className="space-y-1">
-                <label className="text-[10px] font-mono text-slate-400">Workflow Name:</label>
+              <div>
+                <label className="text-[10px] font-mono text-slate-400">Workflow Name</label>
                 <Input
                   value={newWfName}
                   onChange={(e) => setNewWfName(e.target.value)}
-                  placeholder="e.g. Chrome Search & Navigate"
-                  className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
+                  placeholder="e.g. Chrome Search & Note Sync"
+                  className="h-8 bg-slate-950 border-slate-800 text-xs text-white"
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] font-mono text-slate-400">Description:</label>
+              <div>
+                <label className="text-[10px] font-mono text-slate-400">Description</label>
                 <Input
                   value={newWfDesc}
                   onChange={(e) => setNewWfDesc(e.target.value)}
-                  placeholder="Brief description of steps..."
-                  className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
+                  placeholder="e.g. Automated navigation and note logging"
+                  className="h-8 bg-slate-950 border-slate-800 text-xs text-white"
                 />
               </div>
+
+              {recordedSteps.length > 0 && (
+                <div className="p-2 rounded-xl bg-slate-950 border border-slate-800 max-h-32 overflow-y-auto space-y-1">
+                  <span className="text-[9px] font-mono text-cyan-300 font-bold block">
+                    Recorded Steps ({recordedSteps.length}):
+                  </span>
+                  {recordedSteps.map((s, idx) => (
+                    <div key={s.id} className="text-[8px] font-mono text-slate-400 flex items-center justify-between">
+                      <span>
+                        #{idx + 1}: {s.description}
+                      </span>
+                      <span>{s.time}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
               <Button
-                variant="ghost"
+                size="sm"
+                variant="outline"
                 onClick={() => setIsCreateWfModalOpen(false)}
-                className="h-8 text-xs text-slate-400"
+                className="h-7 text-[10px] border-slate-700 text-slate-300"
               >
                 Cancel
               </Button>
               <Button
-                onClick={handleSaveCustomWorkflow}
-                className="h-8 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold"
+                size="sm"
+                onClick={async () => {
+                  if (!newWfName.trim()) {
+                    toast.error("Please enter a workflow name");
+                    return;
+                  }
+                  const newWf: SyncedWorkflow = {
+                    id: `wf_${Date.now()}`,
+                    name: newWfName,
+                    description: newWfDesc || "Interactive mobile workflow",
+                    tags: ["phone", "recorded"],
+                    actions: recordedSteps.map((s, i) => ({
+                      id: `act_${i}`,
+                      type: s.type || "tap",
+                      description: s.description,
+                      durationMs: 800,
+                    })),
+                    createdAt: Date.now(),
+                  };
+
+                  try {
+                    await fetch("/api/mobile-stream/workflows", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ workflow: newWf }),
+                    });
+                    setWorkflows((prev) => [newWf, ...prev]);
+                    setIsCreateWfModalOpen(false);
+                    setRecordedSteps([]);
+                    toast.success("✅ Saved workflow to cloud repository");
+                  } catch {
+                    toast.error("Failed saving workflow");
+                  }
+                }}
+                className="h-7 text-[10px] font-bold bg-indigo-600 hover:bg-indigo-500 text-white"
               >
                 Save Workflow
               </Button>
@@ -2308,97 +2373,8 @@ export default function MobileRemote() {
         </div>
       )}
 
-      {/* TEMPLATE CONNECT - LINKED APP DRAWER / LAUNCHER MODAL */}
-      {isTemplateDrawerOpen && (
-        <div
-          onClick={() => setIsTemplateDrawerOpen(false)}
-          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-end justify-center p-3 animate-in fade-in"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm bg-slate-950 border border-slate-800 rounded-3xl p-4 shadow-2xl space-y-3"
-          >
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-              <div className="flex items-center gap-2">
-                <Grid className="w-4 h-4 text-amber-400" />
-                <div>
-                  <h3 className="font-bold text-xs text-white">Template Connect — Linked Apps</h3>
-                  <p className="text-[10px] text-slate-400">Run automation & AI isolated from that app only</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setIsTemplateDrawerOpen(false)}
-                className="p-1 rounded-full text-slate-400 hover:text-white bg-slate-900 border border-slate-700"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 max-h-[320px] overflow-y-auto pr-1 no-scrollbar">
-              {templateApps.map((tApp) => (
-                <button
-                  key={tApp.id}
-                  onClick={() => {
-                    setActiveLinkedApp(tApp);
-                    if (tApp.appCode) {
-                      setVirtualOsActiveApp(tApp.appCode);
-                    }
-                    if (tApp.targetUrl) {
-                      setVirtualOsAppUrl(tApp.targetUrl);
-                    }
-                    setStreamMode("interactive_phone");
-                    setActiveTab("stream");
-                    setIsTemplateDrawerOpen(false);
-                    toast.success(`⚡ Linked App Active: ${tApp.name}`);
-                  }}
-                  className="flex flex-col items-start gap-1 p-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/60 transition-all text-left active:scale-95 group"
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${tApp.color} flex items-center justify-center text-white text-xs font-bold shadow-md`}>
-                      ⚡
-                    </div>
-                    <span className="text-[9px] px-1 rounded bg-amber-950 border border-amber-600/40 text-amber-300 font-mono">
-                      Isolated
-                    </span>
-                  </div>
-
-                  <span className="text-[11px] font-bold text-white group-hover:text-amber-300 transition line-clamp-1">
-                    {tApp.name}
-                  </span>
-
-                  <p className="text-[9px] text-slate-400 line-clamp-2 leading-tight">
-                    {tApp.description}
-                  </p>
-                </button>
-              ))}
-            </div>
-
-            <div className="pt-1 flex items-center justify-between text-[10px] text-slate-500 font-mono border-t border-slate-800/80">
-              <span>Scope: Isolated App Execution</span>
-              <button
-                onClick={() => {
-                  setVirtualOsActiveApp("home");
-                  setActiveLinkedApp(null);
-                  setIsTemplateDrawerOpen(false);
-                  toast.info("Returned to Phone System Home");
-                }}
-                className="hover:text-cyan-400 text-slate-400"
-              >
-                Reset to Phone Home
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Standalone Android APK & WebAPK Solutions Modal */}
-      <ApkAndPwaModal
-        open={isApkModalOpen}
-        onOpenChange={setIsApkModalOpen}
-        onSelectMode={(mode) => {
-          startStream(mode as any);
-        }}
-      />
+      {/* APK / PWA Modal */}
+      <ApkAndPwaModal open={isApkModalOpen} onOpenChange={setIsApkModalOpen} />
     </div>
   );
 }

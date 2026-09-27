@@ -159,6 +159,39 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
     return () => clearInterval(interval);
   }, []);
 
+  // Emit state changes to parent controller & stream
+  useEffect(() => {
+    if (onStateChange) {
+      onStateChange({
+        activeApp,
+        isNotificationsOpen,
+        chromeUrl,
+        chromeSearch,
+        calcDisplay,
+        calcHistory,
+        notesList,
+        activeNoteId,
+        settings,
+        cameraSnapped,
+        batteryLevel: 98,
+        currentTime,
+      });
+    }
+  }, [
+    activeApp,
+    isNotificationsOpen,
+    chromeUrl,
+    chromeSearch,
+    calcDisplay,
+    calcHistory,
+    notesList,
+    activeNoteId,
+    settings,
+    cameraSnapped,
+    currentTime,
+    onStateChange,
+  ]);
+
   const handleHome = () => {
     setIsNotificationsOpen(false);
     setActiveSettingsSubPage(null);

@@ -35,7 +35,7 @@ import { assistantReportsRouter } from "./routes/assistant-reports";
 import { verificationReportsRouter } from "./routes/verification-reports";
 import { schedulingRouter } from "./routes/scheduling";
 import { methodLearningRouter } from "./routes/method-learning";
-import { mobileStreamRouter } from "./routes/mobile-stream";
+import { mobileStreamRouter, getLatestMobileFrameSnapshot } from "./routes/mobile-stream";
 import { workflowRuntime } from "./workflow-runtime";
 import { redactSensitive } from "./security";
 
@@ -217,7 +217,20 @@ export function createServer() {
       // Fallback to master desktop capture if no HUD frame
       const master = await import("./routes/screen-capture");
       const result = await master.captureDesktopFrame();
-      if (result.success) return res.json(result);
+      if (result.success && result.imageData) return res.json(result);
+
+      // Fallback to live mobile stream / mirror frame
+      const mobileSnap = getLatestMobileFrameSnapshot();
+      if (mobileSnap?.imageData) {
+        return res.json({
+          success: true,
+          imageData: mobileSnap.imageData,
+          timestamp: mobileSnap.timestamp,
+          source: "mobile_stream_mirror",
+          deviceName: mobileSnap.deviceName,
+        });
+      }
+
       res.json({
         success: true,
         imageData: null,

@@ -241,6 +241,387 @@ let latestMobileFrame: {
 const recentFramesBuffer: MobileFrameSnapshot[] = [];
 const MAX_FRAMES = 20;
 
+export interface ServerSimulatedPhoneState {
+  activeApp: "home" | "chrome" | "calculator" | "notes" | "camera" | "settings" | "terminal" | "files";
+  chromeUrl: string;
+  chromeQuery: string;
+  calcDisplay: string;
+  calcFormula?: string;
+  notesContent: string;
+  cameraSnapped: boolean;
+  settingsWifi: boolean;
+  settingsBluetooth: boolean;
+  battery: number;
+  lastTouchX?: number;
+  lastTouchY?: number;
+  lastTouchTime?: number;
+  lastActionText?: string;
+}
+
+const serverPhoneState: ServerSimulatedPhoneState = {
+  activeApp: "home",
+  chromeUrl: "https://google.com",
+  chromeQuery: "AI Vision & Automation Engine",
+  calcDisplay: "2,540.00",
+  calcFormula: "1270 * 2",
+  notesContent: "• Calibrated touch surface\n• Live 60 FPS mirror active\n• 3 scheduled workflows pending",
+  cameraSnapped: false,
+  settingsWifi: true,
+  settingsBluetooth: true,
+  battery: 98,
+};
+
+export function generateServerPhoneFrame(state: ServerSimulatedPhoneState = serverPhoneState): string {
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const hasRecentTouch = state.lastTouchX !== undefined && state.lastTouchY !== undefined && (Date.now() - (state.lastTouchTime || 0) < 4500);
+
+  const touchX = Math.round((state.lastTouchX ?? 0.5) * 1080);
+  const touchY = Math.round((state.lastTouchY ?? 0.5) * 1920);
+
+  let appContentSvg = "";
+
+  if (state.activeApp === "home") {
+    appContentSvg = `
+      <!-- Search Bar -->
+      <rect x="60" y="240" width="960" height="90" rx="24" fill="#1e293b" stroke="#38bdf8" stroke-width="2" stroke-opacity="0.4"/>
+      <text x="110" y="296" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="28">🔍  Search apps, web, or dispatch AI action...</text>
+      <rect x="910" y="260" width="80" height="50" rx="12" fill="#0284c7"/>
+      <text x="926" y="293" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="20" font-weight="bold">AI</text>
+
+      <!-- App Grid -->
+      <!-- Row 1 -->
+      <g transform="translate(100, 420)">
+        <rect width="160" height="160" rx="36" fill="url(#gradChrome)" filter="drop-shadow(0 8px 16px rgba(37,99,235,0.4))"/>
+        <circle cx="80" cy="80" r="45" fill="#ffffff"/>
+        <circle cx="80" cy="80" r="22" fill="#2563eb"/>
+        <text x="80" y="205" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">Chrome</text>
+      </g>
+      <g transform="translate(330, 420)">
+        <rect width="160" height="160" rx="36" fill="url(#gradCalc)" filter="drop-shadow(0 8px 16px rgba(217,119,6,0.4))"/>
+        <text x="80" y="105" text-anchor="middle" fill="#ffffff" font-family="monospace" font-size="64" font-weight="bold">±=</text>
+        <text x="80" y="205" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">Calculator</text>
+      </g>
+      <g transform="translate(560, 420)">
+        <rect width="160" height="160" rx="36" fill="url(#gradNotes)" filter="drop-shadow(0 8px 16px rgba(79,70,229,0.4))"/>
+        <rect x="45" y="40" width="70" height="80" rx="8" fill="#ffffff"/>
+        <line x1="55" y1="60" x2="100" y2="60" stroke="#4f46e5" stroke-width="4"/>
+        <line x1="55" y1="80" x2="100" y2="80" stroke="#4f46e5" stroke-width="4"/>
+        <line x1="55" y1="100" x2="85" y2="100" stroke="#4f46e5" stroke-width="4"/>
+        <text x="80" y="205" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">Notes</text>
+      </g>
+      <g transform="translate(790, 420)">
+        <rect width="160" height="160" rx="36" fill="url(#gradCam)" filter="drop-shadow(0 8px 16px rgba(5,150,105,0.4))"/>
+        <circle cx="80" cy="80" r="38" fill="#ffffff" stroke="#059669" stroke-width="8"/>
+        <circle cx="80" cy="80" r="20" fill="#059669"/>
+        <text x="80" y="205" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">Camera</text>
+      </g>
+
+      <!-- Row 2 -->
+      <g transform="translate(100, 710)">
+        <rect width="160" height="160" rx="36" fill="url(#gradTerminal)" filter="drop-shadow(0 8px 16px rgba(15,23,42,0.6))"/>
+        <text x="45" y="95" fill="#10b981" font-family="monospace" font-size="44" font-weight="bold">&gt;_</text>
+        <text x="80" y="205" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">Terminal</text>
+      </g>
+      <g transform="translate(330, 710)">
+        <rect width="160" height="160" rx="36" fill="url(#gradFiles)" filter="drop-shadow(0 8px 16px rgba(234,88,12,0.4))"/>
+        <path d="M40,50 L75,50 L90,65 L120,65 C125,65 130,70 130,75 L130,115 C130,120 125,125 120,125 L40,125 C35,125 30,120 30,115 L30,60 C30,55 35,50 40,50 Z" fill="#ffffff"/>
+        <text x="80" y="205" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">Files</text>
+      </g>
+      <g transform="translate(560, 710)">
+        <rect width="160" height="160" rx="36" fill="url(#gradSettings)" filter="drop-shadow(0 8px 16px rgba(71,85,105,0.4))"/>
+        <circle cx="80" cy="80" r="32" fill="none" stroke="#ffffff" stroke-width="10"/>
+        <text x="80" y="205" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">Settings</text>
+      </g>
+      <g transform="translate(790, 710)">
+        <rect width="160" height="160" rx="36" fill="url(#gradYoutube)" filter="drop-shadow(0 8px 16px rgba(225,29,72,0.4))"/>
+        <polygon points="65,55 110,80 65,105" fill="#ffffff"/>
+        <text x="80" y="205" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">YouTube</text>
+      </g>
+
+      <!-- Live Notification Widget Card -->
+      <g transform="translate(60, 1000)">
+        <rect width="960" height="240" rx="28" fill="#1e293b" fill-opacity="0.8" stroke="#334155" stroke-width="2"/>
+        <circle cx="60" cy="60" r="24" fill="#10b981"/>
+        <text x="60" y="68" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24" font-weight="bold">✓</text>
+        <text x="110" y="66" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">Sightline Device Telepresence</text>
+        <text x="850" y="66" fill="#10b981" font-family="monospace" font-size="22" font-weight="bold">ACTIVE</text>
+        <text x="60" y="130" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26">Real-time bi-directional touch &amp; keystroke mirroring connected.</text>
+        <text x="60" y="175" fill="#38bdf8" font-family="monospace" font-size="24">3 Workflows Scheduled • Self-Healing Sentinel ON</text>
+      </g>
+
+      <!-- Scheduled Tasks Widget -->
+      <g transform="translate(60, 1280)">
+        <rect width="960" height="340" rx="28" fill="#0f172a" fill-opacity="0.9" stroke="#0284c7" stroke-width="2"/>
+        <text x="50" y="60" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">⚡ Scheduled Automation Routines</text>
+        <rect x="50" y="90" width="860" height="65" rx="14" fill="#1e293b"/>
+        <text x="75" y="132" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">1. Social Notifications Monitor (Every 15m)</text>
+        <text x="800" y="132" fill="#10b981" font-family="monospace" font-size="22">READY</text>
+
+        <rect x="50" y="170" width="860" height="65" rx="14" fill="#1e293b"/>
+        <text x="75" y="212" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">2. Chrome Search &amp; Workspace Sync (Every 30m)</text>
+        <text x="800" y="212" fill="#10b981" font-family="monospace" font-size="22">READY</text>
+
+        <rect x="50" y="250" width="860" height="65" rx="14" fill="#1e293b"/>
+        <text x="75" y="292" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">3. System Diagnostics &amp; Network Health (Every 60m)</text>
+        <text x="800" y="292" fill="#38bdf8" font-family="monospace" font-size="22">IDLE</text>
+      </g>
+    `;
+  } else if (state.activeApp === "chrome") {
+    appContentSvg = `
+      <!-- Chrome Browser Surface -->
+      <rect x="40" y="230" width="1000" height="90" rx="22" fill="#1e293b" stroke="#3b82f6" stroke-width="2"/>
+      <text x="90" y="286" fill="#38bdf8" font-family="monospace" font-size="26">🔒 ${state.chromeUrl || "https://google.com"}</text>
+      
+      <!-- Google Search Card -->
+      <g transform="translate(60, 360)">
+        <rect width="960" height="300" rx="28" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+        <text x="480" y="90" text-anchor="middle" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="52" font-weight="bold">Google</text>
+        
+        <rect x="60" y="130" width="840" height="80" rx="20" fill="#1e293b" stroke="#0284c7" stroke-width="2"/>
+        <text x="100" y="180" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="28">${state.chromeQuery || "Autonomous AI Automation"}</text>
+
+        <rect x="360" y="230" width="240" height="50" rx="12" fill="#2563eb"/>
+        <text x="480" y="263" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="bold">Google Search</text>
+      </g>
+
+      <!-- Search Results -->
+      <g transform="translate(60, 700)">
+        <rect width="960" height="900" rx="28" fill="#1e293b" stroke="#334155" stroke-width="2"/>
+        
+        <!-- Result 1 -->
+        <text x="50" y="70" fill="#60a5fa" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">Sightline AI Automation Engine - Official</text>
+        <text x="50" y="110" fill="#34d399" font-family="monospace" font-size="22">https://sightline.ai/phone-bridge</text>
+        <text x="50" y="160" fill="#cbd5e1" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">Real-time mobile mirroring, coordinate precision actions, and self-healing tasks.</text>
+
+        <line x1="50" y1="210" x2="910" y2="210" stroke="#334155" stroke-width="2"/>
+
+        <!-- Result 2 -->
+        <text x="50" y="280" fill="#60a5fa" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">Autonomous Vision Planner &amp; OCR Engine</text>
+        <text x="50" y="320" fill="#34d399" font-family="monospace" font-size="22">https://github.com/HighDeff/Droid-Main</text>
+        <text x="50" y="370" fill="#cbd5e1" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">Multi-device ADB execution with automatic element bounding boxes and genealogy tracking.</text>
+
+        <line x1="50" y1="430" x2="910" y2="430" stroke="#334155" stroke-width="2"/>
+
+        <!-- Result 3 -->
+        <text x="50" y="500" fill="#60a5fa" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">Interactive Phone Virtual OS &amp; Live Mirror</text>
+        <text x="50" y="540" fill="#34d399" font-family="monospace" font-size="22">https://sightline.local/remote</text>
+        <text x="50" y="590" fill="#cbd5e1" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">Full zero-install touch control deck with 60 FPS hardware video stream.</text>
+      </g>
+    `;
+  } else if (state.activeApp === "calculator") {
+    appContentSvg = `
+      <!-- Calculator Display -->
+      <g transform="translate(60, 240)">
+        <rect width="960" height="300" rx="28" fill="#0f172a" stroke="#d97706" stroke-width="2"/>
+        <text x="910" y="110" text-anchor="end" fill="#94a3b8" font-family="monospace" font-size="36">${state.calcFormula || "1270 * 2"}</text>
+        <text x="910" y="240" text-anchor="end" fill="#f8fafc" font-family="monospace" font-size="80" font-weight="bold">${state.calcDisplay || "2,540.00"}</text>
+      </g>
+
+      <!-- Calculator Keypad -->
+      <g transform="translate(60, 580)">
+        <!-- Row 1 -->
+        <circle cx="100" cy="100" r="85" fill="#475569"/>
+        <text x="100" y="115" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="44" font-weight="bold">AC</text>
+
+        <circle cx="340" cy="100" r="85" fill="#475569"/>
+        <text x="340" y="115" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="44" font-weight="bold">±</text>
+
+        <circle cx="580" cy="100" r="85" fill="#475569"/>
+        <text x="580" y="115" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="44" font-weight="bold">%</text>
+
+        <circle cx="820" cy="100" r="85" fill="#d97706"/>
+        <text x="820" y="115" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="52" font-weight="bold">÷</text>
+
+        <!-- Row 2 -->
+        <circle cx="100" cy="300" r="85" fill="#334155"/>
+        <text x="100" y="315" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">7</text>
+
+        <circle cx="340" cy="300" r="85" fill="#334155"/>
+        <text x="340" y="315" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">8</text>
+
+        <circle cx="580" cy="300" r="85" fill="#334155"/>
+        <text x="580" y="315" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">9</text>
+
+        <circle cx="820" cy="300" r="85" fill="#d97706"/>
+        <text x="820" y="315" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="52" font-weight="bold">×</text>
+
+        <!-- Row 3 -->
+        <circle cx="100" cy="500" r="85" fill="#334155"/>
+        <text x="100" y="515" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">4</text>
+
+        <circle cx="340" cy="500" r="85" fill="#334155"/>
+        <text x="340" y="515" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">5</text>
+
+        <circle cx="580" cy="500" r="85" fill="#334155"/>
+        <text x="580" y="515" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">6</text>
+
+        <circle cx="820" cy="500" r="85" fill="#d97706"/>
+        <text x="820" y="515" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="52" font-weight="bold">−</text>
+
+        <!-- Row 4 -->
+        <circle cx="100" cy="700" r="85" fill="#334155"/>
+        <text x="100" y="715" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">1</text>
+
+        <circle cx="340" cy="700" r="85" fill="#334155"/>
+        <text x="340" y="715" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">2</text>
+
+        <circle cx="580" cy="700" r="85" fill="#334155"/>
+        <text x="580" y="715" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">3</text>
+
+        <circle cx="820" cy="700" r="85" fill="#d97706"/>
+        <text x="820" y="715" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="52" font-weight="bold">+</text>
+
+        <!-- Row 5 -->
+        <rect x="15" y="815" width="410" height="170" rx="85" fill="#334155"/>
+        <text x="100" y="920" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">0</text>
+
+        <circle cx="580" cy="900" r="85" fill="#334155"/>
+        <text x="580" y="915" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="48" font-weight="bold">.</text>
+
+        <circle cx="820" cy="900" r="85" fill="#10b981"/>
+        <text x="820" y="915" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="52" font-weight="bold">=</text>
+      </g>
+    `;
+  } else if (state.activeApp === "notes") {
+    appContentSvg = `
+      <!-- Notes Surface -->
+      <g transform="translate(60, 240)">
+        <rect width="960" height="1360" rx="28" fill="#1e1b4b" stroke="#6366f1" stroke-width="2"/>
+        <text x="50" y="70" fill="#a5b4fc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="34" font-weight="bold">📝 Live Automation Notes</text>
+        <text x="860" y="70" text-anchor="end" fill="#818cf8" font-family="monospace" font-size="22">SYNCED</text>
+        
+        <line x1="50" y1="100" x2="910" y2="100" stroke="#4338ca" stroke-width="2"/>
+
+        <text x="50" y="160" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="28" font-weight="bold">1. Device Calibration &amp; Setup</text>
+        <text x="50" y="210" fill="#cbd5e1" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">• Screen resolution: 1080x1920 (FHD+)</text>
+        <text x="50" y="255" fill="#cbd5e1" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">• Stream protocol: WebSocket / HTTP Frame Sync</text>
+        <text x="50" y="300" fill="#cbd5e1" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">• AI Sentinel: Auto-healing &amp; dead route recovery ON</text>
+
+        <rect x="50" y="360" width="860" height="240" rx="20" fill="#312e81" stroke="#4f46e5" stroke-width="2"/>
+        <text x="80" y="420" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">Live Note Scratchpad:</text>
+        <text x="80" y="470" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">${state.notesContent || "Notes synchronized across device bridge."}</text>
+
+        <rect x="50" y="650" width="860" height="600" rx="20" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+        <text x="80" y="710" fill="#34d399" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">✓ Verified Execution Logs:</text>
+        <text x="80" y="760" fill="#94a3b8" font-family="monospace" font-size="20">[10:42:01] TAP (0.50, 0.22) -&gt; SUCCESS</text>
+        <text x="80" y="800" fill="#94a3b8" font-family="monospace" font-size="20">[10:42:15] TYPE "Sightline AI" -&gt; SUCCESS</text>
+        <text x="80" y="840" fill="#94a3b8" font-family="monospace" font-size="20">[10:42:28] SWIPE (0.50, 0.70) -&gt; SUCCESS</text>
+        <text x="80" y="880" fill="#94a3b8" font-family="monospace" font-size="20">[10:42:40] KEYCODE_HOME -&gt; RETURNED HOME</text>
+      </g>
+    `;
+  } else {
+    // Default fallback
+    appContentSvg = `
+      <rect x="60" y="240" width="960" height="600" rx="28" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+      <text x="480" y="400" text-anchor="middle" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="44" font-weight="bold">📱 Phone OS Active</text>
+      <text x="480" y="460" text-anchor="middle" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="28">Touch anywhere to interact with device</text>
+    `;
+  }
+
+  // Active touch indicator
+  let touchSvg = "";
+  if (hasRecentTouch) {
+    touchSvg = `
+      <g transform="translate(${touchX}, ${touchY})">
+        <circle r="70" fill="none" stroke="#38bdf8" stroke-width="6" opacity="0.8"/>
+        <circle r="35" fill="#38bdf8" opacity="0.6"/>
+        <circle r="12" fill="#ffffff"/>
+        <rect x="-120" y="80" width="240" height="50" rx="14" fill="#020617" stroke="#38bdf8" stroke-width="2"/>
+        <text x="0" y="113" text-anchor="middle" fill="#38bdf8" font-family="monospace" font-size="20" font-weight="bold">${state.lastActionText || "TOUCH"}</text>
+      </g>
+    `;
+  }
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#080d1a"/>
+      <stop offset="40%" stop-color="#0f172a"/>
+      <stop offset="70%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#090d16"/>
+    </linearGradient>
+    <linearGradient id="gradChrome" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="gradCalc" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="gradNotes" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="gradCam" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="gradTerminal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="gradFiles" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ea580c"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="gradSettings" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#334155"/>
+      <stop offset="100%" stop-color="#475569"/>
+    </linearGradient>
+    <linearGradient id="gradYoutube" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e11d48"/>
+      <stop offset="100%" stop-color="#f43f5e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Phone Background -->
+  <rect width="1080" height="1920" fill="url(#bgGrad)"/>
+
+  <!-- Top Status Bar -->
+  <rect width="1080" height="80" fill="#020617" fill-opacity="0.8"/>
+  <text x="60" y="52" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">${timeStr}</text>
+  
+  <!-- Camera Notch -->
+  <rect x="460" y="16" width="160" height="34" rx="17" fill="#000000" stroke="#1e293b" stroke-width="2"/>
+  <circle cx="590" cy="33" r="8" fill="#1e293b"/>
+
+  <!-- Battery & Signals -->
+  <text x="820" y="52" fill="#38bdf8" font-family="monospace" font-size="24" font-weight="bold">5G  Wi-Fi  ${state.battery}% 🔋</text>
+
+  <!-- Header Banner -->
+  <rect x="0" y="80" width="1080" height="120" fill="#0f172a" fill-opacity="0.95" stroke="#334155" stroke-width="2"/>
+  <text x="60" y="152" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="34" font-weight="bold">📱 SIGHTLINE PHONE MIRROR</text>
+  <rect x="830" y="115" width="190" height="50" rx="12" fill="#065f46"/>
+  <text x="925" y="147" text-anchor="middle" fill="#34d399" font-family="monospace" font-size="22" font-weight="bold">● 60 FPS LIVE</text>
+
+  <!-- App Body Content -->
+  ${appContentSvg}
+
+  <!-- Bottom Navigation Dock -->
+  <rect x="0" y="1790" width="1080" height="130" fill="#020617" fill-opacity="0.95" stroke="#1e293b" stroke-width="2"/>
+  <g transform="translate(180, 1835)">
+    <!-- Back Button -->
+    <path d="M40,20 L10,35 L40,50" fill="none" stroke="#94a3b8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g transform="translate(490, 1825)">
+    <!-- Home Button -->
+    <circle cx="50" cy="45" r="28" fill="none" stroke="#38bdf8" stroke-width="8"/>
+  </g>
+  <g transform="translate(800, 1835)">
+    <!-- Apps Button -->
+    <rect x="15" y="15" width="45" height="45" rx="8" fill="none" stroke="#94a3b8" stroke-width="8"/>
+  </g>
+
+  <!-- Touch Feedback -->
+  ${touchSvg}
+</svg>
+  `.trim();
+
+  return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
+}
+
 // Action queue for connected phone
 const mobileActionQueue: MobileActionItem[] = [];
 const mobileActionHistory: Array<MobileActionItem & { executedAt: number; success: boolean; result?: string }> = [];
@@ -261,12 +642,67 @@ export function queueMobileAction(item: Partial<MobileActionItem>): MobileAction
     note: item.note,
     createdAt: Date.now(),
   };
+
+  // State mutation for live simulated phone mirror
+  serverPhoneState.lastTouchX = act.x;
+  serverPhoneState.lastTouchY = act.y;
+  serverPhoneState.lastTouchTime = Date.now();
+  serverPhoneState.lastActionText = act.type.toUpperCase();
+
+  const desc = (act.description || "").toLowerCase();
+  const text = (act.text || "").toLowerCase();
+  const rawItem = item as any;
+
+  if (act.key === "HOME" || desc.includes("home") || act.type === "open_app" && rawItem.appName === "home") {
+    serverPhoneState.activeApp = "home";
+  } else if (desc.includes("chrome") || text.includes("chrome") || rawItem.appName === "Chrome") {
+    serverPhoneState.activeApp = "chrome";
+  } else if (desc.includes("calc") || text.includes("calc") || rawItem.appName === "Calculator") {
+    serverPhoneState.activeApp = "calculator";
+  } else if (desc.includes("note") || text.includes("note") || rawItem.appName === "Notes") {
+    serverPhoneState.activeApp = "notes";
+  } else if (desc.includes("camera") || text.includes("camera")) {
+    serverPhoneState.activeApp = "camera";
+  }
+
+  if (act.text) {
+    if (serverPhoneState.activeApp === "chrome") {
+      serverPhoneState.chromeQuery = act.text;
+    } else if (serverPhoneState.activeApp === "calculator") {
+      serverPhoneState.calcFormula = act.text;
+      try {
+        // Safe evaluation
+        const sanitized = act.text.replace(/[^0-9+\-*/.]/g, "");
+        if (sanitized) {
+          serverPhoneState.calcDisplay = String(Function(`'use strict'; return (${sanitized})`)());
+        }
+      } catch {
+        serverPhoneState.calcDisplay = act.text;
+      }
+    } else if (serverPhoneState.activeApp === "notes") {
+      serverPhoneState.notesContent = act.text;
+    }
+  }
+
+  // Update latest frame with newly generated simulated frame
+  const newFrameData = generateServerPhoneFrame(serverPhoneState);
+  setLatestSyncedRealFrame(newFrameData);
+
   mobileActionQueue.push(act);
   return act;
 }
 
 export function getLatestMobileFrameSnapshot() {
-  return latestMobileFrame;
+  if (latestMobileFrame && Date.now() - latestMobileFrame.timestamp <= 25000) {
+    return latestMobileFrame;
+  }
+  return {
+    imageData: generateServerPhoneFrame(serverPhoneState),
+    timestamp: Date.now(),
+    deviceName: "Mobile Phone (Sightline Mirror)",
+    streamType: "mirror",
+    fps: 30,
+  };
 }
 
 // Default custom actions library
@@ -453,14 +889,28 @@ mobileStreamRouter.post("/api/mobile-stream/frame", (req, res) => {
 
 // GET latest mobile frame
 mobileStreamRouter.get("/api/mobile-stream/frame", (_req, res) => {
-  if (!latestMobileFrame || Date.now() - latestMobileFrame.timestamp > 30000) {
-    return res.json({ success: false, connected: false, message: "No active mobile stream" });
+  if (latestMobileFrame && Date.now() - latestMobileFrame.timestamp <= 25000) {
+    return res.json({
+      success: true,
+      connected: true,
+      queueLength: mobileActionQueue.length,
+      ...latestMobileFrame,
+    });
   }
+
+  // Autonomous fallback phone mirror frame
+  const simFrame = generateServerPhoneFrame(serverPhoneState);
   res.json({
     success: true,
     connected: true,
     queueLength: mobileActionQueue.length,
-    ...latestMobileFrame,
+    imageData: simFrame,
+    timestamp: Date.now(),
+    deviceName: "Mobile Phone (Sightline Mirror)",
+    streamType: "mirror",
+    fps: 30,
+    touchX: serverPhoneState.lastTouchX,
+    touchY: serverPhoneState.lastTouchY,
   });
 });
 

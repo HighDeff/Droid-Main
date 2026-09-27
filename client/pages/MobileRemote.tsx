@@ -815,38 +815,180 @@ export default function MobileRemote() {
 
         // Clean Realistic Phone Wallpaper & Background
         const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-        gradient.addColorStop(0, "#090d16");
-        gradient.addColorStop(0.5, "#0b1329");
+        gradient.addColorStop(0, "#080d1a");
+        gradient.addColorStop(0.4, "#0f172a");
+        gradient.addColorStop(0.8, "#1e1b4b");
         gradient.addColorStop(1, "#040711");
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         // Header Status Bar
-        ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+        ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
         ctx.fillRect(0, 0, canvas.width, 36);
 
         ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 13px -apple-system, BlinkMacSystemFont, sans-serif";
-        ctx.fillText(`Sightline Phone • ${streamModeRef.current === "live_view" ? "LIVE VIEW" : "INTERACTIVE"}`, 16, 23);
+        ctx.font = "bold 12px -apple-system, BlinkMacSystemFont, sans-serif";
+        ctx.fillText(`Sightline Phone • ${streamModeRef.current === "live_view" ? "LIVE VIEW" : "MIRROR"}`, 16, 23);
 
         const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         ctx.fillStyle = "#94a3b8";
-        ctx.font = "12px monospace";
-        ctx.fillText(`94% ⚡ ${timeStr}`, canvas.width - 96, 23);
+        ctx.font = "11px monospace";
+        ctx.fillText(`98% ⚡ ${timeStr}`, canvas.width - 96, 23);
 
-        // Content
-        ctx.fillStyle = "rgba(30, 41, 59, 0.7)";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(16, 50, canvas.width - 32, 130, 16) : ctx.rect(16, 50, canvas.width - 32, 130);
-        ctx.fill();
+        // Active App Canvas Drawing
+        if (virtualOsActiveApp === "chrome") {
+          // Chrome Browser App
+          ctx.fillStyle = "#1e293b";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 40, 10) : ctx.rect(16, 46, canvas.width - 32, 40);
+          ctx.fill();
+          ctx.strokeStyle = "#3b82f6";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
 
-        ctx.fillStyle = "#f8fafc";
-        ctx.font = "bold 16px sans-serif";
-        ctx.fillText("📱 Connected Phone Screen", 32, 85);
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "11px monospace";
+          ctx.fillText(`🔒 ${virtualOsAppUrl || "https://google.com"}`, 28, 70);
 
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "12px sans-serif";
-        ctx.fillText("AI Vision & Automation Active • Full OS Mirror", 32, 110);
+          ctx.fillStyle = "#0f172a";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 96, canvas.width - 32, 600, 16) : ctx.rect(16, 96, canvas.width - 32, 600);
+          ctx.fill();
+
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 22px sans-serif";
+          ctx.fillText("Google", 36, 140);
+
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "13px sans-serif";
+          ctx.fillText("Search: Autonomous Vision AI & Automation", 36, 175);
+
+          ctx.fillStyle = "#94a3b8";
+          ctx.font = "11px sans-serif";
+          ctx.fillText("• Sightline Phone Bridge: 60 FPS screen mirror", 36, 215);
+          ctx.fillText("• AI Action Dispatch & Bi-directional OCR", 36, 240);
+          ctx.fillText("• Scheduled Workflows & Self-Healing Sentinel", 36, 265);
+        } else if (virtualOsActiveApp === "calculator") {
+          // Calculator App
+          ctx.fillStyle = "#0f172a";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 120, 16) : ctx.rect(16, 46, canvas.width - 32, 120);
+          ctx.fill();
+          ctx.strokeStyle = "#d97706";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          ctx.fillStyle = "#f8fafc";
+          ctx.font = "bold 32px monospace";
+          ctx.textAlign = "right";
+          ctx.fillText(virtualOsCalc || "2,540.00", canvas.width - 36, 125);
+          ctx.textAlign = "left";
+
+          ctx.fillStyle = "#94a3b8";
+          ctx.font = "12px sans-serif";
+          ctx.fillText("Interactive Calculator Active", 36, 195);
+        } else if (virtualOsActiveApp === "notes") {
+          // Notes App
+          ctx.fillStyle = "#1e1b4b";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 640, 16) : ctx.rect(16, 46, canvas.width - 32, 640);
+          ctx.fill();
+          ctx.strokeStyle = "#6366f1";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          ctx.fillStyle = "#a5b4fc";
+          ctx.font = "bold 16px sans-serif";
+          ctx.fillText("📝 Notes & Workflow Telemetry", 32, 80);
+
+          ctx.fillStyle = "#f8fafc";
+          ctx.font = "12px sans-serif";
+          ctx.fillText(virtualOsNotes || "• Live interactive notes on mobile bridge", 32, 120);
+        } else {
+          // Home Screen with App Grid
+          ctx.fillStyle = "rgba(30, 41, 59, 0.85)";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 40, 12) : ctx.rect(16, 46, canvas.width - 32, 40);
+          ctx.fill();
+          ctx.strokeStyle = "rgba(56, 189, 248, 0.3)";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          ctx.fillStyle = "#94a3b8";
+          ctx.font = "11px sans-serif";
+          ctx.fillText("🔍 Search apps, actions, or ask AI...", 28, 70);
+
+          // Draw 6 Quick App Tiles
+          const apps = [
+            { name: "Chrome", color: "#2563eb", icon: "🌐", x: 30, y: 110 },
+            { name: "Calc", color: "#d97706", icon: "🔢", x: 140, y: 110 },
+            { name: "Notes", color: "#4f46e5", icon: "📝", x: 250, y: 110 },
+            { name: "Camera", color: "#059669", icon: "📷", x: 360, y: 110 },
+            { name: "Terminal", color: "#0f172a", icon: "⚡", x: 30, y: 220 },
+            { name: "Files", color: "#ea580c", icon: "📁", x: 140, y: 220 },
+            { name: "Settings", color: "#334155", icon: "⚙️", x: 250, y: 220 },
+            { name: "YouTube", color: "#e11d48", icon: "▶️", x: 360, y: 220 },
+          ];
+
+          apps.forEach((a) => {
+            ctx.fillStyle = a.color;
+            ctx.beginPath();
+            ctx.roundRect ? ctx.roundRect(a.x, a.y, 70, 70, 16) : ctx.rect(a.x, a.y, 70, 70);
+            ctx.fill();
+
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "24px sans-serif";
+            ctx.fillText(a.icon, a.x + 20, a.y + 44);
+
+            ctx.fillStyle = "#f8fafc";
+            ctx.font = "bold 10px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText(a.name, a.x + 35, a.y + 92);
+            ctx.textAlign = "left";
+          });
+
+          // Live Scheduled Routine Card
+          ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 360, canvas.width - 32, 160, 16) : ctx.rect(16, 360, canvas.width - 32, 160);
+          ctx.fill();
+          ctx.strokeStyle = "#0284c7";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 13px sans-serif";
+          ctx.fillText("⚡ Scheduled Device Automation", 32, 392);
+
+          ctx.fillStyle = "#94a3b8";
+          ctx.font = "11px sans-serif";
+          ctx.fillText("• Social Feed Monitor (15m): Idle / Synced", 32, 425);
+          ctx.fillText("• Chrome Search & Sync (30m): Ready", 32, 450);
+          ctx.fillText("• Diagnostics & Network (60m): Ready", 32, 475);
+        }
+
+        // Draw Touch Ripple if touched
+        if (lastTouchRef.current) {
+          const tx = lastTouchRef.current.x * canvas.width;
+          const ty = lastTouchRef.current.y * canvas.height;
+          ctx.beginPath();
+          ctx.arc(tx, ty, 24, 0, Math.PI * 2);
+          ctx.strokeStyle = "#38bdf8";
+          ctx.lineWidth = 3;
+          ctx.stroke();
+          ctx.fillStyle = "rgba(56, 189, 248, 0.35)";
+          ctx.fill();
+        }
+
+        // Bottom Dock
+        ctx.fillStyle = "rgba(2, 6, 23, 0.95)";
+        ctx.fillRect(0, canvas.height - 48, canvas.width, 48);
+
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "bold 14px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("◀         ⚪         ◼", canvas.width / 2, canvas.height - 18);
+        ctx.textAlign = "left";
 
         const qualityVal = streamQuality === "hd" ? 0.75 : streamQuality === "fast" ? 0.45 : 0.6;
         const imageData = canvas.toDataURL("image/jpeg", qualityVal);
@@ -1417,6 +1559,14 @@ export default function MobileRemote() {
             {streamMode === "interactive_phone" && (
               <div className="w-full h-full relative overflow-hidden bg-slate-950 flex flex-col">
                 <InteractivePhoneVirtualOS
+                  onStateChange={(state) => {
+                    setVirtualOsActiveApp(state.activeApp);
+                    if (state.calcDisplay) setVirtualOsCalc(state.calcDisplay);
+                    if (state.chromeUrl) setVirtualOsAppUrl(state.chromeUrl);
+                    if (state.notesList && state.notesList.length > 0) {
+                      setVirtualOsNotes(state.notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"));
+                    }
+                  }}
                   onActionLogged={(action, details) => {
                     setStatus(`Action: ${action} - ${details}`);
                     if (isRecordingWorkflow) {

@@ -2,13 +2,46 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./global.css";
 
+// Resilient Response.prototype.json patch to guard against HTML fallbacks and plain-text rate limits
+const _originalJson = Response.prototype.json;
+Response.prototype.json = async function () {
+  try {
+    const text = await this.text();
+    if (!text || text.trim() === "") {
+      return { success: this.ok, status: this.status };
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      const cleanMsg =
+        text.length < 150 && !text.includes("<!doctype") && !text.includes("<html")
+          ? text.trim()
+          : `Non-JSON response (HTTP ${this.status})`;
+      return {
+        success: false,
+        status: this.status,
+        error: cleanMsg,
+        rawText: text.slice(0, 300),
+      };
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      status: this.status,
+      error: err?.message || "Failed to read response body",
+    };
+  }
+};
+
 // Global uncaught error handler to prevent silent blank screens
 window.addEventListener("error", (event) => {
-  console.error("Global uncaught window error:", event.error || event.message);
+  console.warn("Handled global window error:", event.error || event.message);
 });
 
 window.addEventListener("unhandledrejection", (event) => {
-  console.error("Global unhandled promise rejection:", event.reason);
+  console.warn("Handled global unhandled promise rejection:", event.reason);
+  // Prevent unhandled promise rejections from crashing the applet
+  event.preventDefault();
 });
 
 const container = document.getElementById("root");

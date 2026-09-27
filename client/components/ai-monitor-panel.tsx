@@ -21,6 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
+import { safeFetchJson, safePostJson } from "@/lib/api-helper";
 
 export interface AiActionRecord {
   id: string;
@@ -109,10 +110,12 @@ export function AiMonitorPanel({ compact = false }: AiMonitorPanelProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`/api/ai-monitor?limit=${compact ? 15 : 40}`);
-      const data = await res.json();
+      const data = await safeFetchJson<{
+        state: AiMonitorState;
+        history: AiActionRecord[];
+      }>(`/api/ai-monitor?limit=${compact ? 15 : 40}`);
       if (data.success) {
-        setState(data.state);
+        if (data.state) setState(data.state);
         setHistory(data.history || []);
       }
     } catch {
@@ -124,36 +127,33 @@ export function AiMonitorPanel({ compact = false }: AiMonitorPanelProps) {
 
   useEffect(() => {
     refresh();
-    const timer = window.setInterval(refresh, 2500);
+    const timer = window.setInterval(refresh, 3500);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
   const inspectBrowser = async () => {
     setInspecting(true);
     try {
-      const res = await fetch("/api/browser/inspect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json();
-      if (data.success) {
+      const data = await safePostJson<{
+        context: { elements: any[] };
+      }>("/api/browser/inspect", {});
+      if (data.success && data.context) {
         toast.success(
-          `Read ${data.context.elements.length} page element(s) from the active tab`,
+          `Read ${data.context.elements?.length || 0} page element(s) from the active tab`,
         );
         await refresh();
       } else {
         toast.error(data.error || "Could not read the browser tab");
       }
-    } catch (e) {
-      toast.error(String(e));
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to inspect browser tab");
     } finally {
       setInspecting(false);
     }
   };
 
   const clearHistory = async () => {
-    await fetch("/api/ai/action-history", { method: "DELETE" });
+    await safeFetchJson("/api/ai/action-history", { method: "DELETE" });
     toast.success("Action history cleared");
     refresh();
   };

@@ -64,6 +64,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { safeFetchJson, safePostJson } from "@/lib/api-helper";
 import {
   LiveScreenHUD,
   SequenceStep,
@@ -382,38 +383,31 @@ export default function Dashboard({
     // Auto-Actor verification & action execution on mode transition
     if (autoActEnabled) {
       const activeImg = activeCanvasUrl || screenshotUrl;
-      fetch("/api/ai/auto-actor-trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          currentScreen: screenshotUrl,
-          expectedScreen: activeImg,
-          step: sequence[0] || {
-            name: `Auto Step on Switch to ${newTab}`,
-            action: "click",
-            x: 960,
-            y: 540,
-          },
-          autoActEnabled: true,
-          threshold: 0.75,
-          modeTransition: `${prevTab}_to_${newTab}`,
-        }),
-      })
-        .then((r) => r.json())
-        .then((res) => {
-          if (res.autoActExecuted) {
-            setAutoActFeedback(
-              `🎯 Auto-Actor Executed! Screen match: ${(res.similarityScore * 100).toFixed(1)}% -> Dispatched "${sequence[0]?.name || "Step"}" via PyAutoGUI`
-            );
-            setTimeout(() => setAutoActFeedback(null), 6000);
-          } else if (res.matched) {
-            setAutoActFeedback(
-              `✓ Screen Match Verified (${(res.similarityScore * 100).toFixed(1)}%) on mode switch (${prevTab} → ${newTab})`
-            );
-            setTimeout(() => setAutoActFeedback(null), 4000);
-          }
-        })
-        .catch(console.error);
+      safePostJson<{ autoActExecuted?: boolean; similarityScore?: number; matched?: boolean }>("/api/ai/auto-actor-trigger", {
+        currentScreen: screenshotUrl,
+        expectedScreen: activeImg,
+        step: sequence[0] || {
+          name: `Auto Step on Switch to ${newTab}`,
+          action: "click",
+          x: 960,
+          y: 540,
+        },
+        autoActEnabled: true,
+        threshold: 0.75,
+        modeTransition: `${prevTab}_to_${newTab}`,
+      }).then((res) => {
+        if (res.autoActExecuted) {
+          setAutoActFeedback(
+            `🎯 Auto-Actor Executed! Screen match: ${((res.similarityScore || 0) * 100).toFixed(1)}% -> Dispatched "${sequence[0]?.name || "Step"}" via PyAutoGUI`
+          );
+          setTimeout(() => setAutoActFeedback(null), 6000);
+        } else if (res.matched) {
+          setAutoActFeedback(
+            `✓ Screen Match Verified (${((res.similarityScore || 0) * 100).toFixed(1)}%) on mode switch (${prevTab} → ${newTab})`
+          );
+          setTimeout(() => setAutoActFeedback(null), 4000);
+        }
+      }).catch(() => {});
     }
   };
 
@@ -515,22 +509,26 @@ export default function Dashboard({
       }).catch(() => {});
     }
 
-    // High frequency stream forwarding loop for real-time mobile mirror
+    // High frequency stream forwarding loop for real-time mobile mirror (with in-flight guard)
     if (mobileIntervalRef.current) clearInterval(mobileIntervalRef.current);
+    let inFlight = false;
     mobileIntervalRef.current = window.setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
-        const res = await fetch("/api/mobile-stream/frame");
-        const d = await res.json();
+        const d = await safeFetchJson<{ imageData?: string }>("/api/mobile-stream/frame");
         if (d.success && d.imageData) {
           aiLiveUrlRef.current = d.imageData;
           setAiLiveUrl(d.imageData);
           setScreenshotUrl(d.imageData);
           setActiveCanvasUrl(d.imageData);
           setFrozenLiveSnapshot(d.imageData);
-          setLiveHistory30((prev) => [d.imageData, ...prev].slice(0, 30));
+          setLiveHistory30((prev) => [d.imageData!, ...prev].slice(0, 30));
         }
-      } catch {}
-    }, 120);
+      } catch {} finally {
+        inFlight = false;
+      }
+    }, 200);
 
     // Switch tab to screen HUD so the user immediately sees the HUD
     handleTabSwitch("screen");
@@ -888,8 +886,10 @@ export default function Dashboard({
   };
   const captureScreen = async () => {
     try {
-      const response = await fetch("/api/capture-screen");
-      const data = await response.json();
+      const data = await safeFetchJson<{
+        imageData?: string;
+        method?: string;
+      }>("/api/capture-screen");
       if (data.success && data.imageData) {
         const isReal = data.method === "real_desktop_stream";
         const wasLive = prevLiveRef.current;
@@ -902,22 +902,11 @@ export default function Dashboard({
         }
         aiLiveUrlRef.current = data.imageData;
         setAiLiveUrl(data.imageData);
-        setLiveHistory30((prev) => [data.imageData, ...prev].slice(0, 30));
-        if (false && isReal) {
-          if (!wasLive) setScreenshotUrl(data.imageData);
-          try {
-            await fetch("/api/analyze-screenshot", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ imageData: data.imageData }),
-            });
-          } catch {}
-          return;
-        }
+        setLiveHistory30((prev) => [data.imageData!, ...prev].slice(0, 30));
         setScreenshotUrl(data.imageData);
       }
     } catch (e) {
-      console.error(e);
+      console.warn("Screen capture note:", e);
     }
   };
   useEffect(() => {
@@ -925,7 +914,7 @@ export default function Dashboard({
     if (isCapturing) {
       captureIntervalRef.current = window.setInterval(
         () => captureScreen(),
-        400,
+        600,
       );
     }
     return () => {
@@ -934,8 +923,7 @@ export default function Dashboard({
   }, [isCapturing]);
   useEffect(() => {
     if (targetDevice === "android") {
-      fetch("/api/adb/devices")
-        .then((r) => r.json())
+      safeFetchJson<{ devices?: string[] }>("/api/adb/devices")
         .then((d) => {
           if (d.success) {
             setAdbDevices(d.devices || []);
@@ -957,16 +945,14 @@ export default function Dashboard({
     if (!liveImg) {
       // Auto-fetch latest frame from server or mobile stream
       try {
-        const capRes = await fetch("/api/capture-screen");
-        const capData = await capRes.json();
+        const capData = await safeFetchJson<{ imageData?: string }>("/api/capture-screen");
         if (capData?.success && capData?.imageData) {
           liveImg = capData.imageData;
           setScreenshotUrl(capData.imageData);
           setAiLiveUrl(capData.imageData);
         } else {
           // Fallback to mobile frame
-          const mobRes = await fetch("/api/mobile-stream/frame");
-          const mobData = await mobRes.json();
+          const mobData = await safeFetchJson<{ frame?: { imageData?: string } }>("/api/mobile-stream/frame");
           if (mobData?.success && mobData?.frame?.imageData) {
             liveImg = mobData.frame.imageData;
             setScreenshotUrl(mobData.frame.imageData);
@@ -987,12 +973,10 @@ export default function Dashboard({
       message: "Perceiving live screen via AI #1...",
     });
     try {
-      const res = await fetch("/api/ai/describe-screen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageData: liveImg, model: "qwen2.5vl:7b" }),
+      const data = await safePostJson<{ report?: any }>("/api/ai/describe-screen", {
+        imageData: liveImg,
+        model: "qwen2.5vl:7b",
       });
-      const data = await res.json();
       if (data.success && data.report) {
         setPerceptionReport(data.report);
         setVerificationBadge({
@@ -1088,17 +1072,16 @@ export default function Dashboard({
       message: "AI #2 planning next action...",
     });
     try {
-      const res = await fetch("/api/ai/plan-and-act", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          perceptionReport: report,
-          userObjective: "auto",
-          model: "qwen2.5vl:7b",
-          executeImmediately: true,
-        }),
+      const data = await safePostJson<{
+        decision?: any;
+        executionResult?: any;
+        error?: string;
+      }>("/api/ai/plan-and-act", {
+        perceptionReport: report,
+        userObjective: "auto",
+        model: "qwen2.5vl:7b",
+        executeImmediately: true,
       });
-      const data = await res.json();
       if (data.success && data.decision) {
         if (data.decision.nextAction) {
           setAiThinking({
@@ -1160,7 +1143,7 @@ export default function Dashboard({
       } else {
         setVerificationBadge({
           status: "failed",
-          message: "Plan failed: " + (data.error || "unknown"),
+          message: "Plan fallback: " + (data.error || "standby"),
         });
         setTimeout(() => setVerificationBadge(null), 3000);
       }

@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { safeFetchJson, safePostJson } from "@/lib/api-helper";
 
 export interface GenealogyNode {
   id: string;
@@ -71,12 +72,11 @@ export function WorkflowGenealogyViewer({
   const fetchGenealogy = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch("/api/mobile-stream/genealogy");
-      if (!res.ok) return;
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) return;
-      const data = await res.json();
-      if (data && data.success) {
+      const data = await safeFetchJson<{
+        nodes?: GenealogyNode[];
+        patterns?: SuccessPattern[];
+      }>("/api/mobile-stream/genealogy");
+      if (data.success) {
         setNodes(data.nodes || []);
         setPatterns(data.patterns || []);
         if (data.nodes && data.nodes.length > 0 && !selectedNode) {
@@ -97,20 +97,17 @@ export function WorkflowGenealogyViewer({
   const handleSynthesize = async (node: GenealogyNode) => {
     setIsSynthesizing(true);
     try {
-      const res = await fetch("/api/mobile-stream/genealogy/synthesize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          branchId: node.id,
-          customName: `Lineage Master: ${node.name}`,
-        }),
+      const data = await safePostJson("/api/mobile-stream/genealogy/synthesize", {
+        branchId: node.id,
+        customName: `Lineage Master: ${node.name}`,
       });
-      const data = await res.json();
       if (data.success && data.workflow) {
         toast.success(`Synthesized Workflow from Genealogy: "${data.workflow.name}"!`);
         if (onSynthesizeBranch) {
           onSynthesizeBranch(data.workflow);
         }
+      } else {
+        toast.error(data.error || "Failed to synthesize branch");
       }
     } catch {
       toast.error("Failed to synthesize branch");

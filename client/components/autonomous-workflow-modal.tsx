@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { safeFetchJson, safePostJson } from "@/lib/api-helper";
 
 interface BackgroundTask {
   id: string;
@@ -141,23 +142,28 @@ export function AutonomousWorkflowModal({
   // Fetch Background Agent Tasks & Findings
   const fetchBackgroundData = async () => {
     try {
-      const res = await fetch("/api/mobile-stream/background-agents/tasks");
-      const data = await res.json();
+      const data = await safeFetchJson<{
+        tasks?: BackgroundTask[];
+        findings?: BackgroundFinding[];
+        metrics?: any;
+      }>("/api/mobile-stream/background-agents/tasks");
       if (data.success) {
         setBackgroundTasks(data.tasks || []);
         setBackgroundFindings(data.findings || []);
         if (data.metrics) setMetrics(data.metrics);
       }
     } catch (err) {
-      console.error("Failed to fetch background agent tasks:", err);
+      console.warn("Background agent fetch note:", err);
     }
   };
 
   // Fetch Workflow Genealogy
   const fetchGenealogyData = async () => {
     try {
-      const res = await fetch("/api/mobile-stream/genealogy");
-      const data = await res.json();
+      const data = await safeFetchJson<{
+        nodes?: GenealogyNode[];
+        patterns?: SuccessPattern[];
+      }>("/api/mobile-stream/genealogy");
       if (data.success) {
         setGenealogyNodes(data.nodes || []);
         setSuccessPatterns(data.patterns || []);
@@ -166,7 +172,7 @@ export function AutonomousWorkflowModal({
         }
       }
     } catch (err) {
-      console.error("Failed to fetch workflow genealogy:", err);
+      console.warn("Workflow genealogy fetch note:", err);
     }
   };
 
@@ -182,13 +188,12 @@ export function AutonomousWorkflowModal({
   // Toggle Background Task
   const handleToggleTask = async (taskId: string) => {
     try {
-      const res = await fetch(`/api/mobile-stream/background-agents/tasks/${taskId}/toggle`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (data.success) {
+      const data = await safePostJson(`/api/mobile-stream/background-agents/tasks/${taskId}/toggle`);
+      if (data.success && data.task) {
         toast.success(`Task status updated to ${data.task.status}`);
         fetchBackgroundData();
+      } else if (!data.success) {
+        toast.error(data.error || "Failed to update task");
       }
     } catch {
       toast.error("Failed to toggle task");
@@ -198,13 +203,14 @@ export function AutonomousWorkflowModal({
   // Delete Task
   const handleDeleteTask = async (taskId: string) => {
     try {
-      const res = await fetch(`/api/mobile-stream/background-agents/tasks/${taskId}`, {
+      const data = await safeFetchJson(`/api/mobile-stream/background-agents/tasks/${taskId}`, {
         method: "DELETE",
       });
-      const data = await res.json();
       if (data.success) {
         toast.success("Task removed");
         fetchBackgroundData();
+      } else {
+        toast.error(data.error || "Failed to delete task");
       }
     } catch {
       toast.error("Failed to delete task");
@@ -215,15 +221,14 @@ export function AutonomousWorkflowModal({
   const handleTriggerSilentScan = async (taskType: string = "dead_route_scan") => {
     setIsScanning(true);
     try {
-      const res = await fetch("/api/mobile-stream/background-agents/scan-now", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scanType: taskType }),
+      const data = await safePostJson("/api/mobile-stream/background-agents/scan-now", {
+        scanType: taskType,
       });
-      const data = await res.json();
       if (data.success) {
         toast.success("Silent background sweep completed!");
         fetchBackgroundData();
+      } else {
+        toast.error(data.error || "Background sweep failed");
       }
     } catch {
       toast.error("Background sweep failed");
@@ -239,24 +244,21 @@ export function AutonomousWorkflowModal({
       return;
     }
     try {
-      const res = await fetch("/api/mobile-stream/background-agents/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: newTaskName,
-          type: newTaskType,
-          cadenceMs: newTaskCadence,
-          targetScope: newTaskScope,
-          autoHealEnabled: newTaskAutoHeal,
-          agentId: newTaskType === "dead_route_scan" ? "agent_sentinel" : "agent_loop_recovery",
-        }),
+      const data = await safePostJson("/api/mobile-stream/background-agents/tasks", {
+        name: newTaskName,
+        type: newTaskType,
+        cadenceMs: newTaskCadence,
+        targetScope: newTaskScope,
+        autoHealEnabled: newTaskAutoHeal,
+        agentId: newTaskType === "dead_route_scan" ? "agent_sentinel" : "agent_loop_recovery",
       });
-      const data = await res.json();
       if (data.success) {
         toast.success("Background monitoring task assigned!");
         setIsCreatingTask(false);
         setNewTaskName("");
         fetchBackgroundData();
+      } else {
+        toast.error(data.error || "Failed to assign background task");
       }
     } catch {
       toast.error("Failed to assign background task");
@@ -266,13 +268,12 @@ export function AutonomousWorkflowModal({
   // Resolve Finding
   const handleResolveFinding = async (findingId: string) => {
     try {
-      const res = await fetch(`/api/mobile-stream/background-agents/findings/${findingId}/resolve`, {
-        method: "POST",
-      });
-      const data = await res.json();
+      const data = await safePostJson(`/api/mobile-stream/background-agents/findings/${findingId}/resolve`);
       if (data.success) {
         toast.success("Finding marked resolved / auto-healed!");
         fetchBackgroundData();
+      } else {
+        toast.error(data.error || "Failed to resolve finding");
       }
     } catch {
       toast.error("Failed to resolve finding");
@@ -283,20 +284,17 @@ export function AutonomousWorkflowModal({
   const handleSynthesizeBranch = async (node: GenealogyNode) => {
     setIsSynthesizingBranch(true);
     try {
-      const res = await fetch("/api/mobile-stream/genealogy/synthesize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          branchId: node.id,
-          customName: `Master ${node.name} Routine`,
-        }),
+      const data = await safePostJson("/api/mobile-stream/genealogy/synthesize", {
+        branchId: node.id,
+        customName: `Master ${node.name} Routine`,
       });
-      const data = await res.json();
       if (data.success && data.workflow) {
         toast.success(`Synthesized Workflow "${data.workflow.name}"!`);
         if (onSelectWorkflow) {
           onSelectWorkflow(data.workflow);
         }
+      } else {
+        toast.error(data.error || "Failed to synthesize branch workflow");
       }
     } catch {
       toast.error("Failed to synthesize branch workflow");

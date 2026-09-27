@@ -1514,11 +1514,56 @@ mobileStreamRouter.post("/api/mobile-stream/action", (req, res) => {
     mobileActionQueue.push(act);
     enqueued.push(act);
 
-    // Auto-save check: if any workflow has autoSave enabled or target autoSaveWorkflowId provided
-    for (const wf of savedDeviceWorkflows) {
-      if (wf.autoSave && (autoSaveWorkflowId ? wf.id === autoSaveWorkflowId : true)) {
-        wf.actions.push({ ...act });
-        wf.updatedAt = Date.now();
+    // Update simulated phone state dynamically on actions
+    serverPhoneState.lastTouchX = act.x;
+    serverPhoneState.lastTouchY = act.y;
+    serverPhoneState.lastTouchTime = Date.now();
+    serverPhoneState.lastActionText = `${act.type.toUpperCase()}${act.text ? `: ${act.text}` : ""}`;
+
+    const textLower = (act.text || "").toLowerCase();
+    const descLower = (act.description || "").toLowerCase();
+
+    if (act.type === "home" || descLower.includes("home") || (act.y && act.y > 0.94)) {
+      serverPhoneState.activeApp = "home";
+    } else if (act.type === "app" || act.type === "open_app" || textLower.includes("chrome") || descLower.includes("chrome")) {
+      serverPhoneState.activeApp = "chrome";
+      if (act.text && !textLower.includes("chrome")) {
+        serverPhoneState.chromeQuery = act.text;
+      }
+    } else if (textLower.includes("calc") || descLower.includes("calc")) {
+      serverPhoneState.activeApp = "calculator";
+    } else if (textLower.includes("note") || descLower.includes("note")) {
+      serverPhoneState.activeApp = "notes";
+    } else if (textLower.includes("cam") || descLower.includes("cam")) {
+      serverPhoneState.activeApp = "camera";
+    } else if (textLower.includes("setting") || descLower.includes("setting")) {
+      serverPhoneState.activeApp = "settings";
+    } else if (act.type === "tap" && serverPhoneState.activeApp === "home" && act.y !== undefined && act.x !== undefined) {
+      // Check app icon hitboxes on Home Screen
+      if (act.y >= 0.20 && act.y <= 0.32) {
+        if (act.x < 0.26) serverPhoneState.activeApp = "chrome";
+        else if (act.x < 0.50) serverPhoneState.activeApp = "calculator";
+        else if (act.x < 0.74) serverPhoneState.activeApp = "notes";
+        else serverPhoneState.activeApp = "camera";
+      } else if (act.y >= 0.35 && act.y <= 0.48) {
+        if (act.x < 0.26) serverPhoneState.activeApp = "terminal";
+        else if (act.x < 0.50) serverPhoneState.activeApp = "files";
+        else if (act.x < 0.74) serverPhoneState.activeApp = "settings";
+        else {
+          serverPhoneState.activeApp = "chrome";
+          serverPhoneState.chromeUrl = "https://youtube.com";
+        }
+      }
+    } else if ((act.type === "type" || act.type === "type_text") && act.text) {
+      if (serverPhoneState.activeApp === "chrome") {
+        serverPhoneState.chromeQuery = act.text;
+        if (act.text.startsWith("http://") || act.text.startsWith("https://") || act.text.includes(".com") || act.text.includes(".org")) {
+          serverPhoneState.chromeUrl = act.text.startsWith("http") ? act.text : `https://${act.text}`;
+        }
+      } else if (serverPhoneState.activeApp === "notes") {
+        serverPhoneState.notesContent = `${serverPhoneState.notesContent}\n• ${act.text}`;
+      } else if (serverPhoneState.activeApp === "calculator") {
+        serverPhoneState.calcDisplay = act.text;
       }
     }
 

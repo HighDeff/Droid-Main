@@ -142,12 +142,22 @@ import { AssistantWorkspace } from "@/components/assistant-workspace";
 import { AutonomousWorkflowModal } from "@/components/autonomous-workflow-modal";
 import { MainAIOmniExecutive } from "@/components/main-ai-omni-executive";
 import { InteractiveDeviceControlDeck } from "@/components/interactive-device-control-deck";
+import { GlobalSettingsModal, DEFAULT_MODEL_URL } from "@/components/global-settings-modal";
+import { CoordinateCalibrationModal } from "@/components/coordinate-calibration-modal";
+import { ThreeAiAgentsSquad } from "@/components/three-ai-agents-squad";
 export default function Dashboard({
   initialTab,
 }: { initialTab?: string } = {}) {
   const navigate = useNavigate();
   const [isCapturing, setIsCapturing] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState(false);
+  const [configuredModelUrl, setConfiguredModelUrl] = useState<string>(() => {
+    return typeof window !== "undefined"
+      ? localStorage.getItem("ai_model_url") || DEFAULT_MODEL_URL
+      : DEFAULT_MODEL_URL;
+  });
   const [screenshotUrl, setScreenshotUrl] = useState<string>(() => {
     return typeof window !== "undefined"
       ? generateDefaultDesktopFrame("Sightline AI Vision Core")
@@ -332,6 +342,10 @@ export default function Dashboard({
     window.addEventListener("ai-fix-sequence", handleAiFixSequence);
     window.addEventListener("link-workflow-to-vision-hud", handleLinkWorkflowEvent);
     window.addEventListener("forward-mobile-to-vision-hud", handleForwardMobileEvent);
+    const handleOpenSettingsModal = () => setIsSettingsModalOpen(true);
+    const handleOpenCalibrationModal = () => setIsCalibrationModalOpen(true);
+    window.addEventListener("open-settings", handleOpenSettingsModal);
+    window.addEventListener("open-calibration", handleOpenCalibrationModal);
     return () => {
       window.removeEventListener("ai-cursor-action", handleAiCursorEvent);
       window.removeEventListener("ai-switch-tab", handleAiSwitchTab);
@@ -339,6 +353,8 @@ export default function Dashboard({
       window.removeEventListener("ai-fix-sequence", handleAiFixSequence);
       window.removeEventListener("link-workflow-to-vision-hud", handleLinkWorkflowEvent);
       window.removeEventListener("forward-mobile-to-vision-hud", handleForwardMobileEvent);
+      window.removeEventListener("open-settings", handleOpenSettingsModal);
+      window.removeEventListener("open-calibration", handleOpenCalibrationModal);
     };
   }, []);
   const captureIntervalRef = useRef<number>();
@@ -1297,12 +1313,28 @@ export default function Dashboard({
               <Compass className="w-3.5 h-3.5 text-cyan-300" /> Movement Mode (2nd HUD)
             </Button>
             <Button
-              variant="ghost"
+              variant="secondary"
               size="sm"
-              onClick={() => setCurrentTab("settings")}
-              className="h-8 text-xs font-mono text-slate-300 hover:text-white"
+              onClick={() => {
+                setIsCalibrationModalOpen(true);
+              }}
+              className="h-8 text-xs font-mono bg-slate-900/90 text-amber-300 hover:text-white border border-slate-700 hover:border-amber-400 hover:bg-slate-800 transition-all gap-1.5 shadow-sm px-2.5"
+              title="Calibrate Mouse, PyAutoGUI & Touch Coordinates"
             >
-              <Settings className="w-3.5 h-3.5" />
+              <Target className="w-3.5 h-3.5 text-amber-400" />
+              <span className="font-bold">Calibrate Mouse</span>
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setIsSettingsModalOpen(true);
+              }}
+              className="h-8 text-xs font-mono bg-slate-900/90 text-cyan-300 hover:text-white border border-slate-700 hover:border-cyan-400 hover:bg-slate-800 transition-all gap-1.5 shadow-sm px-2.5"
+              title="Configure AI Model URL & System Settings"
+            >
+              <Settings className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="font-bold">Settings</span>
             </Button>
           </div>
         </div>
@@ -2036,6 +2068,14 @@ export default function Dashboard({
               activeSequenceStep={sequence[0]}
               isRecordMode={isRecordMode}
               liveMouseTrailCount={sequence.length}
+            />
+
+            {/* Tri-Agent Cooperative Operations Squad: 1 Assists User, 1 Reads Logs, 1 Corrects AI Actions & Heals */}
+            <ThreeAiAgentsSquad
+              className="border-cyan-500/50 shadow-2xl"
+              onDispatchFix={(action) => {
+                toast.success(`Autonomous Agent Corrector: Dispatched self-healing fix (${action})`);
+              }}
             />
 
             {/* Main AI Executive Chat & Live Tool Controller */}
@@ -2942,37 +2982,128 @@ export default function Dashboard({
             <AiMonitorPanel compact />
           </TabsContent>
           <TabsContent value="settings" className="space-y-6">
-            <Card className="bg-slate-900 border-slate-800">
-              <CardHeader>
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Settings className="w-4 h-4" /> Global Settings & Contextual
-                  Bars
-                </CardTitle>
-                <CardDescription>
-                  Tab-specific settings are shown inside each tab via contextual
-                  bars. This panel aggregates them.
-                </CardDescription>
+            <Card className="bg-slate-900/95 border-slate-800 shadow-xl overflow-hidden">
+              <CardHeader className="p-4 bg-slate-950/80 border-b border-slate-800 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
+                    <Settings className="w-4 h-4 text-cyan-400" /> Global AI Model & System Settings Studio
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-400 mt-0.5">
+                    Configure and test model endpoints, hardware drift calibration, anti-loop guards, and execution speed.
+                  </CardDescription>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => setIsSettingsModalOpen(true)}
+                  className="bg-cyan-600 hover:bg-cyan-500 text-white font-mono text-xs font-bold gap-1.5 shadow-sm"
+                >
+                  <Settings className="w-3.5 h-3.5" /> Open Quick Settings Dialog
+                </Button>
               </CardHeader>
-              <CardContent className="space-y-4 text-xs font-mono">
+              <CardContent className="p-5 space-y-5 text-xs font-mono">
+                {/* Model URL Configuration Section */}
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-cyan-300 flex items-center gap-1.5">
+                      <CpuIcon className="w-4 h-4 text-cyan-400" /> Active AI Model URL
+                    </span>
+                    <Badge className="bg-cyan-950 text-cyan-300 border-cyan-800 text-[10px]">
+                      DEFAULT: {DEFAULT_MODEL_URL}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+                    <input
+                      type="text"
+                      value={configuredModelUrl}
+                      onChange={(e) => setConfiguredModelUrl(e.target.value)}
+                      placeholder="https://quantumclaw.net/ollama/api/chat"
+                      className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-cyan-500"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const targetUrl = configuredModelUrl.trim() || DEFAULT_MODEL_URL;
+                        localStorage.setItem("ai_model_url", targetUrl);
+                        fetch("/api/ai/settings", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ modelUrl: targetUrl }),
+                        }).then(() => {
+                          toast.success("Model URL saved to system!");
+                        });
+                      }}
+                      className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs"
+                    >
+                      Save URL
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        fetch("/api/ai/test-endpoint", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ endpoint: configuredModelUrl }),
+                        })
+                          .then((r) => r.json())
+                          .then((res) => {
+                            if (res.success) {
+                              toast.success(`Ping succeeded! Latency: ${res.latencyMs}ms`);
+                            } else {
+                              toast.error(`Ping check: ${res.message || "Failed"}`);
+                            }
+                          })
+                          .catch(() => toast.error("Ping request failed"));
+                      }}
+                      className="border-slate-700 text-slate-300 hover:bg-slate-800 text-xs"
+                    >
+                      Ping Endpoint
+                    </Button>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <span className="text-[11px] text-slate-400 self-center">Presets:</span>
+                    <button
+                      onClick={() => {
+                        setConfiguredModelUrl(DEFAULT_MODEL_URL);
+                        localStorage.setItem("ai_model_url", DEFAULT_MODEL_URL);
+                        toast.success("Loaded QuantumClaw Remote default");
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 hover:border-cyan-500 text-cyan-300 font-bold"
+                    >
+                      ⚡ QuantumClaw Remote (https://quantumclaw.net/ollama/api/chat)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setConfiguredModelUrl("http://localhost:11434/api/chat");
+                        localStorage.setItem("ai_model_url", "http://localhost:11434/api/chat");
+                        toast.info("Loaded Localhost:11434 preset");
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 hover:border-cyan-500 text-slate-300"
+                    >
+                      💻 Localhost Ollama
+                    </button>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="p-3 rounded bg-slate-950 border border-slate-800">
-                    <span className="font-bold text-cyan-300">Movement</span>
-                    <p className="text-slate-300">
+                    <span className="font-bold text-cyan-300">Movement & Drift</span>
+                    <p className="text-slate-300 mt-1">
                       Mode: {movementMode} • Drift: {driftPx}px • Vary:{" "}
                       {driftPerStepVariate ? "ON" : "OFF"} • Random:{" "}
                       {driftRandomInterval ? "1-3s" : "OFF"}
                     </p>
                   </div>
                   <div className="p-3 rounded bg-slate-950 border border-slate-800">
-                    <span className="font-bold text-emerald-300">Device</span>
-                    <p className="text-slate-300">
+                    <span className="font-bold text-emerald-300">Target Device</span>
+                    <p className="text-slate-300 mt-1">
                       {targetDevice} • {selectedAdbDevice || "no device"} •
                       AntiLoop: {antiLoopEnabled ? "ON" : "OFF"}
                     </p>
                   </div>
                   <div className="p-3 rounded bg-slate-950 border border-slate-800">
-                    <span className="font-bold text-purple-300">AI</span>
-                    <p className="text-slate-300">
+                    <span className="font-bold text-purple-300">AI Perception</span>
+                    <p className="text-slate-300 mt-1">
                       Perception: {perceptionReport ? "ready" : "idle"} • Live:{" "}
                       {isLiveDesktopActive ? "LIVE" : "fallback"} • Steps:{" "}
                       {sequence.length}
@@ -2980,7 +3111,7 @@ export default function Dashboard({
                   </div>
                 </div>
                 <div className="p-3 rounded bg-slate-950 border border-slate-800 space-y-2">
-                  <span className="font-bold">All Tab Settings Bars</span>
+                  <span className="font-bold text-white">All Tab Settings Bars</span>
                   <p className="text-slate-300">
                     Each tab (Vision, OS, Input, Routes, Cognition, Swarm)
                     contains its own TabContextualSettingsBar with
@@ -3252,6 +3383,24 @@ export default function Dashboard({
         </footer>
         {/* Global AI Cursor & Motion Trail Overlay */}
         <GlobalAICursorOverlay enabled={true} cursorState={globalCursorState} theme="cyan" />
+
+        {/* Global Mouse & Coordinate Drift Calibration Modal */}
+        <CoordinateCalibrationModal
+          isOpen={isCalibrationModalOpen}
+          onClose={() => setIsCalibrationModalOpen(false)}
+        />
+
+        {/* Global System & AI Model Settings Modal */}
+        <GlobalSettingsModal
+          open={isSettingsModalOpen}
+          onOpenChange={setIsSettingsModalOpen}
+          onSettingsSaved={(st) => {
+            setConfiguredModelUrl(st.modelUrl);
+            setDriftPx(st.driftPx);
+            setAntiLoopEnabled(st.antiLoop);
+            setTargetDevice(st.targetDevice);
+          }}
+        />
 
         {/* Autonomous Workflow Director & Background Agent Manager Modal */}
         <AutonomousWorkflowModal

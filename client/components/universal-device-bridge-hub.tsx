@@ -43,6 +43,7 @@ import {
   Eye,
   Sliders,
   CheckSquare,
+  Monitor,
   Square,
   Repeat,
   Wand2,
@@ -57,6 +58,7 @@ import {
   Maximize2,
   FileSearch,
   Split,
+  Upload,
   ShieldAlert,
   ArrowRightCircle,
   ChevronRight,
@@ -69,7 +71,10 @@ import {
   ShoppingBag,
   Folder,
   Settings,
+  Crosshair,
+  Target,
 } from "lucide-react";
+import { calibrateCoordinates } from "@/lib/coordinate-calibration";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -686,6 +691,61 @@ export function UniversalDeviceBridgeHub({
     toast.info("🏠 Navigated to Home. All home apps, launcher, and active streaming are ready.");
   };
 
+  // Direct PC Screen Share Mirror into Universal Hub
+  const handleStartDesktopScreenMirrorInHub = async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        toast.error("Screen Share API is not supported in this browser.");
+        return;
+      }
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { cursor: "always" } as any,
+        audio: false,
+      });
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      await video.play();
+
+      const offCanvas = document.createElement("canvas");
+      toast.success("🖥️ Desktop Screen Mirror active in Hub!");
+      setViewPhoneLauncher(false);
+
+      const intervalId = window.setInterval(() => {
+        if (!stream.active) {
+          clearInterval(intervalId);
+          return;
+        }
+        offCanvas.width = video.videoWidth || 1920;
+        offCanvas.height = video.videoHeight || 1080;
+        const ctx = offCanvas.getContext("2d");
+        ctx?.drawImage(video, 0, 0, offCanvas.width, offCanvas.height);
+        const dataUrl = offCanvas.toDataURL("image/jpeg", 0.85);
+
+        setMobileFrame(dataUrl);
+        setMobileStreamConnected(true);
+        setMobileDeviceName("PC Desktop Screen (Direct)");
+
+        fetch("/api/mobile-stream/frame", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageData: dataUrl,
+            deviceName: "PC Desktop Screen",
+            streamType: "desktop_screen",
+            fps: 30,
+          }),
+        }).catch(() => {});
+      }, 150);
+
+      stream.getVideoTracks()[0].onended = () => {
+        clearInterval(intervalId);
+        toast.info("Desktop Screen Mirror stopped.");
+      };
+    } catch (err: any) {
+      toast.error("Screen share cancelled or restricted: " + (err?.message || ""));
+    }
+  };
+
   // Open Popout Detached Window
   const handleOpenPopoutWindow = () => {
     if (typeof window !== "undefined") {
@@ -991,6 +1051,20 @@ export function UniversalDeviceBridgeHub({
       setIsAiExecuting(false);
     }
   };
+
+  // Explicit handler alias for execute autonomous AI goal
+  const handleExecuteAutonomousAiGoal = async (customGoal?: string) => {
+    if (customGoal && typeof customGoal === "string") {
+      setAiGoal(customGoal);
+    }
+    return handleRunAiGoal(false);
+  };
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      (window as any).handleExecuteAutonomousAiGoal = handleExecuteAutonomousAiGoal;
+    }
+  }, [aiGoal]);
 
   // Send typed text to phone
   const handleSendText = () => {
@@ -1739,6 +1813,97 @@ export function UniversalDeviceBridgeHub({
                 </div>
               </div>
 
+              {/* Dedicated Section Under Barcode for Asking AI to Perform Actions with Document Grounding */}
+              <div className="p-3 rounded-xl bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 border-2 border-cyan-500/40 shadow-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-cyan-300 font-bold text-xs">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                    <span>Ask AI Assistant to...</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <label className="px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-bold cursor-pointer flex items-center gap-1 shadow">
+                      <Upload className="w-2.5 h-2.5" /> SOP Doc
+                      <input
+                        type="file"
+                        accept=".pdf,.txt,.docx,.json,.md,.csv,.png,.jpg"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            const content = await file.text().catch(() => `[Binary document: ${file.name}]`);
+                            const res = await fetch("/api/mobile-stream/upload-doc", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                name: file.name,
+                                content,
+                                fileType: file.type || "text/plain",
+                                size: file.size,
+                                tags: ["grounding-doc", "sop"],
+                              }),
+                            });
+                            if (res.ok) {
+                              setAiGoal(`Execute tasks according to uploaded SOP "${file.name}"`);
+                              toast.success(`📎 Ingested "${file.name}" for AI task grounding!`);
+                            }
+                          } catch {
+                            toast.error("Failed uploading document");
+                          }
+                        }}
+                      />
+                    </label>
+                    <Badge className="bg-cyan-950 text-cyan-300 border-cyan-700 text-[8px] font-mono">
+                      Autonomous
+                    </Badge>
+                  </div>
+                </div>
+
+                <div className="flex gap-1.5">
+                  <Input
+                    value={aiGoal}
+                    onChange={(e) => setAiGoal(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && aiGoal.trim()) {
+                        handleRunAiGoal();
+                      }
+                    }}
+                    placeholder="e.g. Follow uploaded SOP and open Notes, or Tap search..."
+                    className="h-7 text-[10px] bg-slate-950 border-slate-700 text-slate-200 focus:border-cyan-400"
+                  />
+                  <Button
+                    size="sm"
+                    disabled={isAiExecuting || !aiGoal.trim()}
+                    onClick={() => handleRunAiGoal()}
+                    className="h-7 px-2.5 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-[10px] shrink-0 gap-1 shadow-md"
+                  >
+                    {isAiExecuting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3 fill-white" />}
+                    Ask AI
+                  </Button>
+                </div>
+
+                {/* Quick Action Chips */}
+                <div className="grid grid-cols-2 gap-1 pt-0.5">
+                  {[
+                    { label: "📸 Snapshot & Scan", prompt: "Capture screenshot and inspect all UI elements" },
+                    { label: "🌐 Open Chrome", prompt: "Open Google Chrome and search AI automation" },
+                    { label: "📝 Notes Entry", prompt: "Open Notes app and write task summary" },
+                    { label: "📎 Follow SOP Doc", prompt: "Read uploaded SOP document and execute automated steps" },
+                  ].map((chip) => (
+                    <button
+                      key={chip.label}
+                      onClick={() => {
+                        setAiGoal(chip.prompt);
+                        toast.info(`Selected prompt: "${chip.prompt}"`);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-slate-300 text-[9px] font-mono text-left border border-slate-800 hover:border-cyan-500/50 transition-all truncate"
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Snapshot with Note Box */}
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
                 <span className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5">
@@ -1969,7 +2134,7 @@ export function UniversalDeviceBridgeHub({
 
                       {/* Stream / Virtual OS Toggle Header */}
                       <div className="w-full bg-slate-900 border-b border-slate-800 px-2.5 py-1 flex items-center justify-between z-20 shrink-0 text-[10px] font-mono">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <button
                             onClick={() => setViewPhoneLauncher(false)}
                             className={`px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 transition-all ${
@@ -1979,7 +2144,15 @@ export function UniversalDeviceBridgeHub({
                             }`}
                           >
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                            Live Stream {mobileFrame ? "●" : "(Waiting)"}
+                            Live Stream {mobileFrame ? "●" : "(Standby)"}
+                          </button>
+                          <button
+                            onClick={handleStartDesktopScreenMirrorInHub}
+                            className="px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 bg-indigo-950/80 border border-indigo-500/50 text-indigo-200 hover:bg-indigo-900 shadow-sm"
+                            title="Start Direct PC Desktop Screen Share Mirror (getDisplayMedia)"
+                          >
+                            <Monitor className="w-3 h-3 text-indigo-400" />
+                            Mirror PC
                           </button>
                           <button
                             onClick={() => setViewPhoneLauncher(true)}
@@ -2272,6 +2445,17 @@ export function UniversalDeviceBridgeHub({
                         title="Send workflow to Live Desktop Screen Capture & Vision HUD below (Hotkey [V])"
                       >
                         <Layers className="w-2.5 h-2.5 text-purple-400" /> Link HUD <span className="text-purple-400 text-[8px]">[V]</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (typeof window !== "undefined") {
+                            window.dispatchEvent(new CustomEvent("open-calibration"));
+                          }
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-amber-950/90 hover:bg-amber-900 text-amber-200 border border-amber-500/60 flex items-center gap-0.5 font-bold shadow-sm"
+                        title="Calibrate mouse, touch, and coordinate precision"
+                      >
+                        <Crosshair className="w-2.5 h-2.5 text-amber-400" /> Calibrate
                       </button>
                       <button
                         onClick={handleCaptureInstantSnapshot}
@@ -2855,6 +3039,42 @@ export function UniversalDeviceBridgeHub({
       {/* ---------------------------------------------------- */}
       {activeTab === "workflows" && (
         <div className="space-y-3.5">
+          {/* 10-Second Heartbeat & AI Learning Telemetry Bar */}
+          <div className="p-3 rounded-xl bg-gradient-to-r from-slate-950 via-indigo-950/60 to-slate-950 border border-cyan-500/40 shadow-xl flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+              <div>
+                <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
+                  ⚡ 10s Completion & Health Check Active
+                  <Badge className="bg-cyan-950 text-cyan-300 border-cyan-700 text-[9px] font-mono">Autonomous Verification</Badge>
+                </span>
+                <p className="text-[10px] text-slate-400">
+                  Workflows automatically validated every 10s. Agents auto-heal failed steps and store learned routes.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    const res = await fetch("/api/mobile-stream/workflows/completion-check", { method: "POST" });
+                    if (res.ok) {
+                      toast.success("⚡ 10s Completion Check Executed - All active workflows verified");
+                      fetchWorkflows();
+                    }
+                  } catch {
+                    toast.error("Failed executing completion check");
+                  }
+                }}
+                className="h-7 px-2 text-[10px] font-mono border-slate-700 bg-slate-900 text-cyan-300 hover:text-white gap-1"
+              >
+                <RefreshCw className="w-3 h-3" /> Check Now (10s Heartbeat)
+              </Button>
+            </div>
+          </div>
+
           {/* Top Bar: Search, New Workflow, Auto-Save Status */}
           <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950 p-2.5 rounded-xl border border-slate-800">
             <div className="flex items-center gap-2 flex-1 max-w-sm">

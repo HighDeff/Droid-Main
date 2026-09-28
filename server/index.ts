@@ -71,6 +71,15 @@ import {
   handleGenerateFileSummary,
 } from "./routes/description-refiner";
 import {
+  testAiEndpoint,
+  getConfiguredAiEndpoint,
+  setConfiguredAiEndpoint,
+  getConfiguredAiModel,
+  setConfiguredAiModel,
+  DEFAULT_OLLAMA_ENDPOINT,
+  DEFAULT_QWEN_MODEL,
+} from "./ai-endpoint";
+import {
   handlePyAutoGUIBridge,
   handleGetBridgeLogs,
   handleClearBridgeLogs,
@@ -304,6 +313,53 @@ export function createServer() {
   app.post("/api/ai/adaptive-retry", handleAdaptiveRetry);
   app.post("/api/ai/replay-drift-actions", handleReplayDriftActions);
   app.post("/api/ai/qwen-guide-step", handleQwenGuideStep);
+
+  // Model Endpoint Testing & System AI Settings
+  app.post("/api/ai/test-endpoint", async (req, res) => {
+    try {
+      const { endpoint, model } = req.body;
+      const result = await testAiEndpoint(endpoint, model);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        latencyMs: 0,
+        endpoint: req.body?.endpoint || DEFAULT_OLLAMA_ENDPOINT,
+        model: req.body?.model || DEFAULT_QWEN_MODEL,
+        error: err instanceof Error ? err.message : String(err),
+        message: err instanceof Error ? err.message : "Failed to test endpoint",
+      });
+    }
+  });
+
+  app.get("/api/ai/settings", (_req, res) => {
+    res.json({
+      success: true,
+      settings: {
+        modelUrl: getConfiguredAiEndpoint(),
+        model: getConfiguredAiModel(),
+        defaultModelUrl: DEFAULT_OLLAMA_ENDPOINT,
+        defaultModel: DEFAULT_QWEN_MODEL,
+      },
+    });
+  });
+
+  app.post("/api/ai/settings", (req, res) => {
+    const { modelUrl, model } = req.body;
+    if (modelUrl && typeof modelUrl === "string") {
+      setConfiguredAiEndpoint(modelUrl);
+    }
+    if (model && typeof model === "string") {
+      setConfiguredAiModel(model);
+    }
+    res.json({
+      success: true,
+      settings: {
+        modelUrl: getConfiguredAiEndpoint(),
+        model: getConfiguredAiModel(),
+      },
+    });
+  });
 
   // Main AI Omni-Executive Controller (Omni-Operate, Tab Navigation, Screen Analysis, Workflow Fix & Settings)
   app.use(mainAiChatRouter);

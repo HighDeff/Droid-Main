@@ -510,8 +510,13 @@ export function AssistantWorkspace({
           </div>
 
           <div className="hidden border-t border-white/10 p-4 lg:block">
-            <button className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-slate-400 hover:bg-white/5 hover:text-white">
-              <Settings2 className="h-4 w-4" />
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent("open-settings"));
+              }}
+              className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-slate-400 hover:bg-white/5 hover:text-white transition-colors cursor-pointer"
+            >
+              <Settings2 className="h-4 w-4 text-cyan-400" />
               <span className="text-sm">Workspace settings</span>
             </button>
           </div>

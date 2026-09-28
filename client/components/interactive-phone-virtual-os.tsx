@@ -73,6 +73,7 @@ export interface VirtualPhoneState {
 interface InteractivePhoneVirtualOSProps {
   onStateChange?: (state: VirtualPhoneState) => void;
   onActionLogged?: (action: string, details: string) => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
   externalTextInjection?: string;
   currentStepAction?: {
     id?: string;
@@ -90,6 +91,7 @@ interface InteractivePhoneVirtualOSProps {
 export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps> = ({
   onStateChange,
   onActionLogged,
+  onContextMenu,
   externalTextInjection,
   currentStepAction,
   forwardTrigger = 0,
@@ -112,7 +114,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
   const [calcHistory, setCalcHistory] = useState<string[]>([]);
   const [notesList, setNotesList] = useState([
     { id: "note-1", title: "Automation Checklist", body: "1. Calibrate coordinates\n2. Verify input response\n3. Run self-healing test", time: "10:45 AM" },
-    { id: "note-2", title: "API Configuration", body: "Ollama Qwen 3.5 2B @ 192.168.1.100:11434/api/chat", time: "11:12 AM" },
+    { id: "note-2", title: "API Configuration", body: "Ollama Qwen 3.5 2B @ https://quantumclaw.net/ollama/api/chat", time: "11:12 AM" },
   ]);
   const [activeNoteId, setActiveNoteId] = useState<string | null>("note-1");
   const [activeNoteBody, setActiveNoteBody] = useState("");
@@ -159,24 +161,58 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
     return () => clearInterval(interval);
   }, []);
 
-  // Emit state changes to parent controller & stream
+  // Emit state changes to parent controller, backend & window events for bidirectional sync
   useEffect(() => {
+    const currentState = {
+      activeApp,
+      isNotificationsOpen,
+      chromeUrl,
+      chromeSearch,
+      calcDisplay,
+      calcHistory,
+      notesList,
+      activeNoteId,
+      settings,
+      cameraSnapped,
+      batteryLevel: 98,
+      currentTime,
+    };
+
     if (onStateChange) {
-      onStateChange({
-        activeApp,
-        isNotificationsOpen,
-        chromeUrl,
-        chromeSearch,
-        calcDisplay,
-        calcHistory,
-        notesList,
-        activeNoteId,
-        settings,
-        cameraSnapped,
-        batteryLevel: 98,
-        currentTime,
-      });
+      onStateChange(currentState);
     }
+
+    // Broadcast locally so other components/tabs reflect instantly
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("sightline-virtual-os-sync", {
+          detail: {
+            activeApp,
+            chromeUrl,
+            chromeQuery: chromeSearch,
+            calcDisplay,
+            notesContent: notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"),
+            settingsWifi: settings.wifi,
+            settingsBluetooth: settings.bluetooth,
+          },
+        })
+      );
+    }
+
+    // Sync to backend shared state
+    fetch("/api/virtual-os/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        activeApp,
+        chromeUrl,
+        chromeQuery: chromeSearch,
+        calcDisplay,
+        notesContent: notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"),
+        settingsWifi: settings.wifi,
+        settingsBluetooth: settings.bluetooth,
+      }),
+    }).catch(() => {});
   }, [
     activeApp,
     isNotificationsOpen,
@@ -191,6 +227,58 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
     currentTime,
     onStateChange,
   ]);
+
+  // Listen for external sync from MobileRemote or other components
+  useEffect(() => {
+    const handleExternalSync = (e: any) => {
+      const d = e.detail;
+      if (!d) return;
+      if (d.activeApp && d.activeApp !== activeApp) {
+        setActiveApp(d.activeApp);
+      }
+      if (d.chromeUrl && d.chromeUrl !== chromeUrl) {
+        setChromeUrl(d.chromeUrl);
+      }
+      if (d.chromeQuery && d.chromeQuery !== chromeSearch) {
+        setChromeSearch(d.chromeQuery);
+      }
+      if (d.calcDisplay && d.calcDisplay !== calcDisplay) {
+        setCalcDisplay(d.calcDisplay);
+      }
+    };
+
+    window.addEventListener("sightline-virtual-os-sync", handleExternalSync);
+
+    // Fast polling backend for multi-client / mobile remote updates
+    const pollInterval = window.setInterval(async () => {
+      try {
+        const res = await fetch("/api/virtual-os/state");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.state) {
+            const st = json.state;
+            if (st.activeApp && st.activeApp !== activeApp) {
+              setActiveApp(st.activeApp);
+            }
+            if (st.chromeUrl && st.chromeUrl !== chromeUrl) {
+              setChromeUrl(st.chromeUrl);
+            }
+            if (st.chromeQuery && st.chromeQuery !== chromeSearch) {
+              setChromeSearch(st.chromeQuery);
+            }
+            if (st.calcDisplay && st.calcDisplay !== calcDisplay) {
+              setCalcDisplay(st.calcDisplay);
+            }
+          }
+        }
+      } catch {}
+    }, 400);
+
+    return () => {
+      window.removeEventListener("sightline-virtual-os-sync", handleExternalSync);
+      clearInterval(pollInterval);
+    };
+  }, [activeApp, chromeUrl, chromeSearch, calcDisplay]);
 
   const handleHome = () => {
     setIsNotificationsOpen(false);
@@ -493,6 +581,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
   return (
     <div
       onClick={triggerTouchFeedback}
+      onContextMenu={onContextMenu}
       className={`w-full h-full bg-slate-950 text-slate-100 flex flex-col justify-between select-none relative overflow-hidden font-sans border-0 ${className}`}
     >
       {/* Dynamic Animated Touch Ripples */}
@@ -1008,6 +1097,99 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
           </div>
         )}
 
+        {/* VIEW 6: YOUTUBE / MEDIA PLAYER */}
+        {activeApp === "youtube" && (
+          <div className="flex-1 flex flex-col bg-slate-950 p-2.5 space-y-2">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+              <div className="flex items-center gap-1.5">
+                <button onClick={handleBack} className="p-1 hover:text-red-400 text-slate-300">
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+                <Video className="w-3.5 h-3.5 text-red-500" />
+                <span className="font-bold text-xs text-red-400">Sightline Media Player</span>
+              </div>
+              <button onClick={handleHome} className="p-1 text-slate-400 hover:text-white">
+                <Home className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Video Player Display */}
+            <div className="relative aspect-video bg-black rounded-xl border border-slate-800 overflow-hidden flex flex-col justify-between p-2 shadow-2xl group">
+              <div className="flex items-center justify-between z-10 text-[9px] font-mono text-white bg-black/60 px-1.5 py-0.5 rounded">
+                <span>{ytSearch}</span>
+                <span className="text-red-400">● LIVE 1080p</span>
+              </div>
+
+              {/* Video Graphic / Animation */}
+              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-tr from-slate-950 via-slate-900 to-red-950/40">
+                <div className={`w-14 h-14 rounded-full bg-red-600/30 border border-red-500 flex items-center justify-center ${ytPlaying ? "animate-pulse" : ""}`}>
+                  <Video className="w-7 h-7 text-red-400" />
+                </div>
+              </div>
+
+              {/* Bottom Video Controls & Scrubber */}
+              <div className="z-10 space-y-1 bg-black/80 p-1.5 rounded-lg backdrop-blur">
+                <div className="w-full h-1 bg-slate-700 rounded-full overflow-hidden">
+                  <div className={`h-full bg-red-500 rounded-full ${ytPlaying ? "w-3/5" : "w-1/4"}`} />
+                </div>
+                <div className="flex items-center justify-between text-[9px] font-mono text-slate-300">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setYtPlaying(!ytPlaying);
+                        toast.info(ytPlaying ? "Video Paused" : "Video Playing");
+                      }}
+                      className="p-1 hover:text-white text-red-400 font-bold"
+                    >
+                      {ytPlaying ? <Pause className="w-3 h-3 fill-red-400" /> : <Play className="w-3 h-3 fill-red-400" />}
+                    </button>
+                    <span>01:45 / 03:20</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      toast.success("📷 Captured video snapshot frame");
+                      onActionLogged?.("MEDIA", "Captured media snapshot");
+                    }}
+                    className="px-1.5 py-0.5 rounded bg-slate-800 text-[8px] hover:text-cyan-300 border border-slate-700"
+                  >
+                    Snap Frame
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Media Stream Selector & Search */}
+            <div className="space-y-1.5 flex-1 overflow-y-auto">
+              <span className="text-[9px] font-mono text-slate-400 font-bold">Featured Streams & Walkthroughs:</span>
+              {[
+                { title: "Sightline Vision AI Demo (Full Pipeline)", duration: "03:20", views: "14.2k" },
+                { title: "Android ADB & Hardware Mirroring Setup", duration: "05:45", views: "9.8k" },
+                { title: "Autonomous 10-Second Self-Healing Loop", duration: "02:10", views: "22.1k" },
+              ].map((v, i) => (
+                <div
+                  key={i}
+                  onClick={() => {
+                    setYtSearch(v.title);
+                    setYtPlaying(true);
+                    toast.success(`Playing: ${v.title}`);
+                  }}
+                  className="p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-red-500/60 cursor-pointer flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-red-950/80 border border-red-500/40 flex items-center justify-center text-red-400">
+                      <Play className="w-3 h-3 ml-0.5 fill-red-400" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-[10px] text-white truncate max-w-[160px]">{v.title}</p>
+                      <p className="text-[8px] text-slate-400">{v.views} views • {v.duration}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* VIEW 7: MUSIC / SPOTIFY PLAYER */}
         {activeApp === "spotify" && (
           <div className="flex-1 flex flex-col justify-between p-3 bg-gradient-to-b from-emerald-950/60 via-slate-950 to-slate-950">
@@ -1062,7 +1244,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
           </div>
         )}
 
-        {/* VIEW 8: TERMINAL / ADB SHELL */}
+        {/* VIEW 8: TERMINAL / ADB SHELL (CONNECTED TO REAL BACKEND EXECUTION) */}
         {activeApp === "terminal" && (
           <div className="flex-1 flex flex-col bg-black p-2.5 font-mono text-[10px] space-y-2">
             <div className="flex items-center justify-between border-b border-slate-800 pb-1 text-slate-400">
@@ -1071,41 +1253,105 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
                   <ArrowLeft className="w-4 h-4" />
                 </button>
                 <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-emerald-400 font-bold">ADB Shell / Terminal</span>
+                <span className="text-emerald-400 font-bold">Terminal & ADB Shell</span>
               </div>
-              <button onClick={handleHome} className="p-1 text-slate-400 hover:text-white">
-                <Home className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setTermLogs(["Terminal cleared. Type 'help' for commands."])}
+                  className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-[8px] text-slate-400"
+                >
+                  Clear
+                </button>
+                <button onClick={handleHome} className="p-1 text-slate-400 hover:text-white">
+                  <Home className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-1 bg-slate-950 p-2 rounded-lg border border-slate-900 text-slate-300">
+            <div className="flex-1 overflow-y-auto space-y-1 bg-slate-950 p-2 rounded-lg border border-slate-900 text-slate-300 select-text">
               {termLogs.map((line, idx) => (
-                <div key={idx} className={line.startsWith("$") ? "text-cyan-400 font-bold" : "text-slate-400"}>
+                <div key={idx} className={line.startsWith("$") ? "text-cyan-400 font-bold" : "text-slate-300 whitespace-pre-wrap leading-relaxed"}>
                   {line}
                 </div>
               ))}
             </div>
 
+            {/* Quick Command Chips */}
+            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
+              {["help", "pm list", "getprop", "ping google.com", "ai status", "workflow list", "docs"].map((c) => (
+                <button
+                  key={c}
+                  onClick={async () => {
+                    setTermLogs((prev) => [...prev, `$ ${c}`]);
+                    try {
+                      const res = await fetch("/api/mobile-stream/terminal/exec", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ command: c }),
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        setTermLogs((prev) => [...prev, data.output || "[OK]"]);
+                      }
+                    } catch {
+                      setTermLogs((prev) => [...prev, "Command execution error"]);
+                    }
+                  }}
+                  className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[8px] font-mono text-emerald-400 shrink-0"
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+
             {/* Command Input Bar */}
-            <div className="flex gap-1.5 pt-1">
+            <div className="flex gap-1.5 pt-0.5">
               <input
                 value={termInput}
                 onChange={(e) => setTermInput(e.target.value)}
-                onKeyDown={(e) => {
+                onKeyDown={async (e) => {
                   if (e.key === "Enter" && termInput.trim()) {
-                    setTermLogs((prev) => [...prev, `$ ${termInput}`, "Command output: [OK]"]);
-                    onActionLogged?.("TERMINAL", `Ran: "${termInput}"`);
+                    const cmd = termInput.trim();
                     setTermInput("");
+                    setTermLogs((prev) => [...prev, `$ ${cmd}`]);
+                    onActionLogged?.("TERMINAL", `Ran: "${cmd}"`);
+                    try {
+                      const res = await fetch("/api/mobile-stream/terminal/exec", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ command: cmd }),
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        setTermLogs((prev) => [...prev, data.output || "[OK]"]);
+                      }
+                    } catch {
+                      setTermLogs((prev) => [...prev, "Command execution error"]);
+                    }
                   }
                 }}
-                placeholder="Enter adb command..."
-                className="flex-1 h-7 bg-slate-900 border border-slate-700 rounded px-2 text-slate-100 text-[10px] focus:outline-none focus:border-emerald-500"
+                placeholder="Enter command e.g. pm list, ping, help..."
+                className="flex-1 h-7 bg-slate-900 border border-slate-700 rounded px-2 text-slate-100 text-[10px] focus:outline-none focus:border-emerald-500 font-mono"
               />
               <button
-                onClick={() => {
+                onClick={async () => {
                   if (termInput.trim()) {
-                    setTermLogs((prev) => [...prev, `$ ${termInput}`, "Command output: [OK]"]);
+                    const cmd = termInput.trim();
                     setTermInput("");
+                    setTermLogs((prev) => [...prev, `$ ${cmd}`]);
+                    try {
+                      const res = await fetch("/api/mobile-stream/terminal/exec", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ command: cmd }),
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        setTermLogs((prev) => [...prev, data.output || "[OK]"]);
+                      }
+                    } catch {
+                      setTermLogs((prev) => [...prev, "Command execution error"]);
+                    }
                   }
                 }}
                 className="px-2.5 h-7 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold"
@@ -1116,7 +1362,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
           </div>
         )}
 
-        {/* VIEW 9: FILE MANAGER & GALLERY */}
+        {/* VIEW 9: FILE MANAGER & DOCUMENT GROUNDING REPOSITORY */}
         {activeApp === "files" && (
           <div className="flex-1 flex flex-col bg-slate-950 p-3 space-y-2">
             <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
@@ -1125,18 +1371,57 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
                   <ArrowLeft className="w-4 h-4" />
                 </button>
                 <Folder className="w-3.5 h-3.5 text-amber-400" />
-                <span className="font-bold text-xs text-amber-300">Files & Gallery</span>
+                <span className="font-bold text-xs text-amber-300">Files & Document Grounding</span>
               </div>
               <button onClick={handleHome} className="p-1 text-slate-400 hover:text-white">
                 <Home className="w-4 h-4" />
               </button>
             </div>
 
+            {/* Document Upload Button */}
+            <div className="p-2.5 rounded-xl bg-gradient-to-r from-slate-900 via-indigo-950/60 to-slate-900 border border-cyan-500/40 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-cyan-300 font-mono">📎 Ingest Reference Doc for AI</span>
+                <label className="px-2 py-0.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white text-[9px] font-bold cursor-pointer flex items-center gap-1 shadow-md">
+                  <Plus className="w-2.5 h-2.5" /> Upload File
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const text = await file.text().catch(() => "Binary/Media document");
+                      try {
+                        const res = await fetch("/api/mobile-stream/upload-doc", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            name: file.name,
+                            content: text,
+                            fileType: file.type || "text/plain",
+                            size: file.size,
+                          }),
+                        });
+                        if (res.ok) {
+                          toast.success(`✅ Uploaded "${file.name}" to AI grounding context!`);
+                        }
+                      } catch {
+                        toast.error("Failed uploading document");
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+              <p className="text-[8px] text-slate-400">
+                Upload SOPs, workflows, or guidance documents so the AI understands instructions.
+              </p>
+            </div>
+
             <div className="grid grid-cols-2 gap-2 overflow-y-auto flex-1">
               {[
                 { name: "Camera Photos", count: "48 items", icon: ImageIcon, color: "text-emerald-400" },
+                { name: "AI Grounding Docs", count: "SOP & Guidance", icon: FileText, color: "text-purple-400" },
                 { name: "Downloads", count: "12 files", icon: Folder, color: "text-blue-400" },
-                { name: "Documents", count: "5 items", icon: FileText, color: "text-purple-400" },
                 { name: "Workflows Export", count: "18 JSON", icon: Sparkles, color: "text-amber-400" },
               ].map((f, i) => (
                 <div
@@ -1184,7 +1469,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
                 {[
                   { label: "Wi-Fi Network", val: settings.wifi ? "Connected (Sightline_5G)" : "Disconnected", key: "wifi" },
                   { label: "Bluetooth 5.3", val: settings.bluetooth ? "Active" : "Off", key: "bluetooth" },
-                  { label: "Qwen 3.5 AI Copilot", val: settings.aiCopilot ? "Enabled (192.168.1.100)" : "Disabled", key: "aiCopilot" },
+                  { label: "Qwen 3.5 AI Copilot", val: settings.aiCopilot ? "Enabled (quantumclaw.net)" : "Disabled", key: "aiCopilot" },
                   { label: "Dark Theme UI", val: settings.darkMode ? "On" : "Off", key: "darkMode" },
                   { label: "Auto-Record Actions", val: settings.autoRecord ? "Active" : "Off", key: "autoRecord" },
                 ].map((item) => (

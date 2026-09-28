@@ -58,7 +58,7 @@ export const GGUFModelEngineStudio: React.FC<GGUFModelEngineStudioProps> = ({
       id: "m_qwen_35_2b",
       name: "Qwen 3.5 2B (Ollama Remote)",
       type: "ollama",
-      filePathOrEndpoint: "http://192.168.1.100:11434/api/chat",
+      filePathOrEndpoint: "https://quantumclaw.net/ollama/api/chat",
       quantization: "Q4 / 2B Native",
       gpuLayers: 33,
       contextSize: 32768,

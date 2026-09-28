@@ -390,12 +390,21 @@ export default function AutomationPage() {
                 </div>
 
                 <div>
-                  <h4 className="font-medium mb-2">AI Model</h4>
-                  <select className="w-full p-2 border rounded-md">
-                    <option value="qwen2.5vl:7b">Qwen 7B (Default)</option>
-                    <option value="llama2:7b">Llama 2 7B</option>
-                    <option value="gpt-4">GPT-4</option>
-                  </select>
+                  <h4 className="font-medium mb-2">AI Model & Vision Endpoint</h4>
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      defaultValue="https://quantumclaw.net/ollama/api/chat"
+                      placeholder="Model Endpoint URL"
+                      className="w-full p-2 border rounded-md font-mono text-xs bg-slate-900 text-white border-slate-700"
+                    />
+                    <select className="w-full p-2 border rounded-md bg-slate-900 text-white border-slate-700">
+                      <option value="qwen3.5:2b">Qwen 3.5 2B (Default - quantumclaw.net)</option>
+                      <option value="qwen2.5vl:7b">Qwen 2.5-VL 7B Instruct</option>
+                      <option value="deepseek-r1:8b">DeepSeek R1 Distill</option>
+                      <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             </CardContent>

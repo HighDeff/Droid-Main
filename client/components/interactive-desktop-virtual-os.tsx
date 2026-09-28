@@ -28,6 +28,7 @@ import { toast } from "sonner";
 interface InteractiveDesktopVirtualOSProps {
   externalTextInjection?: string;
   onActionLogged?: (action: string, details: string) => void;
+  onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
   currentStepAction?: {
     id?: string;
     action?: string;
@@ -44,6 +45,7 @@ interface InteractiveDesktopVirtualOSProps {
 export const InteractiveDesktopVirtualOS: React.FC<InteractiveDesktopVirtualOSProps> = ({
   externalTextInjection,
   onActionLogged,
+  onContextMenu,
   currentStepAction,
   forwardTrigger = 0,
   className = "",
@@ -65,7 +67,7 @@ export const InteractiveDesktopVirtualOS: React.FC<InteractiveDesktopVirtualOSPr
     "",
     "C:\\Automation> python -m sightline.agent --monitor=active",
     "[OK] PyAutoGUI native execution engine initialized (1920x1080).",
-    "[OK] Ollama Qwen 3.5 2B vision pipeline linked @ 192.168.1.100:11434/api/chat.",
+    "[OK] Ollama Qwen 3.5 2B vision pipeline linked @ https://quantumclaw.net/ollama/api/chat.",
     "[READY] Listening for keystrokes, click points & automated workflows...",
     "",
   ]);
@@ -259,7 +261,10 @@ export const InteractiveDesktopVirtualOS: React.FC<InteractiveDesktopVirtualOSPr
   };
 
   return (
-    <div className={`relative w-full h-full bg-slate-950 flex flex-col justify-between overflow-hidden select-none font-sans ${className}`}>
+    <div
+      onContextMenu={onContextMenu}
+      className={`relative w-full h-full bg-slate-950 flex flex-col justify-between overflow-hidden select-none font-sans ${className}`}
+    >
       {/* Desktop Wallpaper / Workspace Grid */}
       <div className="w-full flex-1 relative p-4 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 overflow-hidden">
         {/* Desktop Icons */}
@@ -507,7 +512,7 @@ export const InteractiveDesktopVirtualOS: React.FC<InteractiveDesktopVirtualOSPr
                     </div>
                     <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between">
                       <span>AI Perception Provider</span>
-                      <span className="text-emerald-300 font-bold">Qwen 3.5:2b (192.168.1.100:11434)</span>
+                      <span className="text-emerald-300 font-bold">Qwen 3.5:2b (quantumclaw.net)</span>
                     </div>
                     <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between">
                       <span>PyAutoGUI Native Bridge</span>

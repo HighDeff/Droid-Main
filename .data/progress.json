@@ -1,0 +1,23 @@
+[
+  {
+    "kind": "progress",
+    "message": "Stored on disk",
+    "id": "progress_1790120078271_kwb2y3y6",
+    "sessionId": "session_1790120078268_virphtmw",
+    "createdAt": "2026-09-22T23:34:38.271Z"
+  },
+  {
+    "kind": "progress",
+    "message": "Stored on disk",
+    "id": "progress_1790711249707_1bxevl9m",
+    "sessionId": "session_1790711249690_n19ha55h",
+    "createdAt": "2026-09-29T19:47:29.707Z"
+  },
+  {
+    "kind": "progress",
+    "message": "Stored on disk",
+    "id": "progress_1790711916637_5z6ka3y1",
+    "sessionId": "session_1790711916618_xjzu4g8g",
+    "createdAt": "2026-09-29T19:58:36.637Z"
+  }
+]

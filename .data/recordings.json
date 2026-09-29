@@ -1,0 +1,41 @@
+[
+  {
+    "id": "recording_1790120078276_0dfjzsr",
+    "sessionId": "session-1",
+    "name": "Persistent recording",
+    "status": "stopped",
+    "startedAt": "2026-09-22T23:34:38.276Z",
+    "source": {
+      "source": "manual",
+      "sensitiveInputCaptured": false
+    },
+    "events": [],
+    "stoppedAt": "2026-09-22T23:34:38.276Z"
+  },
+  {
+    "id": "recording_1790711249732_jtwcep3",
+    "sessionId": "session-1",
+    "name": "Persistent recording",
+    "status": "stopped",
+    "startedAt": "2026-09-29T19:47:29.732Z",
+    "source": {
+      "source": "manual",
+      "sensitiveInputCaptured": false
+    },
+    "events": [],
+    "stoppedAt": "2026-09-29T19:47:29.733Z"
+  },
+  {
+    "id": "recording_1790711916665_lfoxin8",
+    "sessionId": "session-1",
+    "name": "Persistent recording",
+    "status": "stopped",
+    "startedAt": "2026-09-29T19:58:36.665Z",
+    "source": {
+      "source": "manual",
+      "sensitiveInputCaptured": false
+    },
+    "events": [],
+    "stoppedAt": "2026-09-29T19:58:36.667Z"
+  }
+]

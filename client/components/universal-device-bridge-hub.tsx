@@ -462,7 +462,7 @@ export function UniversalDeviceBridgeHub({
     return () => window.removeEventListener("sightline-open-mobile-settings", handleOpenSettings);
   }, []);
 
-  const mobileLinkUrl = customMobileUrl || (typeof window !== "undefined" ? `${window.location.origin}/mobile-remote` : "");
+  const mobileLinkUrl = customMobileUrl || (typeof window !== "undefined" ? `${window.location.origin}/api/mobile-remote` : "");
 
   // Fetch workflows
   const fetchWorkflows = useCallback(async () => {

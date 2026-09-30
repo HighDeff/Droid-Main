@@ -1079,7 +1079,7 @@ except Exception as e:
   });
 
   // Mobile Remote QR Code Endpoint - for phone screen beam & AI automation
-  app.get("/mobile-remote", (req, res) => {
+  app.get("/api/mobile-remote", (req, res) => {
     try {
       const host = req.get("host") || "localhost:3000";
       const protocol = req.protocol || "https";
@@ -1087,8 +1087,8 @@ except Exception as e:
 
       res.json({
         success: true,
-        mobileRemoteUrl: `${baseUrl}/mobile-remote`,
-        qrCodeValue: `${baseUrl}/mobile-remote`,
+        mobileRemoteUrl: `${baseUrl}/api/mobile-remote`,
+        qrCodeValue: `${baseUrl}/api/mobile-remote`,
         description: "Scan this QR code with your phone to beam screen & receive AI automations",
       });
     } catch (e) {

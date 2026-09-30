@@ -10,6 +10,9 @@ import {
   Play,
   RotateCcw,
   Zap,
+  Minimize2,
+  Maximize2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +43,7 @@ interface HistoricalMouseTrailOverlayProps {
   isRecording?: boolean;
   className?: string;
   onVerifyPath?: (accuracy: number) => void;
+  onClose?: () => void;
 }
 
 export const HistoricalMouseTrailOverlay: React.FC<HistoricalMouseTrailOverlayProps> = ({
@@ -50,7 +54,9 @@ export const HistoricalMouseTrailOverlay: React.FC<HistoricalMouseTrailOverlayPr
   isRecording = false,
   className = "",
   onVerifyPath,
+  onClose,
 }) => {
+  const [isMinimized, setIsMinimized] = useState<boolean>(false);
   const [opacity, setOpacity] = useState<number>(0.75);
   const [showVectors, setShowVectors] = useState<boolean>(true);
   const [showDeltas, setShowDeltas] = useState<boolean>(true);
@@ -308,83 +314,127 @@ export const HistoricalMouseTrailOverlay: React.FC<HistoricalMouseTrailOverlayPr
         </div>
       )}
 
-      {/* Floating Trail HUD Badge & Interactive Controls */}
-      <div className="absolute top-3 right-3 pointer-events-auto bg-slate-950/90 border border-cyan-500/40 rounded-xl p-2.5 shadow-2xl backdrop-blur-md flex flex-col gap-2 font-mono text-xs max-w-xs z-50">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-          <span className="font-bold text-slate-100 flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5 text-cyan-400" />
-            Historical Trail Overlay
-          </span>
-          <Badge
-            className={`text-[9px] ${
-              avgDistance <= 4
-                ? "bg-emerald-600 text-white"
-                : avgDistance <= 14
-                ? "bg-amber-600 text-white"
-                : "bg-red-600 text-white"
-            }`}
-          >
-            {pathAccuracy}% PATH MATCH (Δ {avgDistance}px)
+      {/* Floating Trail HUD Badge & Interactive Controls - Positioned at bottom-4 right-4 to avoid blocking HUD canvas toolbar buttons */}
+      {isMinimized ? (
+        <div className="absolute bottom-4 right-4 pointer-events-auto bg-slate-950/95 border border-cyan-500/50 rounded-xl px-3 py-1.5 shadow-2xl backdrop-blur-md flex items-center gap-2 font-mono text-xs z-40 animate-in fade-in">
+          <Layers className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="text-[11px] font-bold text-slate-200">Historical Trail</span>
+          <Badge className="text-[9px] bg-cyan-950 text-cyan-300 border-cyan-700">
+            {pathAccuracy}% MATCH
           </Badge>
-        </div>
-
-        {/* Multi-Session Selector */}
-        <div className="flex items-center gap-1 text-[10px]">
-          <span className="text-slate-400">Pass:</span>
-          {["all", "session_pass_1", "session_pass_2"].map((s) => (
+          <button
+            onClick={() => setIsMinimized(false)}
+            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+            title="Expand Historical Trail Controls"
+          >
+            <Maximize2 className="w-3 h-3 text-cyan-300" />
+          </button>
+          {onClose && (
             <button
-              key={s}
-              onClick={() => setSelectedSession(s)}
-              className={`px-1.5 py-0.5 rounded ${
-                selectedSession === s
-                  ? "bg-cyan-600 text-white font-bold"
-                  : "bg-slate-800 text-slate-300 hover:text-white"
-              }`}
+              onClick={onClose}
+              className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+              title="Close Historical Trail Overlay"
             >
-              {s === "all" ? "All Merged" : s === "session_pass_1" ? "Pass #1" : "Pass #2"}
+              <X className="w-3 h-3 text-rose-400" />
             </button>
-          ))}
+          )}
         </div>
-
-        {/* Controls: Opacity & Vectors */}
-        <div className="flex items-center justify-between gap-2 text-[10px] text-slate-300">
-          <div className="flex items-center gap-1">
-            <Sliders className="w-3 h-3 text-slate-400" />
-            <span>Opacity:</span>
-            {[0.4, 0.75, 1.0].map((op) => (
-              <button
-                key={op}
-                onClick={() => setOpacity(op)}
-                className={`px-1 py-0.5 rounded ${
-                  opacity === op ? "bg-slate-700 text-cyan-300 font-bold" : "text-slate-400 hover:text-white"
+      ) : (
+        <div className="absolute bottom-4 right-4 pointer-events-auto bg-slate-950/95 border border-cyan-500/40 rounded-xl p-2.5 shadow-2xl backdrop-blur-md flex flex-col gap-2 font-mono text-xs max-w-xs z-40 animate-in fade-in">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 gap-2">
+            <span className="font-bold text-slate-100 flex items-center gap-1.5 truncate">
+              <Layers className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              Historical Trail Overlay
+            </span>
+            <div className="flex items-center gap-1 shrink-0">
+              <Badge
+                className={`text-[9px] ${
+                  avgDistance <= 4
+                    ? "bg-emerald-600 text-white"
+                    : avgDistance <= 14
+                    ? "bg-amber-600 text-white"
+                    : "bg-red-600 text-white"
                 }`}
               >
-                {Math.round(op * 100)}%
+                {pathAccuracy}% (Δ {avgDistance}px)
+              </Badge>
+              <button
+                onClick={() => setIsMinimized(true)}
+                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                title="Minimize Trail HUD"
+              >
+                <Minimize2 className="w-3 h-3" />
+              </button>
+              {onClose && (
+                <button
+                  onClick={onClose}
+                  className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-300 transition-colors"
+                  title="Close Overlay"
+                >
+                  <X className="w-3 h-3 text-rose-400" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Multi-Session Selector */}
+          <div className="flex items-center gap-1 text-[10px]">
+            <span className="text-slate-400">Pass:</span>
+            {["all", "session_pass_1", "session_pass_2"].map((s) => (
+              <button
+                key={s}
+                onClick={() => setSelectedSession(s)}
+                className={`px-1.5 py-0.5 rounded ${
+                  selectedSession === s
+                    ? "bg-cyan-600 text-white font-bold"
+                    : "bg-slate-800 text-slate-300 hover:text-white"
+                }`}
+              >
+                {s === "all" ? "All Merged" : s === "session_pass_1" ? "Pass #1" : "Pass #2"}
               </button>
             ))}
           </div>
 
-          <button
-            onClick={() => setShowDeltas(!showDeltas)}
-            className={`px-1.5 py-0.5 rounded text-[10px] ${
-              showDeltas ? "bg-purple-900/80 text-purple-200 border border-purple-500" : "bg-slate-800 text-slate-400"
-            }`}
-          >
-            Deltas: {showDeltas ? "ON" : "OFF"}
-          </button>
-        </div>
+          {/* Controls: Opacity & Vectors */}
+          <div className="flex items-center justify-between gap-2 text-[10px] text-slate-300">
+            <div className="flex items-center gap-1">
+              <Sliders className="w-3 h-3 text-slate-400" />
+              <span>Opacity:</span>
+              {[0.4, 0.75, 1.0].map((op) => (
+                <button
+                  key={op}
+                  onClick={() => setOpacity(op)}
+                  className={`px-1 py-0.5 rounded ${
+                    opacity === op ? "bg-slate-700 text-cyan-300 font-bold" : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  {Math.round(op * 100)}%
+                </button>
+              ))}
+            </div>
 
-        {/* Action Button: Replay Physical Trail */}
-        <Button
-          size="sm"
-          onClick={handleReplayPhysicalTrail}
-          disabled={isReplayingHistorical}
-          className="h-7 text-[11px] font-mono bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white gap-1 w-full"
-        >
-          <Play className="w-3 h-3 text-cyan-200" />
-          {isReplayingHistorical ? "Replaying Physical Path..." : "Replay Physical Trail"}
-        </Button>
-      </div>
+            <button
+              onClick={() => setShowDeltas(!showDeltas)}
+              className={`px-1.5 py-0.5 rounded text-[10px] ${
+                showDeltas ? "bg-purple-900/80 text-purple-200 border border-purple-500" : "bg-slate-800 text-slate-400"
+              }`}
+            >
+              Deltas: {showDeltas ? "ON" : "OFF"}
+            </button>
+          </div>
+
+          {/* Action Button: Replay Physical Trail */}
+          <Button
+            size="sm"
+            onClick={handleReplayPhysicalTrail}
+            disabled={isReplayingHistorical}
+            className="h-7 text-[11px] font-mono bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white gap-1 w-full"
+          >
+            <Play className="w-3 h-3 text-cyan-200" />
+            {isReplayingHistorical ? "Replaying Physical Path..." : "Replay Physical Trail"}
+          </Button>
+        </div>
+      )}
     </div>
   );
 };

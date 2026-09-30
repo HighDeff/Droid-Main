@@ -50,6 +50,8 @@ import {
   SkipForward,
   Shield,
   Check,
+  Trash2,
+  Settings,
 } from "lucide-react";
 import { AutoCorrectionLog, AutoCorrectionEntry, DEFAULT_DRIFT_LOGS } from "./AutoCorrectionLog";
 import { OverseerAIPanel } from "./OverseerAIPanel";
@@ -227,6 +229,8 @@ interface LiveScreenHUDProps {
   showDriftHeatmap?: boolean;
   onToggleDriftHeatmap?: (enabled: boolean) => void;
   driftThresholdPx?: number;
+  onClearSteps?: () => void;
+  onOpenMobileSettings?: () => void;
 }
 
 export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
@@ -255,16 +259,28 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   showDriftHeatmap,
   onToggleDriftHeatmap,
   driftThresholdPx,
+  onClearSteps,
+  onOpenMobileSettings,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const streamSyncIntervalRef = useRef<number | null>(null);
   const [localShow2ndHudOverlay, setLocalShow2ndHudOverlay] = useState<boolean>(true);
   const [localShowDriftHeatmap, setLocalShowDriftHeatmap] = useState<boolean>(true);
-  const [showHistoricalTrailOverlay, setShowHistoricalTrailOverlay] = useState<boolean>(true);
+  const [showHistoricalTrailOverlay, setShowHistoricalTrailOverlay] = useState<boolean>(false);
   const [showHighInteractionHeatmap, setShowHighInteractionHeatmap] = useState<boolean>(false);
   const [isGoalReplannerOpen, setIsGoalReplannerOpen] = useState<boolean>(false);
   const [isAnalyzeAndActOpen, setIsAnalyzeAndActOpen] = useState<boolean>(false);
+
+  const handleClearSteps = useCallback(() => {
+    if (onClearSteps) {
+      onClearSteps();
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("sightline-clear-steps"));
+    }
+    toast.success("Cleared all sequence steps");
+  }, [onClearSteps]);
   const [autoPcSyncEnabled, setAutoPcSyncEnabled] = useState<boolean>(true);
   const [localDriftThreshold, setLocalDriftThreshold] = useState<number>(driftThresholdPx ?? DEFAULT_DRIFT_THRESHOLD_PX);
   const [isHudCalibrating, setIsHudCalibrating] = useState<boolean>(false);
@@ -3036,6 +3052,18 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                   Step Forward
                 </Button>
 
+                {sequence.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={handleClearSteps}
+                    className="h-7 px-2.5 text-[11px] font-bold bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-500/50 shadow-md gap-1"
+                    title="Clear all recorded sequence steps"
+                  >
+                    <Trash2 className="w-3 h-3 text-rose-400" />
+                    Clear Steps ({sequence.length})
+                  </Button>
+                )}
+
                 <Button
                   size="sm"
                   onClick={() => setShowTestModeModal(true)}
@@ -3789,6 +3817,19 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             <span>CLEAN STATE RESET</span>
           </Button>
 
+          {/* Clear Steps Button */}
+          {sequence.length > 0 && (
+            <Button
+              size="sm"
+              onClick={handleClearSteps}
+              className="h-7 px-2.5 text-xs font-mono font-bold bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-500/50 shadow-md shadow-rose-950/50 gap-1"
+              title="Clear all recorded sequence steps"
+            >
+              <Trash2 className="w-3 h-3 text-rose-400" />
+              <span>CLEAR STEPS ({sequence.length})</span>
+            </Button>
+          )}
+
           {/* Auto-Calibration Button */}
           <Button
             size="sm"
@@ -4322,6 +4363,23 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             Auto-PC Sync ({autoPcSyncEnabled ? "ON" : "OFF"})
           </Button>
 
+          {/* Mobile Stream Settings Quick Launch Button */}
+          <Button
+            size="sm"
+            onClick={() => {
+              if (onOpenMobileSettings) {
+                onOpenMobileSettings();
+              } else if (typeof window !== "undefined") {
+                window.dispatchEvent(new CustomEvent("sightline-open-mobile-settings"));
+              }
+            }}
+            className="h-8 px-2.5 text-xs font-mono font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-500 transition-all gap-1"
+            title="Open Mobile Stream & Workspace Options (Dead route sensitivity, AI vision model, auto-record)"
+          >
+            <Settings className="w-3.5 h-3.5 text-slate-300" />
+            <span>Mobile Settings</span>
+          </Button>
+
           {/* Drift Diagnostic Overlay Toggle */}
           <Button
             size="sm"
@@ -4788,6 +4846,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           nativeWidth={NATIVE_WIDTH}
           nativeHeight={NATIVE_HEIGHT}
           isRecording={isRecordingMouseTrail || isRecordMode}
+          onClose={() => setShowHistoricalTrailOverlay(false)}
         />
       )}
 
@@ -6541,6 +6600,17 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                     <span>Chain-of-Thought (CoT) Verified Step Sequence ({sequence.length} Steps)</span>
                   </div>
                   <div className="flex items-center gap-2">
+                    {sequence.length > 0 && (
+                      <Button
+                        size="sm"
+                        onClick={handleClearSteps}
+                        className="h-6 px-2 text-[10px] bg-rose-950/90 hover:bg-rose-900 text-rose-300 border border-rose-500/50 font-bold gap-1 shadow-sm"
+                        title="Clear all recorded steps from sequence"
+                      >
+                        <Trash2 className="w-3 h-3 text-rose-400" />
+                        Clear Steps
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       onClick={handleStepForward}

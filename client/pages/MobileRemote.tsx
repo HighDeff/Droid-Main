@@ -578,6 +578,40 @@ export default function MobileRemote() {
     }
   }, [targetFps, isStreaming]);
 
+  // Auto-connect to server on app load
+  useEffect(() => {
+    const autoConnect = async () => {
+      try {
+        const storedUrl = localStorage.getItem("sightline_server_url");
+        const serverUrl = storedUrl || window.location.origin;
+        
+        const response = await fetch(`${serverUrl}/mobile-remote`, {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            setConnected(true);
+            localStorage.setItem("sightline_server_url", serverUrl);
+            toast.success("Auto-connected to Sightline server");
+          } else {
+            setConnected(false);
+            toast.error("Failed to auto-connect: " + (data.error || "Unknown error"));
+          }
+        } else {
+          setConnected(false);
+        }
+      } catch (error) {
+        setConnected(false);
+        console.warn("Auto-connect failed:", error);
+      }
+    };
+
+    autoConnect();
+  }, []);
+
   // Request & maintain screen wake lock
   const requestWakeLock = useCallback(async () => {
     try {

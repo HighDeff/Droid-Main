@@ -1,5 +1,6 @@
 import { Router } from "express";
 import net from "net";
+import os from "os";
 import { spawn } from "child_process";
 import { setLatestSyncedRealFrame, getLatestSyncedRealFrame } from "./screen-capture";
 import { detectScreenElementsAndSteps, getGenAIClient } from "../ai-gemini-service";
@@ -7,6 +8,25 @@ import { centralLogHub } from "../log-hub";
 import { aiMonitorStore } from "../ai-monitor-store";
 
 export const mobileStreamRouter = Router();
+
+/**
+ * Auto-detect primary non-internal IPv4 LAN address (e.g. 192.168.x.x, 10.x.x.x)
+ * so mobile devices connecting over Wi-Fi reach the PC instead of loopback localhost.
+ */
+export function getPrimaryLanIpv4(): string {
+  const interfaces = os.networkInterfaces();
+  for (const ifaceName of Object.keys(interfaces)) {
+    const ifaceList = interfaces[ifaceName] || [];
+    for (const iface of ifaceList) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        if (!iface.address.startsWith("169.254")) {
+          return iface.address;
+        }
+      }
+    }
+  }
+  return "127.0.0.1";
+}
 
 export interface MobileActionItem {
   id: string;
@@ -4092,10 +4112,34 @@ mobileStreamRouter.post("/api/mobile-stream/background-agents/findings/:id/resol
 // STANDALONE ANDROID APK & WEBAPK PACKAGE ENGINE
 // =========================================================================
 
+// GET Network Host IP and Mobile URL Diagnostics
+mobileStreamRouter.get("/api/mobile/network-info", (req, res) => {
+  const lanIp = getPrimaryLanIpv4();
+  const port = Number(req.socket?.localPort) || 3000;
+  const protocol = req.protocol || "http";
+  const reqHost = req.get("host") || "";
+  const isLoopback = reqHost.includes("localhost") || reqHost.includes("127.0.0.1") || !reqHost;
+  const effectiveHost = isLoopback ? `${lanIp}:${port}` : reqHost;
+
+  res.json({
+    success: true,
+    lanIp,
+    port,
+    protocol,
+    recommendedMobileUrl: `${protocol}://${effectiveHost}/mobile-remote`,
+    allInterfaces: Object.entries(os.networkInterfaces()).flatMap(([name, list]) =>
+      (list || []).filter((i) => i.family === "IPv4" && !i.internal).map((i) => ({ name, address: i.address }))
+    ),
+  });
+});
+
 // GET APK / WebAPK Information & Diagnostics
 mobileStreamRouter.get("/api/mobile/apk-info", (req, res) => {
-  const host = req.get("host") || "localhost:3000";
-  const protocol = req.protocol || "https";
+  const lanIp = getPrimaryLanIpv4();
+  const reqHost = req.get("host") || "";
+  const isLoopback = reqHost.includes("localhost") || reqHost.includes("127.0.0.1") || !reqHost;
+  const host = (req.query.host as string) || (isLoopback ? `${lanIp}:3000` : reqHost);
+  const protocol = req.protocol || "http";
   const baseUrl = `${protocol}://${host}`;
 
   res.json({
@@ -4147,9 +4191,12 @@ mobileStreamRouter.get("/api/mobile/download-apk-bundle", async (req, res) => {
     const JSZip = (await import("jszip")).default;
     const zip = new JSZip();
 
-    const host = req.get("host") || "localhost:3000";
-    const protocol = req.protocol || "https";
-    const targetUrl = `${protocol}://${host}/mobile-remote`;
+    const lanIp = getPrimaryLanIpv4();
+    const reqHost = req.get("host") || "";
+    const isLoopback = reqHost.includes("localhost") || reqHost.includes("127.0.0.1") || !reqHost;
+    const customHost = (req.query.host as string) || (isLoopback ? `${lanIp}:3000` : reqHost);
+    const protocol = req.protocol || "http";
+    const targetUrl = `${protocol}://${customHost}/mobile-remote`;
 
     // 1. AndroidManifest.xml
     const manifestXml = `<?xml version="1.0" encoding="utf-8"?>
@@ -4180,6 +4227,7 @@ mobileStreamRouter.get("/api/mobile/download-apk-bundle", async (req, res) => {
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.SightlineRemote"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true">
 
@@ -4205,13 +4253,26 @@ mobileStreamRouter.get("/api/mobile/download-apk-bundle", async (req, res) => {
     </application>
 </manifest>`;
 
+    // 1b. network_security_config.xml
+    const networkSecurityConfigXml = `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>`;
+
     // 2. MainActivity.java
     const mainActivityJava = `package com.drive.workspace.remote;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Context;
 import android.content.Intent;
-import android.media.projection.MediaProjectionManager;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -4224,6 +4285,8 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -4232,10 +4295,11 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1001;
-    private static final int SCREEN_CAPTURE_REQUEST_CODE = 1002;
-    private PermissionRequest currentPermissionRequest;
+    private static final String PREFS_NAME = "sightline_remote_prefs";
+    private static final String KEY_SERVER_URL = "server_url";
+    public static final String DEFAULT_URL = "${targetUrl}";
 
-    public static final String TARGET_URL = "${targetUrl}";
+    private SharedPreferences prefs;
 
     @Override
     @SuppressLint("SetJavaScriptEnabled")
@@ -4244,6 +4308,9 @@ public class MainActivity extends AppCompatActivity {
         
         // Keep screen awake for real-time mobile automation
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String currentUrl = prefs.getString(KEY_SERVER_URL, DEFAULT_URL);
 
         webView = new WebView(this);
         setContentView(webView);
@@ -4272,6 +4339,12 @@ public class MainActivity extends AppCompatActivity {
                 }
                 view.loadUrl(url);
                 return true;
+            }
+
+            @Override
+            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                super.onReceivedError(view, errorCode, description, failingUrl);
+                promptServerConfiguration("Connection Failed (" + description + ")\\n\\nCould not reach: " + failingUrl + "\\n\\nPlease make sure your phone and PC are on the same Wi-Fi and enter your computer's IP address:");
             }
         });
 
@@ -4307,8 +4380,56 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        webView.loadUrl(TARGET_URL);
-        Toast.makeText(this, "Sightline Mobile Automation Connected", Toast.LENGTH_SHORT).show();
+        // Long press anywhere on the screen to change the PC server address
+        webView.setOnLongClickListener(v -> {
+            promptServerConfiguration("Change Sightline PC Server Address:");
+            return true;
+        });
+
+        webView.loadUrl(currentUrl);
+        Toast.makeText(this, "Connecting to Sightline: " + currentUrl, Toast.LENGTH_SHORT).show();
+    }
+
+    private void promptServerConfiguration(String message) {
+        String activeUrl = prefs.getString(KEY_SERVER_URL, DEFAULT_URL);
+        
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Sightline Mobile Server Host");
+        builder.setMessage(message);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(50, 20, 50, 20);
+
+        final EditText input = new EditText(this);
+        input.setHint("http://192.168.1.xxx:3000/mobile-remote");
+        input.setText(activeUrl);
+        layout.addView(input);
+
+        builder.setView(layout);
+
+        builder.setPositiveButton("Connect", (dialog, which) -> {
+            String newUrl = input.getText().toString().trim();
+            if (!newUrl.isEmpty()) {
+                if (!newUrl.startsWith("http://") && !newUrl.startsWith("https://")) {
+                    newUrl = "http://" + newUrl;
+                }
+                if (!newUrl.contains("/mobile-remote")) {
+                    newUrl = newUrl.replaceAll("/+$", "") + "/mobile-remote";
+                }
+                prefs.edit().putString(KEY_SERVER_URL, newUrl).apply();
+                webView.loadUrl(newUrl);
+                Toast.makeText(MainActivity.this, "Connecting to: " + newUrl, Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        builder.setNeutralButton("Reset Default", (dialog, which) -> {
+            prefs.edit().putString(KEY_SERVER_URL, DEFAULT_URL).apply();
+            webView.loadUrl(DEFAULT_URL);
+        });
+
+        builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
+        builder.show();
     }
 
     @Override
@@ -4502,7 +4623,7 @@ This package allows you to run **Sightline Mobile Automation & Remote Vision HUD
 ### Method 2: 1-Command APK Build via Bubblewrap / PWA2APK
 If you have Node.js installed:
 \`\`\`bash
-npx @bubblewrap/cli init --manifest="${protocol}://${host}/manifest.webmanifest"
+npx @bubblewrap/cli init --manifest="${protocol}://${customHost}/manifest.webmanifest"
 npx @bubblewrap/cli build
 \`\`\`
 This outputs a signed \`app-release-signed.apk\` directly in seconds!
@@ -4538,6 +4659,7 @@ This outputs a signed \`app-release-signed.apk\` directly in seconds!
     zip.file("capacitor.config.json", capacitorConfig);
     zip.file("app/build.gradle", appBuildGradle);
     zip.file("app/src/main/AndroidManifest.xml", manifestXml);
+    zip.file("app/src/main/res/xml/network_security_config.xml", networkSecurityConfigXml);
     zip.file("app/src/main/java/com/drive/workspace/remote/MainActivity.java", mainActivityJava);
     zip.file("app/src/main/java/com/drive/workspace/remote/ScreenCaptureService.java", screenCaptureServiceJava);
     zip.file("app/src/main/res/values/strings.xml", stringsXml);

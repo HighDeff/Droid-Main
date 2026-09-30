@@ -2233,6 +2233,15 @@ export default function Dashboard({
                   }
                   selectedTabName={currentTab}
                   onMouseTrailChange={setLiveMouseTrail}
+                  onClearSteps={() => {
+                    setSequence([]);
+                    toast.info("Cleared all sequence steps");
+                  }}
+                  onOpenMobileSettings={() => {
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("sightline-open-mobile-settings"));
+                    }
+                  }}
                 />
 
                 {/* Real Device Connectivity, Keystroke Typing, Hardware Button Bar, App Launcher & Event Logs Deck */}

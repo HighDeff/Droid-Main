@@ -1,6 +1,8 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { generateDefaultMobileFrame } from "@/lib/mobile-screen-generator";
 import { InteractivePhoneVirtualOS } from "@/components/interactive-phone-virtual-os";
+import { MobileSettingsModal } from "./mobile-settings-modal";
+import { ApkAndPwaModal } from "./ApkAndPwaModal";
 import {
   Bluetooth,
   Smartphone,
@@ -243,7 +245,7 @@ export function UniversalDeviceBridgeHub({
   onSendWorkflowToMainVisionHud,
 }: UniversalDeviceBridgeHubProps) {
   const [activeTab, setActiveTab] = useState<
-    "qr-link" | "worktree" | "genealogy" | "recorder" | "agents" | "workflows" | "frames-history" | "settings" | "bluetooth" | "wifi-adb" | "ip-address" | "clear-hud" | "clear-hud"
+    "qr-link" | "worktree" | "genealogy" | "recorder" | "agents" | "workflows" | "frames-history" | "settings" | "bluetooth" | "wifi-adb"
   >("qr-link");
 
   // Navigation WorkTree state
@@ -345,7 +347,7 @@ export function UniversalDeviceBridgeHub({
       if (res && res.rawValue) {
         setActiveDecodedBarcode(res);
         playScanBeep(true);
-        toast.success(`ðŸ” Decoded [${res.format}]: ${res.rawValue}`);
+        toast.success(`🔍 Decoded [${res.format}]: ${res.rawValue}`);
         setIsBarcodeModalOpen(true);
       } else {
         playScanBeep(false);
@@ -432,7 +434,35 @@ export function UniversalDeviceBridgeHub({
   const [draggingPinIndex, setDraggingPinIndex] = useState<number | null>(null);
 
   const phonePreviewRef = useRef<HTMLDivElement | null>(null);
-  const mobileLinkUrl = typeof window !== "undefined" ? `${window.location.origin}/mobile-remote` : "";
+  const [customMobileUrl, setCustomMobileUrl] = useState<string>("");
+  const [detectedLanIp, setDetectedLanIp] = useState<string>("");
+  const [isMobileSettingsModalOpen, setIsMobileSettingsModalOpen] = useState<boolean>(false);
+  const [isApkModalOpen, setIsApkModalOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetch("/api/mobile/network-info")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.lanIp) {
+          setDetectedLanIp(data.lanIp);
+          if (
+            typeof window !== "undefined" &&
+            (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+          ) {
+            setCustomMobileUrl(data.recommendedMobileUrl);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const handleOpenSettings = () => setIsMobileSettingsModalOpen(true);
+    window.addEventListener("sightline-open-mobile-settings", handleOpenSettings);
+    return () => window.removeEventListener("sightline-open-mobile-settings", handleOpenSettings);
+  }, []);
+
+  const mobileLinkUrl = customMobileUrl || (typeof window !== "undefined" ? `${window.location.origin}/mobile-remote` : "");
 
   // Fetch workflows
   const fetchWorkflows = useCallback(async () => {
@@ -626,7 +656,7 @@ export function UniversalDeviceBridgeHub({
           e.preventDefault();
           setIsExtendScreenActive((prev) => {
             const next = !prev;
-            toast.info(next ? "ðŸ”€ Extend to Screen overlay activated" : "Extend to Screen overlay hidden");
+            toast.info(next ? "🔀 Extend to Screen overlay activated" : "Extend to Screen overlay hidden");
             return next;
           });
           break;
@@ -726,7 +756,7 @@ export function UniversalDeviceBridgeHub({
       key: "HOME",
       description: "Safe Home Navigation (Session Preserved)",
     });
-    toast.info("ðŸ  Navigated to Home. All home apps, launcher, and active streaming are ready.");
+    toast.info("🏠 Navigated to Home. All home apps, launcher, and active streaming are ready.");
   };
 
   // Direct PC Screen Share Mirror into Universal Hub
@@ -745,7 +775,7 @@ export function UniversalDeviceBridgeHub({
       await video.play();
 
       const offCanvas = document.createElement("canvas");
-      toast.success("ðŸ–¥ï¸ Desktop Screen Mirror active in Hub!");
+      toast.success("🖥️ Desktop Screen Mirror active in Hub!");
       setViewPhoneLauncher(false);
 
       const intervalId = window.setInterval(() => {
@@ -1012,7 +1042,7 @@ export function UniversalDeviceBridgeHub({
           toY: Math.round(endY * 1000) / 1000,
           direction,
           durationMs: 250,
-          description: `Swipe ${direction.toUpperCase()} (${Math.round(start.x * 100)}%,${Math.round(start.y * 100)}%) â†’ (${Math.round(endX * 100)}%,${Math.round(endY * 100)}%)`,
+          description: `Swipe ${direction.toUpperCase()} (${Math.round(start.x * 100)}%,${Math.round(start.y * 100)}%) → (${Math.round(endX * 100)}%,${Math.round(endY * 100)}%)`,
         });
         return;
       }
@@ -1040,7 +1070,7 @@ export function UniversalDeviceBridgeHub({
       });
       const data = await res.json();
       toast.success(`Launched ${name}`, {
-        description: `Package: ${pkg} â€¢ ADB & Deep Link dispatched`,
+        description: `Package: ${pkg} • ADB & Deep Link dispatched`,
       });
       setIsAppLauncherOpen(false);
     } catch {
@@ -1178,7 +1208,7 @@ export function UniversalDeviceBridgeHub({
       stepsCount: normalizedActions.length,
     });
     setIsExtendScreenActive(true);
-    toast.success(`ðŸ”€ Projected "${wf.name || "Workflow"}" (${normalizedActions.length} steps) onto Live Screen Preview!`);
+    toast.success(`🔀 Projected "${wf.name || "Workflow"}" (${normalizedActions.length} steps) onto Live Screen Preview!`);
   };
 
   // Update Pin Position when dragged
@@ -1220,7 +1250,7 @@ export function UniversalDeviceBridgeHub({
         steps: updatedSteps,
         stepsCount: updatedSteps.length,
       });
-      toast.success(`ðŸ“ Added Step #${updatedSteps.length} at (${Math.round(x * 100)}%, ${Math.round(y * 100)}%)`);
+      toast.success(`📍 Added Step #${updatedSteps.length} at (${Math.round(x * 100)}%, ${Math.round(y * 100)}%)`);
     } else {
       const newWf = {
         id: `wf-${Date.now()}`,
@@ -1233,7 +1263,7 @@ export function UniversalDeviceBridgeHub({
       };
       setExtendedWorkflow(newWf);
       setIsExtendScreenActive(true);
-      toast.success("ðŸ“ Created new workflow from screen click!");
+      toast.success("📍 Created new workflow from screen click!");
     }
   };
 
@@ -1292,11 +1322,11 @@ export function UniversalDeviceBridgeHub({
 
     if (activePhoneFrame) {
       toast.success(
-        `ðŸš€ Forwarded live phone screen (${mobileDeviceName}) to Live Vision HUD!`
+        `🚀 Forwarded live phone screen (${mobileDeviceName}) to Live Vision HUD!`
       );
     } else {
       toast.info(
-        "ðŸ“± Switched to Live Vision HUD. Open /remote on your phone to stream live screen directly!"
+        "📱 Switched to Live Vision HUD. Open /remote on your phone to stream live screen directly!"
       );
     }
   };
@@ -1585,7 +1615,7 @@ export function UniversalDeviceBridgeHub({
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-bold text-white tracking-wide uppercase flex items-center gap-1.5">
-                ðŸŽ¯ Forward Mobile to Live Vision HUD & Recording Engine
+                🎯 Forward Mobile to Live Vision HUD & Recording Engine
               </span>
               <Badge className="bg-emerald-950 text-emerald-300 border-emerald-500/50 text-[9px] font-mono animate-pulse">
                 AUTO-SYNC & RECORD
@@ -1597,7 +1627,7 @@ export function UniversalDeviceBridgeHub({
               )}
             </div>
             <p className="text-[10px] text-purple-200/80 font-mono mt-0.5">
-              Streams phone view to main HUD below â€¢ Clicks & mouse inputs control actual device â€¢ Auto-records sequence steps â€¢ Enables Gemini Vision AI
+              Streams phone view to main HUD below • Clicks & mouse inputs control actual device • Auto-records sequence steps • Enables Gemini Vision AI
             </p>
           </div>
         </div>
@@ -1610,7 +1640,7 @@ export function UniversalDeviceBridgeHub({
             title="Forward live mobile screen, controls and auto-recording to the Live Vision HUD below (Hotkey [V] or [F])"
           >
             <Radio className="w-3.5 h-3.5 animate-ping text-emerald-300" />
-            <span>ðŸš€ FORWARD TO LIVE VISION HUD</span>
+            <span>🚀 FORWARD TO LIVE VISION HUD</span>
             <span className="bg-black/30 px-1.5 py-0.5 rounded text-[9px] font-mono text-cyan-200">[V]</span>
           </Button>
         </div>
@@ -1632,7 +1662,7 @@ export function UniversalDeviceBridgeHub({
               )}
             </h3>
             <p className="text-[10px] text-slate-400">
-              Navigation WorkTree â€¢ Linkage DAG â€¢ AI Step Recorder â€¢ Sentinel Agents â€¢ Safe Multi-Window Home
+              Navigation WorkTree • Linkage DAG • AI Step Recorder • Sentinel Agents • Safe Multi-Window Home
             </p>
           </div>
         </div>
@@ -1787,7 +1817,8 @@ export function UniversalDeviceBridgeHub({
             <Bluetooth className="w-3.5 h-3.5" /> Bluetooth
           </button>
           <button
-            onClick={() => setActiveTab(wifi-adb)}\n\t\tonClick={() => setActiveTab(clear-hud)}`n            className={`px-2.5 py-1 rounded-md font-medium transition-all flex items-center gap-1.5 ${
+            onClick={() => setActiveTab("wifi-adb")}
+            className={`px-2.5 py-1 rounded-md font-medium transition-all flex items-center gap-1.5 ${
               activeTab === "wifi-adb"
                 ? "bg-teal-600 text-white shadow-sm"
                 : "text-slate-400 hover:text-slate-200"
@@ -1815,39 +1846,68 @@ export function UniversalDeviceBridgeHub({
                     includeMargin={false}
                   />
                 </div>
-                <div className="space-y-1">
-                  <span className="text-[11px] font-bold text-emerald-400 flex items-center justify-center gap-1">
-                    <Smartphone className="w-3.5 h-3.5" /> Scan to Beam Screen & Control
-                  </span>
+                <div className="space-y-1.5 w-full">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
+                      <Smartphone className="w-3.5 h-3.5" /> Scan to Beam Screen
+                    </span>
+                    {detectedLanIp && (
+                      <Badge className="bg-emerald-950/80 text-emerald-300 border-emerald-700/60 text-[8px] font-mono">
+                        LAN: {detectedLanIp}
+                      </Badge>
+                    )}
+                  </div>
                   <p className="text-[10px] text-slate-400">
                     Open on your phone to stream live screen & receive AI automations.
                   </p>
 
-                  {/* APK Download Section */}
-				  {/* ---------------------------------------------------- */}
-                  {/* 1. INSTANT QR CODE, LIVE PHONE SCREEN & AI AUTOMATION */}
-                  <Input
-                    readOnly
-                    value={mobileLinkUrl}
-                    className="h-7 text-[10px] bg-slate-900 border-slate-700 font-mono text-slate-300"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleCopyLink}
-                    className="h-7 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs"
-                    title="Copy Link"
-                  >
-                    {copiedLink ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => window.open(mobileLinkUrl, "_blank")}
-                    className="h-7 px-2 border-slate-700 text-slate-300 hover:text-white text-xs"
-                    title="Open in new tab"
-                  >
-                    <ExternalLink className="w-3 h-3" />
-                  </Button>
+                  <div className="flex gap-1 items-center">
+                    <Input
+                      value={mobileLinkUrl}
+                      onChange={(e) => setCustomMobileUrl(e.target.value)}
+                      className="h-7 text-[10px] bg-slate-900 border-slate-700 font-mono text-slate-300"
+                      title="Editable phone connection URL (points to your PC's LAN IP)"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={handleCopyLink}
+                      className="h-7 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs shrink-0"
+                      title="Copy Link"
+                    >
+                      {copiedLink ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => window.open(mobileLinkUrl, "_blank")}
+                      className="h-7 px-2 border-slate-700 text-slate-300 hover:text-white text-xs shrink-0"
+                      title="Open in new tab"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                    </Button>
+                  </div>
+
+                  {/* Direct APK Download & Mobile Settings Buttons */}
+                  <div className="flex gap-1.5 pt-1 w-full">
+                    <Button
+                      size="sm"
+                      onClick={() => setIsApkModalOpen(true)}
+                      className="h-7 text-[10px] font-bold bg-indigo-600 hover:bg-indigo-500 text-white flex-1 gap-1 shadow-sm"
+                    >
+                      <Download className="w-3 h-3" />
+                      Download APK / PWA
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setIsMobileSettingsModalOpen(true)}
+                      className="h-7 px-2 text-[10px] font-bold border-slate-700 text-slate-300 hover:text-white gap-1"
+                      title="Open Mobile Stream Settings"
+                    >
+                      <Settings className="w-3 h-3 text-slate-400" />
+                      Settings
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -1883,7 +1943,7 @@ export function UniversalDeviceBridgeHub({
                             });
                             if (res.ok) {
                               setAiGoal(`Execute tasks according to uploaded SOP "${file.name}"`);
-                              toast.success(`ðŸ“Ž Ingested "${file.name}" for AI task grounding!`);
+                              toast.success(`📎 Ingested "${file.name}" for AI task grounding!`);
                             }
                           } catch {
                             toast.error("Failed uploading document");
@@ -1923,10 +1983,10 @@ export function UniversalDeviceBridgeHub({
                 {/* Quick Action Chips */}
                 <div className="grid grid-cols-2 gap-1 pt-0.5">
                   {[
-                    { label: "ðŸ“¸ Snapshot & Scan", prompt: "Capture screenshot and inspect all UI elements" },
-                    { label: "ðŸŒ Open Chrome", prompt: "Open Google Chrome and search AI automation" },
-                    { label: "ðŸ“ Notes Entry", prompt: "Open Notes app and write task summary" },
-                    { label: "ðŸ“Ž Follow SOP Doc", prompt: "Read uploaded SOP document and execute automated steps" },
+                    { label: "📸 Snapshot & Scan", prompt: "Capture screenshot and inspect all UI elements" },
+                    { label: "🌐 Open Chrome", prompt: "Open Google Chrome and search AI automation" },
+                    { label: "📝 Notes Entry", prompt: "Open Notes app and write task summary" },
+                    { label: "📎 Follow SOP Doc", prompt: "Read uploaded SOP document and execute automated steps" },
                   ].map((chip) => (
                     <button
                       key={chip.label}
@@ -1992,7 +2052,7 @@ export function UniversalDeviceBridgeHub({
                   <div className="flex items-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${mobileStreamConnected ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`} />
                     <span className="text-[11px] font-mono font-bold text-slate-200 truncate">
-                      {mobileDeviceName} {mobileStreamConnected ? "â€¢ STREAM ACTIVE" : "â€¢ STANDBY"}
+                      {mobileDeviceName} {mobileStreamConnected ? "• STREAM ACTIVE" : "• STANDBY"}
                     </span>
                   </div>
 
@@ -2032,6 +2092,16 @@ export function UniversalDeviceBridgeHub({
                     >
                       <Package className="w-3 h-3 text-cyan-400" />
                       <span>Inventory</span>
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      onClick={() => setIsMobileSettingsModalOpen(true)}
+                      className="h-6 px-2 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 hover:border-slate-500 text-[10px] font-bold font-mono gap-1 shadow-sm"
+                      title="Open Mobile Stream & Workspace Options (Dead route sensitivity, AI vision model, auto-record)"
+                    >
+                      <Settings className="w-3 h-3 text-slate-300" />
+                      <span>Settings</span>
                     </Button>
 
                     <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800">
@@ -2160,7 +2230,7 @@ export function UniversalDeviceBridgeHub({
                                 setIsAddStepFromClickMode(!isAddStepFromClickMode);
                                 toast.info(
                                   !isAddStepFromClickMode
-                                    ? "ðŸ“ Click anywhere on phone screen to add a step pin"
+                                    ? "📍 Click anywhere on phone screen to add a step pin"
                                     : "Exited add step mode"
                                 );
                               }}
@@ -2182,7 +2252,7 @@ export function UniversalDeviceBridgeHub({
                               className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-purple-950 text-purple-200 border border-purple-700/70 hover:bg-purple-900"
                               title="Send & Link workflow to Live Desktop Screen Capture & Vision HUD below"
                             >
-                              ðŸŽ¯ Link HUD
+                              🎯 Link HUD
                             </button>
                             <button
                               onClick={() => setIsExtendScreenActive(false)}
@@ -2207,7 +2277,7 @@ export function UniversalDeviceBridgeHub({
                             }`}
                           >
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                            Live Stream {mobileFrame ? "â—" : "(Standby)"}
+                            Live Stream {mobileFrame ? "●" : "(Standby)"}
                           </button>
                           <button
                             onClick={handleStartDesktopScreenMirrorInHub}
@@ -2231,7 +2301,7 @@ export function UniversalDeviceBridgeHub({
                         </div>
                         <div className="flex items-center gap-1 text-slate-400 text-[9px]">
                           <span>{mobileDeviceName}</span>
-                          <span className="text-emerald-400 font-bold">â€¢ 30 FPS Mirror</span>
+                          <span className="text-emerald-400 font-bold">• 30 FPS Mirror</span>
                         </div>
                       </div>
 
@@ -2272,7 +2342,7 @@ export function UniversalDeviceBridgeHub({
                           onMouseUp={(e) => {
                             if (draggingPinIndex !== null) {
                               setDraggingPinIndex(null);
-                              toast.info("ðŸ“ Step pin position calibrated");
+                              toast.info("📍 Step pin position calibrated");
                               return;
                             }
                             if (!isAddStepFromClickMode) {
@@ -2389,7 +2459,7 @@ export function UniversalDeviceBridgeHub({
                           {isInteractiveMode && !isExtendScreenActive && (
                             <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-emerald-500/5">
                               <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/80 text-[9px] font-mono text-emerald-300 border border-emerald-500/30">
-                                âš¡ Click: Tap â€¢ Drag: Swipe
+                                ⚡ Click: Tap • Drag: Swipe
                               </div>
                             </div>
                           )}
@@ -2477,7 +2547,7 @@ export function UniversalDeviceBridgeHub({
                       <button
                         onClick={() => {
                           setIsExtendScreenActive(!isExtendScreenActive);
-                          toast.info(!isExtendScreenActive ? "ðŸ”€ Extend to Screen active" : "Extend to Screen hidden");
+                          toast.info(!isExtendScreenActive ? "🔀 Extend to Screen active" : "Extend to Screen hidden");
                         }}
                         className={`px-1.5 py-0.5 rounded border flex items-center gap-0.5 ${
                           isExtendScreenActive
@@ -2625,7 +2695,7 @@ export function UniversalDeviceBridgeHub({
                                 }),
                               });
                               if (res.ok) {
-                                toast.success(`ðŸ’¾ Saved "${wf.name}" to Workflows!`);
+                                toast.success(`💾 Saved "${wf.name}" to Workflows!`);
                                 fetchWorkflows();
                               }
                             } catch {
@@ -2760,7 +2830,7 @@ export function UniversalDeviceBridgeHub({
                                   <div className="flex items-center justify-between text-[9px] font-mono text-slate-500 border-t border-slate-800/80 pt-1.5">
                                     <span className="flex items-center gap-1">
                                       <Clock className="w-2.5 h-2.5" />
-                                      {new Date(wf.createdAt).toLocaleDateString()} â€¢ Executed: {wf.executionCount || 0}x
+                                      {new Date(wf.createdAt).toLocaleDateString()} • Executed: {wf.executionCount || 0}x
                                     </span>
                                     <div className="flex items-center gap-1">
                                       <button
@@ -3108,7 +3178,7 @@ export function UniversalDeviceBridgeHub({
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
               <div>
                 <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
-                  âš¡ 10s Completion & Health Check Active
+                  ⚡ 10s Completion & Health Check Active
                   <Badge className="bg-cyan-950 text-cyan-300 border-cyan-700 text-[9px] font-mono">Autonomous Verification</Badge>
                 </span>
                 <p className="text-[10px] text-slate-400">
@@ -3124,7 +3194,7 @@ export function UniversalDeviceBridgeHub({
                   try {
                     const res = await fetch("/api/mobile-stream/workflows/completion-check", { method: "POST" });
                     if (res.ok) {
-                      toast.success("âš¡ 10s Completion Check Executed - All active workflows verified");
+                      toast.success("⚡ 10s Completion Check Executed - All active workflows verified");
                       fetchWorkflows();
                     }
                   } catch {
@@ -3814,18 +3884,18 @@ export function UniversalDeviceBridgeHub({
 
                         <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
                           <span className="text-slate-300">Action: {edge.actionDescription}</span>
-                          <span>{edge.latencyMs}ms â€¢ {edge.count}x</span>
+                          <span>{edge.latencyMs}ms • {edge.count}x</span>
                         </div>
 
                         {edge.aiThoughts && (
                           <div className="p-1.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-300 italic">
-                            ðŸ’¡ AI Thought: {edge.aiThoughts}
+                            💡 AI Thought: {edge.aiThoughts}
                           </div>
                         )}
 
                         {edge.easierAlternative && (
                           <div className="p-1.5 rounded bg-cyan-950/40 border border-cyan-800/40 text-[10px] text-cyan-300">
-                            âš¡ Shortcut: {edge.easierAlternative}
+                            ⚡ Shortcut: {edge.easierAlternative}
                           </div>
                         )}
                       </div>
@@ -4099,7 +4169,7 @@ export function UniversalDeviceBridgeHub({
                   </div>
                   {agent.lastIntervention && (
                     <div className="p-2 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-300 italic">
-                      ðŸŽ¯ {agent.lastIntervention}
+                      🎯 {agent.lastIntervention}
                     </div>
                   )}
                 </div>
@@ -4249,7 +4319,7 @@ export function UniversalDeviceBridgeHub({
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <FileSearch className="w-4 h-4 text-amber-400" /> Live Reference Check & Visual Drift Analysis
               </h3>
-              <button onClick={() => setReferenceCheckModalOpen(false)} className="text-slate-400 hover:text-white">âœ•</button>
+              <button onClick={() => setReferenceCheckModalOpen(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
             <div className="space-y-3 text-xs">
@@ -4331,7 +4401,7 @@ export function UniversalDeviceBridgeHub({
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <Save className="w-4 h-4 text-indigo-400" /> Save Device Automation Workflow
               </h3>
-              <button onClick={() => setIsSavingWorkflow(false)} className="text-slate-400 hover:text-white">âœ•</button>
+              <button onClick={() => setIsSavingWorkflow(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
             <div className="space-y-2.5">
@@ -4412,7 +4482,7 @@ export function UniversalDeviceBridgeHub({
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <Scissors className="w-4 h-4 text-cyan-400" /> Extract from "{extractModalWf.name}"
               </h3>
-              <button onClick={() => setExtractModalWf(null)} className="text-slate-400 hover:text-white">âœ•</button>
+              <button onClick={() => setExtractModalWf(null)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
             <div className="space-y-3">
@@ -4508,7 +4578,7 @@ export function UniversalDeviceBridgeHub({
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <Wand2 className="w-4 h-4 text-amber-400" /> AI Gemini Customizer for "{aiCustomizeModalWf.name}"
               </h3>
-              <button onClick={() => setAiCustomizeModalWf(null)} className="text-slate-400 hover:text-white">âœ•</button>
+              <button onClick={() => setAiCustomizeModalWf(null)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
             <div className="space-y-3">
@@ -4569,9 +4639,9 @@ export function UniversalDeviceBridgeHub({
           <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col">
             <div className="p-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
               <span className="text-xs font-bold text-white font-mono">
-                Frame Snapshot #{previewFrameModal.id} â€¢ {new Date(previewFrameModal.timestamp).toLocaleTimeString()}
+                Frame Snapshot #{previewFrameModal.id} • {new Date(previewFrameModal.timestamp).toLocaleTimeString()}
               </span>
-              <button onClick={() => setPreviewFrameModal(null)} className="text-slate-400 hover:text-white">âœ•</button>
+              <button onClick={() => setPreviewFrameModal(null)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
             <div className="p-4 flex items-center justify-center bg-black max-h-[60vh] overflow-hidden">
@@ -4626,10 +4696,19 @@ export function UniversalDeviceBridgeHub({
           setActiveDecodedBarcode(barcode);
         }}
       />
+
+      {/* Mobile Stream & Workspace Settings Modal */}
+      <MobileSettingsModal
+        open={isMobileSettingsModalOpen}
+        onOpenChange={setIsMobileSettingsModalOpen}
+        onSettingsSaved={(newSettings) => setWorkspaceSettings(newSettings)}
+      />
+
+      {/* Standalone Android APK & PWA Modal */}
+      <ApkAndPwaModal
+        open={isApkModalOpen}
+        onOpenChange={setIsApkModalOpen}
+      />
     </div>
   );
 }
-
-
-
-

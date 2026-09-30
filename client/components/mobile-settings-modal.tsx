@@ -28,10 +28,13 @@ import { toast } from "sonner";
 
 export interface WorkspaceSettings {
   autoRecordWorkflows: boolean;
+  recordCadenceMs: number;
+  deadRouteSensitivity: "low" | "medium" | "high";
   autoRenavigateOnDeadRoute: boolean;
   autoDismissPopups: boolean;
+  enableBackgroundAudio: boolean;
   enableMultiWindowHomeSync: boolean;
-  deadRouteSensitivity: "low" | "medium" | "high";
+  audioFeedbackAlerts: boolean;
   activeModel: string;
 }
 
@@ -48,10 +51,13 @@ export const MobileSettingsModal: React.FC<MobileSettingsModalProps> = ({
 }) => {
   const [settings, setSettings] = useState<WorkspaceSettings>({
     autoRecordWorkflows: true,
+    recordCadenceMs: 500,
+    deadRouteSensitivity: "medium",
     autoRenavigateOnDeadRoute: true,
     autoDismissPopups: true,
+    enableBackgroundAudio: false,
     enableMultiWindowHomeSync: false,
-    deadRouteSensitivity: "medium",
+    audioFeedbackAlerts: false,
     activeModel: "gemini-2.5-flash",
   });
   const [isLoading, setIsLoading] = useState<boolean>(false);

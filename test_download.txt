@@ -1,0 +1,10 @@
+﻿
+> server\routes\mobile-stream.ts:4145:mobileStreamRouter.get("/api/mobile/download-apk-bundle", async (req, res) => {
+  server\routes\mobile-stream.ts:4146:  try {
+  server\routes\mobile-stream.ts:4147:    const JSZip = (await import("jszip")).default;
+  server\routes\mobile-stream.ts:4148:    const zip = new JSZip();
+  server\routes\mobile-stream.ts:4149:
+  server\routes\mobile-stream.ts:4150:    const host = req.get("host") || "localhost:3000";
+
+
+

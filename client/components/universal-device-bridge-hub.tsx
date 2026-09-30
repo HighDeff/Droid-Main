@@ -1823,9 +1823,10 @@ export function UniversalDeviceBridgeHub({
                   <p className="text-[10px] text-slate-400">
                     Open on your phone to stream live screen & receive AI automations.
                   </p>
-                </div>
 
-                <div className="flex gap-1 w-full">
+                  {/* APK Download Section */}
+				  {/* ---------------------------------------------------- */}
+                  {/* 1. INSTANT QR CODE, LIVE PHONE SCREEN & AI AUTOMATION */}
                   <Input
                     readOnly
                     value={mobileLinkUrl}

@@ -168,6 +168,11 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
     category: "Hardware",
     price: 189.5,
   });
+  const [phoneBarcodeHistory, setPhoneBarcodeHistory] = useState<Array<{ code: string; name: string; time: string }>>([
+    { code: "8901030865412", name: "Zebra DS2208 Scanner", time: "12:40 PM" },
+    { code: "012345678905", name: "Logitech MX Master 3S", time: "11:15 AM" },
+    { code: "PKG-99201-US", name: "Thermal Paper Rolls", time: "10:32 AM" },
+  ]);
 
   // Clock ticker
   useEffect(() => {

@@ -4015,7 +4015,7 @@ mobileStreamRouter.post("/api/mobile-stream/inventory/scan", (req, res) => {
   }
 
   // Also log to central log hub
-  centralLogHub.info("INVENTORY_BARCODE_SCANNED", {
+  centralLogHub.addLog("Mobile-Automation", "INFO", `Inventory barcode scanned: ${item.name} (${cleanCode})`, {
     barcode: cleanCode,
     sku: item.sku,
     name: item.name,

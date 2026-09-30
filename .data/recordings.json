@@ -37,5 +37,31 @@
     },
     "events": [],
     "stoppedAt": "2026-09-29T19:58:36.667Z"
+  },
+  {
+    "id": "recording_1790726049180_3ghtaop",
+    "sessionId": "session-1",
+    "name": "Persistent recording",
+    "status": "stopped",
+    "startedAt": "2026-09-29T23:54:09.180Z",
+    "source": {
+      "source": "manual",
+      "sensitiveInputCaptured": false
+    },
+    "events": [],
+    "stoppedAt": "2026-09-29T23:54:09.181Z"
+  },
+  {
+    "id": "recording_1790726073889_zjtofbn",
+    "sessionId": "session-1",
+    "name": "Persistent recording",
+    "status": "stopped",
+    "startedAt": "2026-09-29T23:54:33.889Z",
+    "source": {
+      "source": "manual",
+      "sensitiveInputCaptured": false
+    },
+    "events": [],
+    "stoppedAt": "2026-09-29T23:54:33.890Z"
   }
 ]

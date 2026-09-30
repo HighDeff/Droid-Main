@@ -9,7 +9,12 @@
  *  4. Server-assisted fallback via /api/mobile-stream/decode-barcode
  */
 
-import { BrowserMultiFormatReader } from "@zxing/library";
+import {
+  HTMLCanvasElementLuminanceSource,
+  HybridBinarizer,
+  BinaryBitmap,
+  MultiFormatReader,
+} from "@zxing/library";
 import jsQR from "jsqr";
 
 export interface ScannedBarcode {
@@ -38,13 +43,13 @@ export interface InventoryItem {
 }
 
 // Single multi-format reader instance
-let zxingReader: BrowserMultiFormatReader | null = null;
+let multiFormatReader: MultiFormatReader | null = null;
 
-function getZxingReader(): BrowserMultiFormatReader {
-  if (!zxingReader) {
-    zxingReader = new BrowserMultiFormatReader();
+function getMultiFormatReader(): MultiFormatReader {
+  if (!multiFormatReader) {
+    multiFormatReader = new MultiFormatReader();
   }
-  return zxingReader;
+  return multiFormatReader;
 }
 
 // Native BarcodeDetector instance if supported
@@ -114,14 +119,16 @@ export async function scanBarcodeFromCanvas(
     }
   }
 
-  // 2. Try ZXing BrowserMultiFormatReader
+  // 2. Try ZXing MultiFormatReader
   try {
-    const reader = getZxingReader();
-    const result = reader.decodeFromCanvas(canvas);
+    const reader = getMultiFormatReader();
+    const lumSource = new HTMLCanvasElementLuminanceSource(canvas);
+    const bitmap = new BinaryBitmap(new HybridBinarizer(lumSource));
+    const result = reader.decode(bitmap);
     if (result && result.getText()) {
       return {
         rawValue: result.getText(),
-        format: result.getBarcodeFormat() ? String(result.getBarcodeFormat()) : "CODE_128",
+        format: result.getBarcodeFormat() ? String(result.getBarcodeFormat()) : "BARCODE",
         timestamp: Date.now(),
         confidence: 0.95,
       };

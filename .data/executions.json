@@ -634,5 +634,429 @@
     ],
     "evidence": [],
     "startedAt": "2026-09-29T19:58:36.922Z"
+  },
+  {
+    "id": "execution_1790726049184_l1kcypx",
+    "planId": "plan-1",
+    "sessionId": "session-1",
+    "status": "pending",
+    "currentStep": 0,
+    "totalSteps": 0,
+    "timeline": [],
+    "results": [],
+    "evidence": []
+  },
+  {
+    "id": "execution_1790726049521_yhlbm68",
+    "planId": "plan-1",
+    "sessionId": "session-1",
+    "status": "completed",
+    "currentStep": 1,
+    "totalSteps": 1,
+    "timeline": [
+      {
+        "id": "event_1790726049522_ufpjdt8",
+        "timestamp": "2026-09-29T23:54:09.522Z",
+        "status": "started",
+        "message": "Execution started"
+      },
+      {
+        "id": "event_1790726049523_nyss310",
+        "timestamp": "2026-09-29T23:54:09.523Z",
+        "status": "started",
+        "message": "Running step 1",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726049524_taiucqb",
+        "timestamp": "2026-09-29T23:54:09.524Z",
+        "status": "completed",
+        "message": "safe",
+        "stepId": "step-1",
+        "result": {
+          "actionType": "click",
+          "success": true,
+          "message": "safe"
+        }
+      },
+      {
+        "id": "event_1790726049524_ajfyvqk",
+        "timestamp": "2026-09-29T23:54:09.524Z",
+        "status": "capture",
+        "message": "Requesting fresh capture for attempt 1.",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726049524_w6dhxf3",
+        "timestamp": "2026-09-29T23:54:09.524Z",
+        "status": "analysis",
+        "message": "Fresh capture analysis received.",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726049524_zjleiau",
+        "timestamp": "2026-09-29T23:54:09.524Z",
+        "status": "verification",
+        "message": "Expected text “Done” was not found.",
+        "stepId": "step-1",
+        "result": {
+          "status": "failed",
+          "reason": "Expected text “Done” was not found.",
+          "confidence": 0.9
+        },
+        "evidenceId": "evidence_1790726049524_eul0klq"
+      },
+      {
+        "id": "event_1790726049524_nyreddt",
+        "timestamp": "2026-09-29T23:54:09.524Z",
+        "status": "retry",
+        "message": "Verification failed; retrying step 1 (attempt 2/2).",
+        "stepId": "step-1",
+        "evidenceId": "evidence_1790726049524_eul0klq"
+      },
+      {
+        "id": "event_1790726049524_oiqvbvm",
+        "timestamp": "2026-09-29T23:54:09.524Z",
+        "status": "capture",
+        "message": "Requesting fresh capture for attempt 2.",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726049525_n38bcx6",
+        "timestamp": "2026-09-29T23:54:09.525Z",
+        "status": "analysis",
+        "message": "Fresh capture analysis received.",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726049525_pjzlckp",
+        "timestamp": "2026-09-29T23:54:09.525Z",
+        "status": "verification",
+        "message": "Expected text “Done” was found.",
+        "stepId": "step-1",
+        "result": {
+          "status": "passed",
+          "reason": "Expected text “Done” was found.",
+          "confidence": 0.9
+        },
+        "evidenceId": "evidence_1790726049525_xy0q22o"
+      },
+      {
+        "id": "event_1790726049525_3jyr4ge",
+        "timestamp": "2026-09-29T23:54:09.525Z",
+        "status": "completed",
+        "message": "Execution completed"
+      }
+    ],
+    "results": [
+      {
+        "actionType": "click",
+        "success": true,
+        "message": "safe"
+      },
+      {
+        "actionType": "click",
+        "success": true,
+        "message": "safe"
+      }
+    ],
+    "evidence": [
+      {
+        "id": "evidence_1790726049524_eul0klq",
+        "stepId": "step-1",
+        "attempt": 1,
+        "capturedAt": "2026-09-29T23:54:09.524Z",
+        "analysis": {
+          "id": "analysis-1",
+          "status": "completed",
+          "provider": "local-ocr",
+          "confidence": 0.9,
+          "ocrText": [],
+          "detectedElements": [],
+          "regionsOfInterest": [],
+          "notes": [],
+          "analyzedAt": "2026-09-29T23:54:09.524Z"
+        },
+        "verification": {
+          "status": "failed",
+          "reason": "Expected text “Done” was not found.",
+          "confidence": 0.9
+        }
+      },
+      {
+        "id": "evidence_1790726049525_xy0q22o",
+        "stepId": "step-1",
+        "attempt": 2,
+        "capturedAt": "2026-09-29T23:54:09.525Z",
+        "analysis": {
+          "id": "analysis-2",
+          "status": "completed",
+          "provider": "local-ocr",
+          "confidence": 0.9,
+          "ocrText": [
+            {
+              "id": "text",
+              "text": "Done",
+              "confidence": 0.9
+            }
+          ],
+          "detectedElements": [],
+          "regionsOfInterest": [],
+          "notes": [],
+          "analyzedAt": "2026-09-29T23:54:09.525Z"
+        },
+        "verification": {
+          "status": "passed",
+          "reason": "Expected text “Done” was found.",
+          "confidence": 0.9
+        }
+      }
+    ],
+    "startedAt": "2026-09-29T23:54:09.522Z",
+    "completedAt": "2026-09-29T23:54:09.525Z"
+  },
+  {
+    "id": "execution_1790726049527_tj821kj",
+    "planId": "plan-1",
+    "sessionId": "session-1",
+    "status": "running",
+    "currentStep": 1,
+    "totalSteps": 1,
+    "timeline": [
+      {
+        "id": "event_1790726049529_8cb3r90",
+        "timestamp": "2026-09-29T23:54:09.529Z",
+        "status": "started",
+        "message": "Execution started"
+      },
+      {
+        "id": "event_1790726049529_lnvyvhg",
+        "timestamp": "2026-09-29T23:54:09.529Z",
+        "status": "started",
+        "message": "Running step 1",
+        "stepId": "step-1"
+      }
+    ],
+    "results": [
+      {
+        "actionType": "click",
+        "success": true,
+        "message": "safe"
+      }
+    ],
+    "evidence": [],
+    "startedAt": "2026-09-29T23:54:09.529Z"
+  },
+  {
+    "id": "execution_1790726073892_3h9rs1p",
+    "planId": "plan-1",
+    "sessionId": "session-1",
+    "status": "pending",
+    "currentStep": 0,
+    "totalSteps": 0,
+    "timeline": [],
+    "results": [],
+    "evidence": []
+  },
+  {
+    "id": "execution_1790726074125_4vh40n1",
+    "planId": "plan-1",
+    "sessionId": "session-1",
+    "status": "completed",
+    "currentStep": 1,
+    "totalSteps": 1,
+    "timeline": [
+      {
+        "id": "event_1790726074127_xvuss0x",
+        "timestamp": "2026-09-29T23:54:34.127Z",
+        "status": "started",
+        "message": "Execution started"
+      },
+      {
+        "id": "event_1790726074127_rk7wdab",
+        "timestamp": "2026-09-29T23:54:34.127Z",
+        "status": "started",
+        "message": "Running step 1",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726074129_rsdfgsc",
+        "timestamp": "2026-09-29T23:54:34.129Z",
+        "status": "completed",
+        "message": "safe",
+        "stepId": "step-1",
+        "result": {
+          "actionType": "click",
+          "success": true,
+          "message": "safe"
+        }
+      },
+      {
+        "id": "event_1790726074129_sf8rnwg",
+        "timestamp": "2026-09-29T23:54:34.129Z",
+        "status": "capture",
+        "message": "Requesting fresh capture for attempt 1.",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726074129_ynbj8ll",
+        "timestamp": "2026-09-29T23:54:34.129Z",
+        "status": "analysis",
+        "message": "Fresh capture analysis received.",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726074129_bryiguh",
+        "timestamp": "2026-09-29T23:54:34.129Z",
+        "status": "verification",
+        "message": "Expected text “Done” was not found.",
+        "stepId": "step-1",
+        "result": {
+          "status": "failed",
+          "reason": "Expected text “Done” was not found.",
+          "confidence": 0.9
+        },
+        "evidenceId": "evidence_1790726074129_dwe947h"
+      },
+      {
+        "id": "event_1790726074129_jlyg292",
+        "timestamp": "2026-09-29T23:54:34.129Z",
+        "status": "retry",
+        "message": "Verification failed; retrying step 1 (attempt 2/2).",
+        "stepId": "step-1",
+        "evidenceId": "evidence_1790726074129_dwe947h"
+      },
+      {
+        "id": "event_1790726074129_hh545vs",
+        "timestamp": "2026-09-29T23:54:34.129Z",
+        "status": "capture",
+        "message": "Requesting fresh capture for attempt 2.",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726074129_zheofjy",
+        "timestamp": "2026-09-29T23:54:34.129Z",
+        "status": "analysis",
+        "message": "Fresh capture analysis received.",
+        "stepId": "step-1"
+      },
+      {
+        "id": "event_1790726074129_c8x7909",
+        "timestamp": "2026-09-29T23:54:34.129Z",
+        "status": "verification",
+        "message": "Expected text “Done” was found.",
+        "stepId": "step-1",
+        "result": {
+          "status": "passed",
+          "reason": "Expected text “Done” was found.",
+          "confidence": 0.9
+        },
+        "evidenceId": "evidence_1790726074129_484o3g6"
+      },
+      {
+        "id": "event_1790726074129_ompawck",
+        "timestamp": "2026-09-29T23:54:34.129Z",
+        "status": "completed",
+        "message": "Execution completed"
+      }
+    ],
+    "results": [
+      {
+        "actionType": "click",
+        "success": true,
+        "message": "safe"
+      },
+      {
+        "actionType": "click",
+        "success": true,
+        "message": "safe"
+      }
+    ],
+    "evidence": [
+      {
+        "id": "evidence_1790726074129_dwe947h",
+        "stepId": "step-1",
+        "attempt": 1,
+        "capturedAt": "2026-09-29T23:54:34.129Z",
+        "analysis": {
+          "id": "analysis-1",
+          "status": "completed",
+          "provider": "local-ocr",
+          "confidence": 0.9,
+          "ocrText": [],
+          "detectedElements": [],
+          "regionsOfInterest": [],
+          "notes": [],
+          "analyzedAt": "2026-09-29T23:54:34.129Z"
+        },
+        "verification": {
+          "status": "failed",
+          "reason": "Expected text “Done” was not found.",
+          "confidence": 0.9
+        }
+      },
+      {
+        "id": "evidence_1790726074129_484o3g6",
+        "stepId": "step-1",
+        "attempt": 2,
+        "capturedAt": "2026-09-29T23:54:34.129Z",
+        "analysis": {
+          "id": "analysis-2",
+          "status": "completed",
+          "provider": "local-ocr",
+          "confidence": 0.9,
+          "ocrText": [
+            {
+              "id": "text",
+              "text": "Done",
+              "confidence": 0.9
+            }
+          ],
+          "detectedElements": [],
+          "regionsOfInterest": [],
+          "notes": [],
+          "analyzedAt": "2026-09-29T23:54:34.129Z"
+        },
+        "verification": {
+          "status": "passed",
+          "reason": "Expected text “Done” was found.",
+          "confidence": 0.9
+        }
+      }
+    ],
+    "startedAt": "2026-09-29T23:54:34.127Z",
+    "completedAt": "2026-09-29T23:54:34.129Z"
+  },
+  {
+    "id": "execution_1790726074133_zfowbfk",
+    "planId": "plan-1",
+    "sessionId": "session-1",
+    "status": "running",
+    "currentStep": 1,
+    "totalSteps": 1,
+    "timeline": [
+      {
+        "id": "event_1790726074134_jg4059n",
+        "timestamp": "2026-09-29T23:54:34.134Z",
+        "status": "started",
+        "message": "Execution started"
+      },
+      {
+        "id": "event_1790726074135_kuv2xrk",
+        "timestamp": "2026-09-29T23:54:34.135Z",
+        "status": "started",
+        "message": "Running step 1",
+        "stepId": "step-1"
+      }
+    ],
+    "results": [
+      {
+        "actionType": "click",
+        "success": true,
+        "message": "safe"
+      }
+    ],
+    "evidence": [],
+    "startedAt": "2026-09-29T23:54:34.134Z"
   }
 ]

@@ -19,5 +19,19 @@
     "id": "progress_1790711916637_5z6ka3y1",
     "sessionId": "session_1790711916618_xjzu4g8g",
     "createdAt": "2026-09-29T19:58:36.637Z"
+  },
+  {
+    "kind": "progress",
+    "message": "Stored on disk",
+    "id": "progress_1790726049162_7x8cdx6m",
+    "sessionId": "session_1790726049145_bc10s2px",
+    "createdAt": "2026-09-29T23:54:09.162Z"
+  },
+  {
+    "kind": "progress",
+    "message": "Stored on disk",
+    "id": "progress_1790726073869_yeaeuqr3",
+    "sessionId": "session_1790726073853_bpwnqcqh",
+    "createdAt": "2026-09-29T23:54:33.869Z"
   }
 ]

@@ -64,6 +64,7 @@ import {
   SkipForward,
   Shield,
   Scan,
+  Package,
   Users,
   Grid,
   ZoomIn,

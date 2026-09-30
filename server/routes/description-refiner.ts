@@ -196,7 +196,7 @@ Respond ONLY with a valid JSON object matching this exact TypeScript structure:
 }`;
 
         const response = await client.models.generateContent({
-          model: "gemini-3.8-flash",
+          model: "gemini-2.5-flash",
           contents: prompt,
           config: {
             responseMimeType: "application/json",
@@ -364,7 +364,7 @@ Respond ONLY with a valid JSON array of objects matching this exact structure:
 ]`;
 
         const aiResponse = await client.models.generateContent({
-          model: "gemini-3.8-flash",
+          model: "gemini-2.5-flash",
           contents: prompt,
           config: {
             responseMimeType: "application/json",
@@ -395,7 +395,7 @@ Respond ONLY with a valid JSON array of objects matching this exact structure:
             return res.json({
               success: true,
               total: results.length,
-              source: "gemini-3.8-flash",
+              source: "gemini-2.5-flash",
               constraintMode,
               targetWords: wordLimit,
               items: results,
@@ -487,7 +487,7 @@ STRICT CONSTRAINTS:
 4. Output ONLY the plain text sentence.`;
 
         const response = await client.models.generateContent({
-          model: "gemini-3.8-flash",
+          model: "gemini-2.5-flash",
           contents: prompt,
           config: {
             temperature: 0.2,

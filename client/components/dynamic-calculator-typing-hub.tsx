@@ -160,6 +160,22 @@ export const DynamicCalculatorTypingHub: React.FC<
       `⚡ Dispatching typing \"${text}\" at (${targetCoords.x}, ${targetCoords.y}) on ${targetDevice.toUpperCase()}...`,
     );
 
+    // Trigger AI Cursor movement and live typing overlay with trail
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("ai-cursor-action", {
+          detail: {
+            x: targetCoords.x,
+            y: targetCoords.y,
+            action: "typing",
+            textPayload: text,
+            targetLabel: `Field (${targetCoords.x}, ${targetCoords.y})`,
+            isActing: true,
+          },
+        })
+      );
+    }
+
     try {
       const res = await fetch("/api/execute-task", {
         method: "POST",

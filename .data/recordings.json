@@ -1,0 +1,15 @@
+[
+  {
+    "id": "recording_1790120078276_0dfjzsr",
+    "sessionId": "session-1",
+    "name": "Persistent recording",
+    "status": "stopped",
+    "startedAt": "2026-09-22T23:34:38.276Z",
+    "source": {
+      "source": "manual",
+      "sensitiveInputCaptured": false
+    },
+    "events": [],
+    "stoppedAt": "2026-09-22T23:34:38.276Z"
+  }
+]

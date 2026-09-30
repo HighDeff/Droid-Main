@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import { gameStateManager } from "../state-manager";
 import { autoTaskGenerator } from "../auto-task-generator";
 import { multiAgentExecutor } from "../multi-agent-executor";
-import { resolveAiEndpoint } from "../ai-endpoint";
+import { DEFAULT_QWEN_MODEL, resolveAiEndpoint } from "../ai-endpoint";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -88,7 +88,7 @@ export const handleAnalyzeScreenshot: RequestHandler = async (req, res) => {
       applyHeuristicFallback();
     } else try {
       const payload = {
-        model: "qwen2.5vl:7b",
+        model: DEFAULT_QWEN_MODEL,
         messages: [
           {
             role: "user",
@@ -202,8 +202,11 @@ async function detectEntities(imageData: string): Promise<any> {
       let output = "";
       let errorOutput = "";
 
-      python.stdin.write(JSON.stringify({ imageData }));
-      python.stdin.end();
+      python.stdin.on("error", () => {});
+      try {
+        python.stdin.write(JSON.stringify({ imageData }));
+        python.stdin.end();
+      } catch {}
 
       python.stdout.on("data", (data) => {
         output += data.toString();

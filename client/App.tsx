@@ -1,7 +1,4 @@
-import "./global.css";
-
 import { Toaster } from "@/components/ui/toaster";
-import { createRoot } from "react-dom/client";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -10,7 +7,7 @@ import { lazy, Suspense } from "react";
 import { RouteErrorBoundary } from "@/components/route-error-boundary";
 import { BridgeHealthMonitorFooter } from "@/components/bridge-health-monitor-footer";
 
-const Dashboard = lazy(() => import("./pages/Dashboard"));
+import Dashboard from "./pages/Dashboard";
 const AiMonitor = lazy(() => import("./pages/AiMonitor"));
 const Automation = lazy(() => import("./pages/automation/index"));
 const NotFound = lazy(() => import("./pages/NotFound"));
@@ -21,20 +18,21 @@ const Accomplishments = lazy(() => import("./pages/Accomplishments"));
 const Recordings = lazy(() => import("./pages/Recordings"));
 const Workflows = lazy(() => import("./pages/Workflows"));
 const DriveWorkspace = lazy(() => import("../src/App"));
+const MobileRemote = lazy(() => import("./pages/MobileRemote"));
 
 const queryClient = new QueryClient();
 
 const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <RouteErrorBoundary>
+  <RouteErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
           <Suspense fallback={<RouteLoadingFallback />}>
             <div className="pb-10">
               <Routes>
-                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/" element={<Dashboard />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route
                   path="/dual-ai"
@@ -51,22 +49,27 @@ const App = () => (
                 <Route path="/recordings" element={<Recordings />} />
                 <Route path="/workflows" element={<Workflows />} />
                 <Route path="/drive" element={<DriveWorkspace />} />
+                <Route path="/mobile-remote" element={<MobileRemote />} />
+                <Route path="/mobile-link" element={<MobileRemote />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </div>
             <BridgeHealthMonitorFooter />
           </Suspense>
-        </RouteErrorBoundary>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
+        </BrowserRouter>
+      </TooltipProvider>
+    </QueryClientProvider>
+  </RouteErrorBoundary>
 );
 
 const RouteLoadingFallback = () => (
-  <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
-    Loading page...
+  <div className="flex min-h-screen items-center justify-center bg-slate-950 text-sm text-cyan-400 font-mono">
+    <div className="flex flex-col items-center gap-3">
+      <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+      <span>Loading AI Automation Workspace...</span>
+    </div>
   </div>
 );
 
-createRoot(document.getElementById("root")!).render(<App />);
+export default App;

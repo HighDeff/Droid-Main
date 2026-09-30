@@ -13,7 +13,6 @@ type MethodSignature = {
   similarMethods: string[];
   learnedFrom: string[];
   contexts: string[];
-  actionSignature: string;
   efficiency: number; // Steps completed per minute
   reliability: number; // Consistency of success
 };
@@ -65,9 +64,7 @@ class MethodLearningSystem {
     const successCount = history.filter(h => h.success).length;
     const successRate = successCount / totalExecutions;
     const averageDuration = history.reduce((sum, h) => sum + h.duration, 0) / totalExecutions;
-    const completedSteps = Math.max(0, Number(execution.currentStep) || 0);
-    const durationMinutes = averageDuration > 0 ? averageDuration / 60000 : 0;
-    const efficiency = durationMinutes > 0 ? completedSteps / durationMinutes : completedSteps;
+    const efficiency = (execution.currentStep / execution.totalSteps) / (averageDuration / 60000); // Steps per minute
     const reliability = this.calculateReliability(history);
     
     // Find similar methods
@@ -83,19 +80,8 @@ class MethodLearningSystem {
       averageDuration,
       adaptationNotes: this.extractAdaptationNotes(execution, plan),
       similarMethods: similarMethods.map(m => m.methodId),
-      learnedFrom: existingMethod
-        ? Array.from(new Set([...existingMethod.learnedFrom, execution.id]))
-        : [execution.id],
-      contexts: Array.from(
-        new Set([
-          ...(existingMethod?.contexts ?? []),
-          context.userIntent,
-          context.applicationName || "unknown",
-          context.screenLayout,
-          context.deviceType,
-        ].filter(Boolean)),
-      ),
-      actionSignature: this.generateMethodSignature(plan),
+      learnedFrom: existingMethod ? [...existingMethod.learnedFrom, methodId] : [methodId],
+      contexts: [context.userIntent, context.applicationName || "unknown", context.screenLayout].filter(Boolean),
       efficiency,
       reliability,
     };
@@ -256,7 +242,7 @@ class MethodLearningSystem {
   private extractAdaptationNotes(execution: AssistantExecution, plan: AssistantPlan): string[] {
     const notes: string[] = [];
     
-    (execution.timeline ?? []).forEach(event => {
+    execution.timeline.forEach(event => {
       if (event.status === "retry") {
         notes.push(`Retry required: ${event.message}`);
       }
@@ -265,7 +251,7 @@ class MethodLearningSystem {
       }
     });
     
-    (execution.evidence ?? []).forEach(evidence => {
+    execution.evidence.forEach(evidence => {
       if (evidence.verification.status === "uncertain") {
         notes.push(`Uncertain verification: ${evidence.verification.reason}`);
       }
@@ -292,20 +278,22 @@ class MethodLearningSystem {
   }
   
   private calculateSignatureSimilarity(signature: string, method: MethodSignature): number {
-    const currentTokens = new Set(signature.toLowerCase().split("_").filter(Boolean));
-    const learnedTokens = new Set(
-      method.actionSignature.toLowerCase().split("_").filter(Boolean),
-    );
-    const union = new Set([...currentTokens, ...learnedTokens]);
-    if (union.size === 0) return 0;
-    const intersection = [...currentTokens].filter((token) => learnedTokens.has(token));
-    return intersection.length / union.size;
+    // Simple similarity calculation based on context overlap
+    const methodContexts = method.contexts.join(" ").toLowerCase();
+    const signatureLower = signature.toLowerCase();
+    
+    let matches = 0;
+    method.contexts.forEach(ctx => {
+      if (signatureLower.includes(ctx.toLowerCase())) matches++;
+    });
+    
+    return Math.min(matches / method.contexts.length, 1);
   }
   
   private calculateMethodSimilarity(method1: MethodSignature, method2: MethodSignature): number {
     const contextOverlap = method1.contexts.filter(c => method2.contexts.includes(c)).length;
     const maxContexts = Math.max(method1.contexts.length, method2.contexts.length);
-    return maxContexts === 0 ? 0 : contextOverlap / maxContexts;
+    return contextOverlap / maxContexts;
   }
   
   private calculateReliability(history: Array<{ success: boolean; duration: number }>): number {

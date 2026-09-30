@@ -9,14 +9,23 @@ let latestSyncedRealFrame: {
   metadata?: FrameMetadata;
 } | null = null;
 
-export const captureDesktopFrame = async (options: { freshOnly?: boolean } = {}): Promise<{
+export const setLatestSyncedRealFrame = (
+  imageData: string,
+  metadata?: FrameMetadata,
+) => {
+  latestSyncedRealFrame = { imageData, metadata };
+};
+
+export const getLatestSyncedRealFrame = () => latestSyncedRealFrame;
+
+export const captureDesktopFrame = async (): Promise<{
   success: boolean;
   imageData?: string;
   method?: string;
   metadata?: FrameMetadata;
   error?: string;
 }> => {
-  if (latestSyncedRealFrame && !options.freshOnly) {
+  if (latestSyncedRealFrame) {
     return {
       success: true,
       imageData: latestSyncedRealFrame.imageData,

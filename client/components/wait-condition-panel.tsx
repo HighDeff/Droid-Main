@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type {
-  PlannedStep,
   WaitCondition,
   WaitConditionStatusEvent,
   WaitConditionType,
@@ -31,12 +30,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function WaitConditionPanel({
   sessionId,
-  steps,
   onConditionCreated,
 }: {
   sessionId: string;
-  steps: PlannedStep[];
-  onConditionCreated?: (condition: WaitCondition, targetStepId: string) => void;
+  onConditionCreated?: (condition: WaitCondition) => void;
 }) {
   const [type, setType] = useState<WaitConditionType>("visible_text");
   const [label, setLabel] = useState("Required screen signal");
@@ -46,13 +43,6 @@ export function WaitConditionPanel({
   const [approved, setApproved] = useState(false);
   const [events, setEvents] = useState<WaitConditionStatusEvent[]>([]);
   const [error, setError] = useState("");
-  const [targetStepId, setTargetStepId] = useState(steps[0]?.id ?? "");
-
-  useEffect(() => {
-    if (!steps.some((step) => step.id === targetStepId)) {
-      setTargetStepId(steps[0]?.id ?? "");
-    }
-  }, [steps, targetStepId]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -105,8 +95,7 @@ export function WaitConditionPanel({
           body: JSON.stringify({ sessionId, condition }),
         },
       );
-      if (!targetStepId) throw new Error("Choose a plan step for this condition");
-      onConditionCreated?.(response.condition, targetStepId);
+      onConditionCreated?.(response.condition);
       setValue("");
     } catch (cause) {
       setError(
@@ -128,20 +117,6 @@ export function WaitConditionPanel({
         </div>
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        <label className="text-[11px] text-slate-500 sm:col-span-2">
-          Gate before step
-          <select
-            value={targetStepId}
-            onChange={(event) => setTargetStepId(event.target.value)}
-            className="mt-1 w-full rounded-md border border-white/10 bg-[#121b31] px-2 py-2 text-xs text-slate-300"
-          >
-            {steps.map((step) => (
-              <option key={step.id} value={step.id}>
-                {step.order}. {step.title}
-              </option>
-            ))}
-          </select>
-        </label>
         <Input
           value={label}
           onChange={(event) => setLabel(event.target.value)}
@@ -193,7 +168,7 @@ export function WaitConditionPanel({
         </label>
         <Button
           onClick={() => void addCondition()}
-          disabled={!sessionId || !targetStepId}
+          disabled={!sessionId}
           className="bg-cyan-400 text-slate-950 hover:bg-cyan-300"
         >
           Add for review

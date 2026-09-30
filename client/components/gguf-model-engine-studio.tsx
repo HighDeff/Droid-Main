@@ -55,6 +55,19 @@ export const GGUFModelEngineStudio: React.FC<GGUFModelEngineStudioProps> = ({
 }) => {
   const [models, setModels] = useState<ModelProfile[]>([
     {
+      id: "m_qwen_35_2b",
+      name: "Qwen 3.5 2B (Ollama Remote)",
+      type: "ollama",
+      filePathOrEndpoint: "https://quantumclaw.net/ollama/api/chat",
+      quantization: "Q4 / 2B Native",
+      gpuLayers: 33,
+      contextSize: 32768,
+      temperature: 0.2,
+      vramUsageGb: 2.2,
+      throughputTokensPerSec: 68.5,
+      status: "loaded",
+    },
+    {
       id: "m_gguf_qwen",
       name: "Qwen 2.5-VL 7B Instruct (GGUF Q4_K_M)",
       type: "gguf_local",
@@ -65,7 +78,7 @@ export const GGUFModelEngineStudio: React.FC<GGUFModelEngineStudioProps> = ({
       temperature: 0.2,
       vramUsageGb: 5.4,
       throughputTokensPerSec: 42.8,
-      status: "loaded",
+      status: "ready",
     },
     {
       id: "m_gguf_deepseek",
@@ -108,7 +121,7 @@ export const GGUFModelEngineStudio: React.FC<GGUFModelEngineStudioProps> = ({
     },
   ]);
 
-  const [activeModelId, setActiveModelId] = useState<string>("m_gguf_qwen");
+  const [activeModelId, setActiveModelId] = useState<string>("m_qwen_35_2b");
   const [gpuLayers, setGpuLayers] = useState<number>(28);
   const [contextSize, setContextSize] = useState<number>(32768);
   const [temperature, setTemperature] = useState<number>(0.2);

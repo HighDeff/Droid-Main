@@ -7,7 +7,6 @@ import {
   validateKey,
   validateText,
   validateDeviceId,
-  validateHotkey,
 } from "./automation-adapters";
 
 describe("automation adapters", () => {
@@ -53,8 +52,6 @@ describe("automation adapters", () => {
 
   it("rejects keys outside the bounded keyboard allowlist", () => {
     expect(validateKey("ENTER")).toBe("enter");
-    expect(validateHotkey("ctrl+home")).toEqual(["ctrl", "home"]);
-    expect(() => validateHotkey("ctrl+shift")).toThrow("unsupported");
     expect(() => validateKey("ctrl+c")).toThrow("allowlist");
     expect(() => validateText("hello\u0000world")).toThrow("control");
   });

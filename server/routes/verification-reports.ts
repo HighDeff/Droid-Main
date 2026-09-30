@@ -202,18 +202,12 @@ function extractAfterScreenshots(execution: AssistantExecution): string[] {
 function processEvidence(execution: AssistantExecution, plan?: any): VerificationReport["evidence"] {
   return execution.evidence.map(evidence => {
     const step = plan?.steps.find(s => s.id === evidence.stepId);
-    const verificationStatus: VerificationReport["evidence"][number]["verificationStatus"] =
-      evidence.verification.status === "passed" ||
-      evidence.verification.status === "failed" ||
-      evidence.verification.status === "uncertain"
-        ? evidence.verification.status
-        : "uncertain";
     return {
       stepId: evidence.stepId,
       stepName: step?.title || `Step ${evidence.stepId}`,
       beforeImage: evidence.capture?.imageData,
       afterImage: evidence.capture?.imageData,
-      verificationStatus,
+      verificationStatus: evidence.verification.status,
       confidence: evidence.verification.confidence || 0,
       notes: evidence.analysis?.notes || [],
       annotations: extractAnnotations(evidence),

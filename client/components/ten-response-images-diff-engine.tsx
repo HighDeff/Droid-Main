@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Film,
   Camera,
@@ -18,11 +18,16 @@ import {
   Plus,
   ShieldAlert,
   Compass,
+  Clock,
+  Activity,
+  Bot,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { TemporalSnapshotBundle, getSavedSnapshotBundles } from "@/lib/temporal-action-buffer";
+import { toast } from "sonner";
 
 export interface SequenceStepItem {
   id: string;
@@ -88,10 +93,75 @@ export function TenResponseImagesDiffEngine({
   const [autoRepositionEnabled, setAutoRepositionEnabled] = useState<boolean>(true);
   const [isAnalyzingSlot, setIsAnalyzingSlot] = useState<number | null>(null);
   const [diffResults, setDiffResults] = useState<Record<number, DiffResultData>>({});
+  const [snapshotBundles, setSnapshotBundles] = useState<Record<number, TemporalSnapshotBundle>>({});
   const [autoPositionNotices, setAutoPositionNotices] = useState<
     Array<{ id: string; stepName: string; from: string; to: string; drift: string }>
   >([]);
   const [isAnalyzingAll, setIsAnalyzingAll] = useState<boolean>(false);
+  const [isRefiningPipeline, setIsRefiningPipeline] = useState<boolean>(false);
+
+  // Listen for live snapshot broadcasts from HUD & Action Ledger
+  useEffect(() => {
+    const handleAddSnapshot = (e: any) => {
+      const detail = e.detail;
+      if (detail?.imageUrl) {
+        const slot = typeof detail.slotIndex === "number" ? detail.slotIndex : selectedSlotIndex;
+        onUpdateResponseImage(slot, detail.imageUrl);
+        if (detail.bundle) {
+          setSnapshotBundles((prev) => ({ ...prev, [slot]: detail.bundle }));
+        }
+      }
+    };
+
+    // Load initial bundles from store
+    const bundles = getSavedSnapshotBundles();
+    if (bundles.length > 0) {
+      const initMap: Record<number, TemporalSnapshotBundle> = {};
+      bundles.forEach((b, i) => {
+        initMap[b.slotIndex || i] = b;
+      });
+      setSnapshotBundles(initMap);
+    }
+
+    window.addEventListener("add-10-screenshot", handleAddSnapshot);
+    return () => window.removeEventListener("add-10-screenshot", handleAddSnapshot);
+  }, [selectedSlotIndex, onUpdateResponseImage]);
+
+  // AI Refine Pipeline for Selected Slot
+  const handleRefinePipelineForSlot = async (slotIdx: number) => {
+    const step = sequence[slotIdx];
+    const postOpImg = responseImages[slotIdx] || currentLiveScreenshot;
+    setIsRefiningPipeline(true);
+    try {
+      toast.info(`⚡ Running AI Refine Pipeline on Slot #${slotIdx + 1}...`);
+      const res = await fetch("/api/dual-ai/pipeline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          screenshot: postOpImg,
+          goalPrompt: `Refine action execution for step: ${step?.name || `Step #${slotIdx + 1}`}, detect element drift and generate self-healed coordinates`,
+          confidence: 0.92,
+          autoExecute: false,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`✅ AI Refinement Complete! Recalibrated step #${slotIdx + 1}`);
+        if (step && data.steps && data.steps.length > 0) {
+          const suggested = data.steps[0];
+          if (suggested.x && suggested.y) {
+            onUpdateStepCoordinates(step.id, suggested.x, suggested.y);
+          }
+        }
+      } else {
+        toast.info("AI Refinement finished: Zero critical drift detected.");
+      }
+    } catch (err) {
+      toast.error(`Refinement failed: ${String(err)}`);
+    } finally {
+      setIsRefiningPipeline(false);
+    }
+  };
 
   // Perform Visual Error Detection & Difference Mapping for a single slot
   const handleAnalyzeSlot = async (slotIdx: number) => {
@@ -422,6 +492,16 @@ export function TenResponseImagesDiffEngine({
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
+                  onClick={() => handleRefinePipelineForSlot(selectedSlotIndex)}
+                  disabled={isRefiningPipeline}
+                  className="h-7 text-xs font-mono font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white gap-1 shadow-md"
+                  title="Run AI Vision Refine Pipeline on slot to heal drift and optimize next actions"
+                >
+                  <Sparkles className={`w-3 h-3 text-yellow-300 ${isRefiningPipeline ? "animate-spin" : ""}`} />
+                  {isRefiningPipeline ? "Refining..." : "⚡ AI Refine Pipeline"}
+                </Button>
+                <Button
+                  size="sm"
                   onClick={() => handleAnalyzeSlot(selectedSlotIndex)}
                   disabled={isAnalyzingSlot === selectedSlotIndex}
                   className="h-7 text-xs font-mono font-bold bg-cyan-600 hover:bg-cyan-500 text-white gap-1"
@@ -480,6 +560,78 @@ export function TenResponseImagesDiffEngine({
                 </div>
               </div>
             </div>
+
+            {/* Temporal Pre & Post 10-Second Action Ledger for Slot */}
+            {snapshotBundles[selectedSlotIndex] && (
+              <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-2 text-xs font-mono">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                  <div className="flex items-center gap-2 text-cyan-300 font-bold">
+                    <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Attached 10s Pre- & Post-Snapshot Action Buffer:</span>
+                  </div>
+                  <span className="text-[10px] text-slate-400">
+                    {snapshotBundles[selectedSlotIndex].actionsBefore10s.length} Pre-Actions •{" "}
+                    {snapshotBundles[selectedSlotIndex].actionsAfter10s.length} Post-Actions
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  {/* Pre-Snapshot 10s */}
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold text-amber-300 flex items-center gap-1">
+                      <span>⏪ 10s Prior to Snapshot:</span>
+                    </span>
+                    <div className="max-h-28 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
+                      {snapshotBundles[selectedSlotIndex].actionsBefore10s.length > 0 ? (
+                        snapshotBundles[selectedSlotIndex].actionsBefore10s.map((act) => (
+                          <div
+                            key={act.id}
+                            className="p-1.5 rounded bg-slate-950/80 border border-slate-800 text-[10px] flex items-center justify-between"
+                          >
+                            <div className="flex items-center gap-1.5 truncate">
+                              <Badge className={`text-[8px] px-1 py-0 ${act.source === "user" ? "bg-emerald-950 text-emerald-300" : act.source === "ai" ? "bg-cyan-950 text-cyan-300" : "bg-purple-950 text-purple-300"}`}>
+                                {act.source.toUpperCase()}
+                              </Badge>
+                              <span className="text-slate-300 truncate">{act.description}</span>
+                            </div>
+                            <span className="text-slate-500 text-[9px] shrink-0">{act.timeStr}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-[10px] text-slate-500 italic p-1">No recorded actions in prior 10 seconds.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Post-Snapshot 10s */}
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold text-cyan-300 flex items-center gap-1">
+                      <span>⏩ 10s After Snapshot:</span>
+                    </span>
+                    <div className="max-h-28 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
+                      {snapshotBundles[selectedSlotIndex].actionsAfter10s.length > 0 ? (
+                        snapshotBundles[selectedSlotIndex].actionsAfter10s.map((act) => (
+                          <div
+                            key={act.id}
+                            className="p-1.5 rounded bg-slate-950/80 border border-slate-800 text-[10px] flex items-center justify-between"
+                          >
+                            <div className="flex items-center gap-1.5 truncate">
+                              <Badge className={`text-[8px] px-1 py-0 ${act.source === "user" ? "bg-emerald-950 text-emerald-300" : act.source === "ai" ? "bg-cyan-950 text-cyan-300" : "bg-purple-950 text-purple-300"}`}>
+                                {act.source.toUpperCase()}
+                              </Badge>
+                              <span className="text-slate-300 truncate">{act.description}</span>
+                            </div>
+                            <span className="text-slate-500 text-[9px] shrink-0">{act.timeStr}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-[10px] text-slate-500 italic p-1">Capturing subsequent actions in 10-second window...</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Difference Mapping & Drift Metrics */}
             {activeDiff ? (

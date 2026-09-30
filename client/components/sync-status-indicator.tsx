@@ -134,15 +134,28 @@ export const SyncStatusIndicator: React.FC<SyncStatusIndicatorProps> = ({
     }
   };
 
+  const frameUrlRef = useRef(currentFrameUrl);
+  useEffect(() => {
+    frameUrlRef.current = currentFrameUrl;
+  }, [currentFrameUrl]);
+
   // Periodic AI Sync Polling
   useEffect(() => {
-    runAiSyncCheck();
-    if (autoPollInterval <= 0) return;
+    const timer = setTimeout(() => {
+      runAiSyncCheck();
+    }, 1000);
+
+    if (autoPollInterval <= 0) return () => clearTimeout(timer);
+
     const interval = setInterval(() => {
       runAiSyncCheck();
     }, autoPollInterval * 1000);
-    return () => clearInterval(interval);
-  }, [autoPollInterval, activeStepIndex, currentFrameUrl]);
+
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
+  }, [autoPollInterval, activeStepIndex]);
 
   // Status visual mapping
   const renderStatusBadge = () => {

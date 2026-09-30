@@ -69,6 +69,17 @@ analysisRouter.post("/", (async (req, res) => {
   return res.status(201).json({ success: true, analysis: created });
 }) as RequestHandler);
 
+analysisRouter.get("/", (req, res) => {
+  const captureId =
+    typeof req.query.captureId === "string" ? req.query.captureId : undefined;
+  const sessionId =
+    typeof req.query.sessionId === "string" ? req.query.sessionId : undefined;
+  res.json({
+    success: true,
+    analyses: analysisRepository.list(captureId, sessionId),
+  });
+});
+
 analysisRouter.get("/history", (req, res) => {
   const captureId =
     typeof req.query.captureId === "string" ? req.query.captureId : undefined;

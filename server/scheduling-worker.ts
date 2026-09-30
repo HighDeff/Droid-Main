@@ -53,7 +53,6 @@ class SchedulingWorker {
     priority: "high" | "medium" | "low" = "medium",
     estimatedDuration: number = 60000
   ): string {
-    this.start();
     const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     
     const task: ScheduledTask = {

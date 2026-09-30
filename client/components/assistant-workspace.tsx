@@ -170,7 +170,6 @@ export function AssistantWorkspace({
   const [calibrationBanner, setCalibrationBanner] = useState<string | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [isBridgePaused, setIsBridgePaused] = useState<boolean>(false);
-  const [debuggerScreenshot, setDebuggerScreenshot] = useState<string>();
 
   // Bridge Verification Utility: Sends a dummy ping command to PyAutoGUI Python Bridge
   const handleBridgePing = async () => {
@@ -299,7 +298,7 @@ export function AssistantWorkspace({
         steps,
         thresholdPx: driftThreshold,
       });
-      if (res.success) {
+      if (res.calibratedSteps) {
         setSteps(res.calibratedSteps);
         saveUnifiedSequence(res.calibratedSteps);
         window.dispatchEvent(
@@ -511,8 +510,13 @@ export function AssistantWorkspace({
           </div>
 
           <div className="hidden border-t border-white/10 p-4 lg:block">
-            <button className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-slate-400 hover:bg-white/5 hover:text-white">
-              <Settings2 className="h-4 w-4" />
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent("open-settings"));
+              }}
+              className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-slate-400 hover:bg-white/5 hover:text-white transition-colors cursor-pointer"
+            >
+              <Settings2 className="h-4 w-4 text-cyan-400" />
               <span className="text-sm">Workspace settings</span>
             </button>
           </div>
@@ -1052,7 +1056,6 @@ export function AssistantWorkspace({
                       initialSteps={steps}
                       driftThresholdPx={driftThreshold}
                       onStepSelect={(step) => setSelectedStepId(step.id)}
-                      screenshotUrl={debuggerScreenshot}
                     />
                   </div>
                 )}
@@ -1151,7 +1154,7 @@ export function AssistantWorkspace({
                 </div>
                 <InstructionPlanningPanel />
                 <div className="mt-6 space-y-5">
-                  <CaptureSourcePanel onCaptureFrame={setDebuggerScreenshot} />
+                  <CaptureSourcePanel />
                   <div>
                     <div className="mb-2 flex items-center justify-between">
                       <p className="text-xs font-medium text-slate-300">

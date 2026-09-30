@@ -23,6 +23,7 @@ export interface SystemLogEntry {
     | "Mobile-Automation"
     | "PC-PyAutoGUI"
     | "AI-FileSummary"
+    | "Main AI Executive"
     | "System";
   level: "INFO" | "WARN" | "ERROR" | "SUCCESS";
   message: string;

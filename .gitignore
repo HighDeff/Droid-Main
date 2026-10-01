@@ -10,3 +10,7 @@ coverage/
 "GameAI-MainApp-v2.5.0.apk"  
 "1"  
 "console.log('Server" 
+android-apk-project/
+dist/
+*.log
+*.tsbuildinfo

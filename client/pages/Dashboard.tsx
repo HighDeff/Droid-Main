@@ -145,6 +145,7 @@ import { InteractiveDeviceControlDeck } from "@/components/interactive-device-co
 import { GlobalSettingsModal, DEFAULT_MODEL_URL } from "@/components/global-settings-modal";
 import { CoordinateCalibrationModal } from "@/components/coordinate-calibration-modal";
 import { ThreeAiAgentsSquad } from "@/components/three-ai-agents-squad";
+import { MobileSettingsModal } from "@/components/mobile-settings-modal";
 export default function Dashboard({
   initialTab,
 }: { initialTab?: string } = {}) {
@@ -153,6 +154,7 @@ export default function Dashboard({
   const [isPaused, setIsPaused] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState(false);
+  const [isMobileSettingsModalOpen, setIsMobileSettingsModalOpen] = useState(false);
   const [configuredModelUrl, setConfiguredModelUrl] = useState<string>(() => {
     return typeof window !== "undefined"
       ? localStorage.getItem("ai_model_url") || DEFAULT_MODEL_URL
@@ -347,8 +349,10 @@ export default function Dashboard({
     window.addEventListener("forward-mobile-to-vision-hud", handleForwardMobileEvent);
     const handleOpenSettingsModal = () => setIsSettingsModalOpen(true);
     const handleOpenCalibrationModal = () => setIsCalibrationModalOpen(true);
+    const handleOpenMobileSettingsModal = () => setIsMobileSettingsModalOpen(true);
     window.addEventListener("open-settings", handleOpenSettingsModal);
     window.addEventListener("open-calibration", handleOpenCalibrationModal);
+    window.addEventListener("sightline-open-mobile-settings", handleOpenMobileSettingsModal);
     return () => {
       window.removeEventListener("ai-cursor-action", handleAiCursorEvent);
       window.removeEventListener("ai-switch-tab", handleAiSwitchTab);
@@ -358,6 +362,7 @@ export default function Dashboard({
       window.removeEventListener("forward-mobile-to-vision-hud", handleForwardMobileEvent);
       window.removeEventListener("open-settings", handleOpenSettingsModal);
       window.removeEventListener("open-calibration", handleOpenCalibrationModal);
+      window.removeEventListener("sightline-open-mobile-settings", handleOpenMobileSettingsModal);
     };
   }, []);
   const captureIntervalRef = useRef<number>();
@@ -2238,9 +2243,7 @@ export default function Dashboard({
                     toast.info("Cleared all sequence steps");
                   }}
                   onOpenMobileSettings={() => {
-                    if (typeof window !== "undefined") {
-                      window.dispatchEvent(new CustomEvent("sightline-open-mobile-settings"));
-                    }
+                    setIsMobileSettingsModalOpen(true);
                   }}
                 />
 
@@ -3487,6 +3490,11 @@ export default function Dashboard({
           activeSequence={sequence}
           onUpdateSequence={(newSeq) => setSequence(newSeq)}
           onRunSequence={handleRunSequence}
+        />
+        {/* Mobile Settings Modal */}
+        <MobileSettingsModal
+          open={isMobileSettingsModalOpen}
+          onOpenChange={setIsMobileSettingsModalOpen}
         />
       </main>
     </div>

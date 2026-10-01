@@ -56,7 +56,7 @@ export const HistoricalMouseTrailOverlay: React.FC<HistoricalMouseTrailOverlayPr
   onVerifyPath,
   onClose,
 }) => {
-  const [isMinimized, setIsMinimized] = useState<boolean>(false);
+  const [isMinimized, setIsMinimized] = useState<boolean>(true);
   const [opacity, setOpacity] = useState<number>(0.75);
   const [showVectors, setShowVectors] = useState<boolean>(true);
   const [showDeltas, setShowDeltas] = useState<boolean>(true);
@@ -314,9 +314,9 @@ export const HistoricalMouseTrailOverlay: React.FC<HistoricalMouseTrailOverlayPr
         </div>
       )}
 
-      {/* Floating Trail HUD Badge & Interactive Controls - Positioned at bottom-4 right-4 to avoid blocking HUD canvas toolbar buttons */}
+      {/* Floating Trail HUD Badge & Interactive Controls - Positioned at top-14 right-4 to avoid blocking HUD canvas toolbar buttons */}
       {isMinimized ? (
-        <div className="absolute bottom-4 right-4 pointer-events-auto bg-slate-950/95 border border-cyan-500/50 rounded-xl px-3 py-1.5 shadow-2xl backdrop-blur-md flex items-center gap-2 font-mono text-xs z-40 animate-in fade-in">
+        <div className="absolute top-14 right-4 pointer-events-auto bg-slate-950/95 border border-cyan-500/50 rounded-xl px-3 py-1.5 shadow-2xl backdrop-blur-md flex items-center gap-2 font-mono text-xs z-40 animate-in fade-in">
           <Layers className="w-3.5 h-3.5 text-cyan-400" />
           <span className="text-[11px] font-bold text-slate-200">Historical Trail</span>
           <Badge className="text-[9px] bg-cyan-950 text-cyan-300 border-cyan-700">
@@ -340,7 +340,7 @@ export const HistoricalMouseTrailOverlay: React.FC<HistoricalMouseTrailOverlayPr
           )}
         </div>
       ) : (
-        <div className="absolute bottom-4 right-4 pointer-events-auto bg-slate-950/95 border border-cyan-500/40 rounded-xl p-2.5 shadow-2xl backdrop-blur-md flex flex-col gap-2 font-mono text-xs max-w-xs z-40 animate-in fade-in">
+        <div className="absolute top-14 right-4 pointer-events-auto bg-slate-950/95 border border-cyan-500/40 rounded-xl p-2.5 shadow-2xl backdrop-blur-md flex flex-col gap-2 font-mono text-xs max-w-xs z-40 animate-in fade-in">
           <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 gap-2">
             <span className="font-bold text-slate-100 flex items-center gap-1.5 truncate">
               <Layers className="w-3.5 h-3.5 text-cyan-400 shrink-0" />

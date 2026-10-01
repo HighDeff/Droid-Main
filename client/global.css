@@ -142,3 +142,23 @@
   transform-origin: center;
 }
 
+/* Lucide icons SVG fix - ensure proper rendering */
+svg.lucide,
+[data-lucide] {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+button svg,
+[role="button"] svg {
+  pointer-events: none;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+

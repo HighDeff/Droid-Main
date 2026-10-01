@@ -3052,17 +3052,20 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                   Step Forward
                 </Button>
 
-                {sequence.length > 0 && (
-                  <Button
-                    size="sm"
-                    onClick={handleClearSteps}
-                    className="h-7 px-2.5 text-[11px] font-bold bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-500/50 shadow-md gap-1"
-                    title="Clear all recorded sequence steps"
-                  >
-                    <Trash2 className="w-3 h-3 text-rose-400" />
-                    Clear Steps ({sequence.length})
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  onClick={handleClearSteps}
+                  disabled={sequence.length === 0}
+                  className={`h-7 px-2.5 text-[11px] font-bold border gap-1 transition-all ${
+                    sequence.length > 0
+                      ? "bg-rose-950/90 hover:bg-rose-900 text-rose-300 border-rose-500/60 shadow-md"
+                      : "bg-slate-900/60 text-slate-500 border-slate-800 cursor-not-allowed"
+                  }`}
+                  title="Clear all recorded sequence steps"
+                >
+                  <Trash2 className={`w-3 h-3 ${sequence.length > 0 ? "text-rose-400" : "text-slate-600"}`} />
+                  Clear Steps ({sequence.length})
+                </Button>
 
                 <Button
                   size="sm"
@@ -3817,18 +3820,21 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             <span>CLEAN STATE RESET</span>
           </Button>
 
-          {/* Clear Steps Button */}
-          {sequence.length > 0 && (
-            <Button
-              size="sm"
-              onClick={handleClearSteps}
-              className="h-7 px-2.5 text-xs font-mono font-bold bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-500/50 shadow-md shadow-rose-950/50 gap-1"
-              title="Clear all recorded sequence steps"
-            >
-              <Trash2 className="w-3 h-3 text-rose-400" />
-              <span>CLEAR STEPS ({sequence.length})</span>
-            </Button>
-          )}
+          {/* Clear Steps Button - Always visible in HUD toolbar */}
+          <Button
+            size="sm"
+            onClick={handleClearSteps}
+            disabled={sequence.length === 0}
+            className={`h-7 px-2.5 text-xs font-mono font-bold border gap-1 transition-all ${
+              sequence.length > 0
+                ? "bg-rose-950/90 hover:bg-rose-900 text-rose-300 border-rose-500/60 shadow-md shadow-rose-950/50"
+                : "bg-slate-900/60 text-slate-500 border-slate-800 cursor-not-allowed"
+            }`}
+            title="Clear all recorded sequence steps"
+          >
+            <Trash2 className={`w-3 h-3 ${sequence.length > 0 ? "text-rose-400" : "text-slate-600"}`} />
+            <span>CLEAR STEPS ({sequence.length})</span>
+          </Button>
 
           {/* Auto-Calibration Button */}
           <Button

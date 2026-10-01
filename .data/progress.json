@@ -33,5 +33,12 @@
     "id": "progress_1790726073869_yeaeuqr3",
     "sessionId": "session_1790726073853_bpwnqcqh",
     "createdAt": "2026-09-29T23:54:33.869Z"
+  },
+  {
+    "kind": "progress",
+    "message": "Stored on disk",
+    "id": "progress_1790744738342_pg83rap5",
+    "sessionId": "session_1790744738312_8yt6a83e",
+    "createdAt": "2026-09-30T05:05:38.342Z"
   }
 ]

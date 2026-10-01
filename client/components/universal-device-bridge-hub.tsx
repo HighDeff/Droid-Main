@@ -436,6 +436,8 @@ export function UniversalDeviceBridgeHub({
   const phonePreviewRef = useRef<HTMLDivElement | null>(null);
   const [customMobileUrl, setCustomMobileUrl] = useState<string>("");
   const [detectedLanIp, setDetectedLanIp] = useState<string>("");
+  const [qrPairingMode, setQrPairingMode] = useState<"standard" | "backup_apk">("standard");
+  const [networkInterfaces, setNetworkInterfaces] = useState<{ name: string; address: string }[]>([]);
   const [isMobileSettingsModalOpen, setIsMobileSettingsModalOpen] = useState<boolean>(false);
   const [isApkModalOpen, setIsApkModalOpen] = useState<boolean>(false);
 
@@ -445,6 +447,9 @@ export function UniversalDeviceBridgeHub({
       .then((data) => {
         if (data.success && data.lanIp) {
           setDetectedLanIp(data.lanIp);
+          if (Array.isArray(data.allInterfaces)) {
+            setNetworkInterfaces(data.allInterfaces);
+          }
           if (
             typeof window !== "undefined" &&
             (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
@@ -462,7 +467,13 @@ export function UniversalDeviceBridgeHub({
     return () => window.removeEventListener("sightline-open-mobile-settings", handleOpenSettings);
   }, []);
 
-  const mobileLinkUrl = customMobileUrl || (typeof window !== "undefined" ? `${window.location.origin}/api/mobile-remote` : "");
+  const mobileLinkUrl =
+    customMobileUrl ||
+    (detectedLanIp
+      ? `http://${detectedLanIp}:3000/mobile-remote`
+      : typeof window !== "undefined"
+      ? `${window.location.origin}/mobile-remote`
+      : "");
 
   // Fetch workflows
   const fetchWorkflows = useCallback(async () => {
@@ -1838,28 +1849,109 @@ export function UniversalDeviceBridgeHub({
             {/* Left Column: QR Code + Connection info */}
             <div className="lg:col-span-4 space-y-3">
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col items-center justify-center space-y-2.5 text-center shadow-md">
-                <div className="p-2.5 rounded-xl bg-white border-2 border-emerald-500/40 shadow-xl">
+                {/* Pairing Mode Switcher: Standard Web vs Backup APK Scanner */}
+                <div className="flex w-full rounded-lg bg-slate-900 p-0.5 border border-slate-800 text-[10px]">
+                  <button
+                    onClick={() => setQrPairingMode("standard")}
+                    className={`flex-1 py-1 px-2 rounded-md font-bold transition-all flex items-center justify-center gap-1 ${
+                      qrPairingMode === "standard"
+                        ? "bg-emerald-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <Smartphone className="w-3 h-3" /> Standard Web
+                  </button>
+                  <button
+                    onClick={() => setQrPairingMode("backup_apk")}
+                    className={`flex-1 py-1 px-2 rounded-md font-bold transition-all flex items-center justify-center gap-1 ${
+                      qrPairingMode === "backup_apk"
+                        ? "bg-cyan-600 text-white shadow-sm ring-1 ring-cyan-400"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <Zap className="w-3 h-3" /> Backup APK Scan
+                  </button>
+                </div>
+
+                <div
+                  className={`p-2.5 rounded-xl bg-white border-2 shadow-xl transition-all ${
+                    qrPairingMode === "backup_apk"
+                      ? "border-cyan-500 shadow-cyan-950/50"
+                      : "border-emerald-500/40"
+                  }`}
+                >
                   <QRCodeSVG
-                    value={mobileLinkUrl}
-                    size={130}
+                    value={
+                      qrPairingMode === "backup_apk"
+                        ? JSON.stringify({
+                            app: "sightline",
+                            url: mobileLinkUrl,
+                            host: detectedLanIp || "192.168.1.162",
+                            port: 3000,
+                          })
+                        : mobileLinkUrl
+                    }
+                    size={135}
                     level="M"
                     includeMargin={false}
                   />
                 </div>
                 <div className="space-y-1.5 w-full">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
-                      <Smartphone className="w-3.5 h-3.5" /> Scan to Beam Screen
+                    <span
+                      className={`text-[11px] font-bold flex items-center gap-1 ${
+                        qrPairingMode === "backup_apk" ? "text-cyan-400" : "text-emerald-400"
+                      }`}
+                    >
+                      {qrPairingMode === "backup_apk" ? (
+                        <>
+                          <Zap className="w-3.5 h-3.5 text-cyan-400 animate-pulse" /> APK Camera Pairing
+                        </>
+                      ) : (
+                        <>
+                          <Smartphone className="w-3.5 h-3.5" /> Scan to Beam Screen
+                        </>
+                      )}
                     </span>
                     {detectedLanIp && (
-                      <Badge className="bg-emerald-950/80 text-emerald-300 border-emerald-700/60 text-[8px] font-mono">
+                      <Badge
+                        className={`text-[8px] font-mono ${
+                          qrPairingMode === "backup_apk"
+                            ? "bg-cyan-950 text-cyan-300 border-cyan-700/60"
+                            : "bg-emerald-950/80 text-emerald-300 border-emerald-700/60"
+                        }`}
+                      >
                         LAN: {detectedLanIp}
                       </Badge>
                     )}
                   </div>
                   <p className="text-[10px] text-slate-400">
-                    Open on your phone to stream live screen & receive AI automations.
+                    {qrPairingMode === "backup_apk"
+                      ? "In your Android APK, tap [📷 Scan QR] and point camera here to auto-pair!"
+                      : "Open on your phone to stream live screen & receive AI automations."}
                   </p>
+
+                  {/* Network Adapter IP Selector if multiple adapters detected */}
+                  {networkInterfaces.length > 1 && (
+                    <div className="flex items-center gap-1 w-full text-[10px] bg-slate-900/80 border border-slate-800 rounded px-1.5 py-1">
+                      <span className="text-slate-400 text-[9px] shrink-0">IP:</span>
+                      <select
+                        value={detectedLanIp}
+                        onChange={(e) => {
+                          const ip = e.target.value;
+                          setDetectedLanIp(ip);
+                          setCustomMobileUrl(`http://${ip}:3000/mobile-remote`);
+                        }}
+                        className="flex-1 bg-transparent text-cyan-300 font-mono text-[9px] outline-none cursor-pointer"
+                      >
+                        {networkInterfaces.map((iface, idx) => (
+                          <option key={idx} value={iface.address} className="bg-slate-900 text-slate-200">
+                            {iface.name}: {iface.address}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   <div className="flex gap-1 items-center">
                     <Input

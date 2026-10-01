@@ -13,14 +13,16 @@ Response.prototype.json = async function () {
     try {
       return JSON.parse(text);
     } catch {
+      const isHtml = text.includes("<!doctype") || text.includes("<html") || text.includes("<!DOCTYPE");
       const cleanMsg =
-        text.length < 150 && !text.includes("<!doctype") && !text.includes("<html")
+        text.length < 150 && !isHtml
           ? text.trim()
           : `Non-JSON response (HTTP ${this.status})`;
       return {
-        success: false,
+        success: this.ok && !isHtml,
         status: this.status,
-        error: cleanMsg,
+        message: cleanMsg,
+        error: this.ok && !isHtml ? undefined : cleanMsg,
         rawText: text.slice(0, 300),
       };
     }

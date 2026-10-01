@@ -8,7 +8,7 @@ import {
   handleOmniSwitchTab,
   SYSTEM_TABS,
 } from "./omni-ai-controller";
-import { detectScreenElementsAndSteps } from "../ai-gemini-service";
+import { detectScreenElementsAndSteps, getGenAIClient, setGeminiCooldown } from "../ai-gemini-service";
 
 export interface ChatMessage {
   id: string;
@@ -443,7 +443,20 @@ async function executeToolCall(name: string, args: any, currentScreenSnapshot?: 
 
     case "open_app": {
       const { package: pkg, appName, appUrl } = args;
-      const targetPkg = pkg || (appName.toLowerCase().includes("chrome") ? "com.android.chrome" : "com.android.settings");
+      const lowerApp = (appName || pkg || "").toLowerCase();
+      let targetPkg = pkg;
+      let matchedApp = appName || "Application";
+
+      if (!targetPkg) {
+        if (lowerApp.includes("calc")) { targetPkg = "com.android.calculator2"; matchedApp = "Calculator"; }
+        else if (lowerApp.includes("note") || lowerApp.includes("memo")) { targetPkg = "com.google.android.keep"; matchedApp = "Notes"; }
+        else if (lowerApp.includes("cam") || lowerApp.includes("photo")) { targetPkg = "com.android.camera2"; matchedApp = "Camera"; }
+        else if (lowerApp.includes("setting")) { targetPkg = "com.android.settings"; matchedApp = "Settings"; }
+        else if (lowerApp.includes("term")) { targetPkg = "com.termux"; matchedApp = "Terminal"; }
+        else if (lowerApp.includes("file")) { targetPkg = "com.android.documentsui"; matchedApp = "Files"; }
+        else if (lowerApp.includes("yout")) { targetPkg = "com.google.android.youtube"; matchedApp = "YouTube"; }
+        else { targetPkg = "com.android.chrome"; matchedApp = "Chrome"; }
+      }
 
       const adbResult = await executeAdbCommand([
         "shell",
@@ -458,8 +471,9 @@ async function executeToolCall(name: string, args: any, currentScreenSnapshot?: 
       queueMobileAction({
         type: "open_app",
         package: targetPkg,
+        appName: matchedApp,
         appUrl: appUrl || `https://${targetPkg}`,
-        description: `Open App: ${appName || targetPkg}`,
+        description: `Open App: ${matchedApp || targetPkg}`,
       });
 
       return {
@@ -467,8 +481,8 @@ async function executeToolCall(name: string, args: any, currentScreenSnapshot?: 
           success: true,
           action: "open_app",
           package: targetPkg,
-          appName: appName || targetPkg,
-          details: `Dispatched launch event for ${appName || targetPkg}`,
+          appName: matchedApp,
+          details: `Dispatched launch event for ${matchedApp} (${targetPkg})`,
           adbResult,
         },
       };
@@ -620,16 +634,9 @@ mainAiChatRouter.post("/api/ai/main-chat/message", async (req, res) => {
     let assistantReply = "";
 
     if (apiKey) {
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            "User-Agent": "aistudio-build",
-          },
-        },
-      });
-
-      const systemInstruction = `You are the executive Main AI Copilot for a Unified Automation & Live Screen Control Platform.
+      const ai = getGenAIClient();
+      if (ai) {
+        const systemInstruction = `You are the executive Main AI Copilot for a Unified Automation & Live Screen Control Platform.
 You have direct control over:
 1. Live Desktop & Mobile streams
 2. Hardware input drivers (PyAutoGUI, Android ADB, Mouse Drift & Variator)
@@ -648,66 +655,71 @@ Instructions:
 - If asked to minimize the phone app or go home on mobile, call 'execute_key' with key="HOME".
 - Format your response with clean Markdown, bold highlights, bullet points, and execution summaries.`;
 
-      // Build recent conversation turns for context
-      const historyContents: any[] = session.messages.slice(-8).map((m) => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-      }));
+        // Build recent conversation turns for context
+        const historyContents: any[] = session.messages.slice(-8).map((m) => ({
+          role: m.role === "assistant" ? "model" : "user",
+          parts: [{ text: m.content }],
+        }));
 
-      try {
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: historyContents,
-          config: {
-            systemInstruction,
-            tools: [{ functionDeclarations: allTools }],
-          },
-        });
-
-        const functionCalls = response.functionCalls;
-
-        if (functionCalls && functionCalls.length > 0) {
-          for (const call of functionCalls) {
-            const toolExec = await executeToolCall(call.name, call.args, currentScreenSnapshot);
-            executedInvocations.push({
-              name: call.name,
-              args: call.args,
-              result: toolExec.result,
-              status: toolExec.result.success ? "success" : "error",
-            });
-
-            if (toolExec.extra?.createdWorkflow) {
-              createdWorkflowData = toolExec.extra.createdWorkflow;
-            }
-            if (toolExec.extra?.navigationTarget) {
-              navTarget = toolExec.extra.navigationTarget;
-            }
-          }
-
-          // Follow-up generation with tool execution summary
-          const toolSummaryText = executedInvocations
-            .map((inv) => `Tool [${inv.name}]: ${JSON.stringify(inv.result)}`)
-            .join("\n");
-
-          const secondPass = await ai.models.generateContent({
+        try {
+          const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
-            contents: [
-              ...historyContents,
-              {
-                role: "user",
-                parts: [{ text: `The tools executed with the following results:\n${toolSummaryText}\nPlease summarize the results and provide next steps to the user.` }],
-              },
-            ],
-            config: { systemInstruction },
+            contents: historyContents,
+            config: {
+              systemInstruction,
+              tools: [{ functionDeclarations: allTools }],
+            },
           });
 
-          assistantReply = secondPass.text || `Executed ${executedInvocations.length} action(s) successfully.`;
-        } else {
-          assistantReply = response.text || "Command processed.";
+          const functionCalls = response.functionCalls;
+
+          if (functionCalls && functionCalls.length > 0) {
+            for (const call of functionCalls) {
+              const toolExec = await executeToolCall(call.name, call.args, currentScreenSnapshot);
+              executedInvocations.push({
+                name: call.name,
+                args: call.args,
+                result: toolExec.result,
+                status: toolExec.result.success ? "success" : "error",
+              });
+
+              if (toolExec.extra?.createdWorkflow) {
+                createdWorkflowData = toolExec.extra.createdWorkflow;
+              }
+              if (toolExec.extra?.navigationTarget) {
+                navTarget = toolExec.extra.navigationTarget;
+              }
+            }
+
+            // Follow-up generation with tool execution summary
+            const toolSummaryText = executedInvocations
+              .map((inv) => `Tool [${inv.name}]: ${JSON.stringify(inv.result)}`)
+              .join("\n");
+
+            const secondPass = await ai.models.generateContent({
+              model: "gemini-2.5-flash",
+              contents: [
+                ...historyContents,
+                {
+                  role: "user",
+                  parts: [{ text: `The tools executed with the following results:\n${toolSummaryText}\nPlease summarize the results and provide next steps to the user.` }],
+                },
+              ],
+              config: { systemInstruction },
+            });
+
+            assistantReply = secondPass.text || `Executed ${executedInvocations.length} action(s) successfully.`;
+          } else {
+            assistantReply = response.text || "Command processed.";
+          }
+        } catch (geminiError: any) {
+          setGeminiCooldown(20);
+          console.warn("[Main AI Chat] Gemini API limit or error encountered, seamlessly utilizing intelligent deterministic engine:", geminiError?.message || geminiError);
+          // Fallback to intelligent deterministic parser
+          assistantReply = await fallbackIntentExecution(message, executedInvocations, (wf) => (createdWorkflowData = wf), (nav) => (navTarget = nav), currentScreenSnapshot);
         }
-      } catch (geminiError: any) {
-        console.error("Gemini live execution error:", geminiError);
-        // Fallback to intelligent deterministic parser
+      } else {
+        // Cooldown or deterministic fallback
         assistantReply = await fallbackIntentExecution(message, executedInvocations, (wf) => (createdWorkflowData = wf), (nav) => (navTarget = nav), currentScreenSnapshot);
       }
     } else {
@@ -776,6 +788,50 @@ async function fallbackIntentExecution(
     const res = await executeToolCall("execute_key", { key: "BACK", description: "Navigate Back a Page / Step" });
     invocations.push({ name: "execute_key", args: { key: "BACK" }, result: res.result, status: "success" });
     return "◀ **Navigated Back a Page**\n\n- Sent hardware `KEYCODE_BACK` (Android keycode 4 / Browser Back / Esc).\n- Restored previous page in browser history or returned to parent menu.";
+  }
+
+  if (
+    lower.includes("open") ||
+    lower.includes("launch") ||
+    lower.includes("start app") ||
+    lower.includes("switch app") ||
+    lower.includes("chrome") ||
+    lower.includes("calc") ||
+    lower.includes("note") ||
+    lower.includes("camera") ||
+    lower.includes("setting") ||
+    lower.includes("terminal") ||
+    lower.includes("file") ||
+    lower.includes("youtube")
+  ) {
+    let appName = "Google Chrome";
+    let pkg = "com.android.chrome";
+    if (lower.includes("calc")) {
+      appName = "Calculator";
+      pkg = "com.android.calculator2";
+    } else if (lower.includes("note") || lower.includes("memo")) {
+      appName = "Notes";
+      pkg = "com.google.android.keep";
+    } else if (lower.includes("cam") || lower.includes("photo")) {
+      appName = "Camera";
+      pkg = "com.android.camera2";
+    } else if (lower.includes("setting")) {
+      appName = "Settings";
+      pkg = "com.android.settings";
+    } else if (lower.includes("term")) {
+      appName = "Terminal";
+      pkg = "com.termux";
+    } else if (lower.includes("file")) {
+      appName = "Files";
+      pkg = "com.android.documentsui";
+    } else if (lower.includes("yout")) {
+      appName = "YouTube";
+      pkg = "com.google.android.youtube";
+    }
+
+    const res = await executeToolCall("open_app", { appName, package: pkg });
+    invocations.push({ name: "open_app", args: { appName, package: pkg }, result: res.result, status: "success" });
+    return `📱 **Launched App: ${appName}**\n\n- Package: \`${pkg}\`\n- Dispatched intent launcher to active phone/desktop bridge.\n- Active mirror view transitioned to **${appName}**.`;
   }
 
   if (lower.includes("switch") || lower.includes("tab") || lower.includes("go to") || lower.includes("open tab")) {

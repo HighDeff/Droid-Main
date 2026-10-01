@@ -217,12 +217,7 @@ export const handleAutoActorTrigger: RequestHandler = async (req, res) => {
       similarityScore: 0.9,
       reason: "Visual state verified.",
       identifiedElements: ["Screen Interface"],
-      suggestedNextStep: step || {
-        action: "click",
-        x: 960,
-        y: 540,
-        name: "Auto-Act Next Step",
-      },
+      suggestedNextStep: step || undefined,
     };
 
     if (currentScreen && expectedScreen) {
@@ -235,8 +230,8 @@ export const handleAutoActorTrigger: RequestHandler = async (req, res) => {
     }
 
     let executionResult: any = null;
-    if (autoActEnabled && matchResult.matched) {
-      const targetStep = step || matchResult.suggestedNextStep;
+    const targetStep = step || matchResult.suggestedNextStep;
+    if (autoActEnabled && matchResult.matched && targetStep && (targetStep.x !== undefined || targetStep.y !== undefined)) {
       centralLogHub.addLog(
         "AI-AutoActor",
         "SUCCESS",
@@ -246,8 +241,8 @@ export const handleAutoActorTrigger: RequestHandler = async (req, res) => {
       executionResult = await dispatchActionToPython({
         title: `Auto-Act: ${targetStep.name || targetStep.action}`,
         action: targetStep.action || "click",
-        x: targetStep.x || 960,
-        y: targetStep.y || 540,
+        x: targetStep.x ?? 960,
+        y: targetStep.y ?? 540,
         textPayload: targetStep.text,
         keyPayload: targetStep.keyPayload,
         delayMs: targetStep.delayMs || 400,

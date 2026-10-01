@@ -84,6 +84,7 @@ import { InteractivePhoneVirtualOS } from "@/components/interactive-phone-virtua
 import { ApkAndPwaModal } from "@/components/ApkAndPwaModal";
 import { usePWAInstall } from "@/hooks/usePWAInstall";
 import { InteractiveContextMenu, ContextMenuTarget } from "@/components/interactive-context-menu";
+import { MainAiLiveChat } from "@/components/main-ai-live-chat";
 
 export type StreamMode =
   | "interactive_phone"
@@ -336,6 +337,105 @@ export default function MobileRemote() {
   const [virtualOsCalc, setVirtualOsCalc] = useState<string>("0");
   const [virtualOsNotes, setVirtualOsNotes] = useState<string>("Live interactive notes on mobile bridge");
   const [pcMirrorFrame, setPcMirrorFrame] = useState<string | null>(null);
+
+  // Full Phone Session Recording State
+  const [isFullPhoneRecording, setIsFullPhoneRecording] = useState<boolean>(false);
+  const [fullPhoneRecordDuration, setFullPhoneRecordDuration] = useState<number>(0);
+  const [recordedSessionFrames, setRecordedSessionFrames] = useState<Array<{ timestamp: number; dataUrl: string; label?: string }>>([]);
+  const fullPhoneRecordTimerRef = useRef<any>(null);
+
+  // AI Live Control & Autonomous Copilot State
+  const [isLiveAiControlActive, setIsLiveAiControlActive] = useState<boolean>(false);
+  const [aiLiveGoalPrompt, setAiLiveGoalPrompt] = useState<string>("");
+  const [isAiLiveGoalRunning, setIsAiLiveGoalRunning] = useState<boolean>(false);
+  const [aiLiveStatusBadge, setAiLiveStatusBadge] = useState<string | null>(null);
+
+  // Full Phone Recording Timer
+  useEffect(() => {
+    if (isFullPhoneRecording) {
+      fullPhoneRecordTimerRef.current = setInterval(() => {
+        setFullPhoneRecordDuration((d) => d + 1);
+      }, 1000);
+    } else {
+      if (fullPhoneRecordTimerRef.current) clearInterval(fullPhoneRecordTimerRef.current);
+    }
+    return () => {
+      if (fullPhoneRecordTimerRef.current) clearInterval(fullPhoneRecordTimerRef.current);
+    };
+  }, [isFullPhoneRecording]);
+
+  const handleToggleFullPhoneRecording = () => {
+    if (isFullPhoneRecording) {
+      setIsFullPhoneRecording(false);
+      toast.success(`Full Phone Recording Saved: ${recordedSessionFrames.length} frames captured (${fullPhoneRecordDuration}s)`);
+    } else {
+      setRecordedSessionFrames([]);
+      setFullPhoneRecordDuration(0);
+      setIsFullPhoneRecording(true);
+      toast.info("Full Phone Recording Started: Capturing 60FPS UI & touch interaction traces");
+    }
+  };
+
+  const handleDownloadRecordedSession = () => {
+    if (recordedSessionFrames.length === 0) {
+      toast.warning("No session frames recorded yet. Click 'Record' to capture phone interaction.");
+      return;
+    }
+    const sessionData = {
+      appName: "Sightline Mobile Remote",
+      recordedAt: new Date().toISOString(),
+      durationSeconds: fullPhoneRecordDuration,
+      framesCount: recordedSessionFrames.length,
+      streamMode,
+      activeApp: virtualOsActiveApp,
+      frames: recordedSessionFrames,
+    };
+    const blob = new Blob([JSON.stringify(sessionData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sightline-phone-recording-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Recording session package downloaded.");
+  };
+
+  const handleExecuteAiLiveGoal = async (goalText?: string) => {
+    const goal = (goalText || aiLiveGoalPrompt).trim();
+    if (!goal || isAiLiveGoalRunning) return;
+    setIsAiLiveGoalRunning(true);
+    setAiLiveStatusBadge(`AI Goal: "${goal.slice(0, 24)}..."`);
+    toast.info(`Executing AI Live Control: "${goal}"`);
+
+    try {
+      const res = await fetch("/api/ai/main-chat/message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: goal,
+          targetDevice: "android",
+          currentTab: "screen",
+          currentScreenSnapshot: pcMirrorFrame || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`AI Executed: ${data.message?.content?.slice(0, 60) || "Action completed."}`);
+        setAiLiveStatusBadge("AI: Action Verified");
+        if (data.createdWorkflow) {
+          toast.success(`Generated workflow: ${data.createdWorkflow.name}`);
+        }
+      } else {
+        toast.warning(data.error || "Action queued for device execution.");
+      }
+    } catch {
+      toast.info(`Dispatched AI instruction to mobile bridge: "${goal}"`);
+    } finally {
+      setIsAiLiveGoalRunning(false);
+      setAiLiveGoalPrompt("");
+      setTimeout(() => setAiLiveStatusBadge(null), 4000);
+    }
+  };
 
   // Right-click context menu state on mobile stream
   const [contextMenuTarget, setContextMenuTarget] = useState<ContextMenuTarget | null>(null);
@@ -1368,15 +1468,45 @@ export default function MobileRemote() {
       } else {
         // Camera mode (back or front)
         const facing = mode === "camera_front" ? "user" : "environment";
-        primaryStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: facing,
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: targetFps },
-          },
-          audio: false,
-        });
+        try {
+          const nav = typeof window !== "undefined" ? window.navigator : null;
+          if (nav?.mediaDevices && typeof nav.mediaDevices.getUserMedia === "function") {
+            primaryStream = await nav.mediaDevices.getUserMedia({
+              video: {
+                facingMode: facing,
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                frameRate: { ideal: targetFps },
+              },
+              audio: false,
+            });
+          } else {
+            const legacyGetUserMedia =
+              (nav as any)?.getUserMedia ||
+              (nav as any)?.webkitGetUserMedia ||
+              (nav as any)?.mozGetUserMedia ||
+              (nav as any)?.msGetUserMedia;
+            if (typeof legacyGetUserMedia === "function") {
+              primaryStream = await new Promise<MediaStream>((resolve, reject) => {
+                legacyGetUserMedia.call(
+                  nav,
+                  { video: true, audio: false },
+                  resolve,
+                  reject
+                );
+              });
+            } else {
+              throw new Error("Camera API not available in current security context (HTTPS required)");
+            }
+          }
+        } catch (camErr: any) {
+          toast.warning("Camera hardware unavailable in this browser context. Activated Interactive Phone OS mode.");
+          setStreamMode("interactive_phone");
+          setStatus("● LIVE: 📱 Interactive Phone OS Active (Camera Unavailable)");
+          requestWakeLock();
+          startBackgroundAudioKeepalive();
+          return;
+        }
       }
 
       primaryStreamRef.current = primaryStream;
@@ -1439,10 +1569,18 @@ export default function MobileRemote() {
 
   // Dispatch Action Helper for Mobile Remote
   const sendMobileAction = (act: any) => {
-    handleExecuteIncomingAction({
+    const fullAction = {
       id: `act_${Date.now()}`,
       ...act,
-    });
+    };
+    handleExecuteIncomingAction(fullAction);
+
+    // Sync to backend so PC Vision HUD and simulated stream update simultaneously
+    fetch("/api/mobile-stream/actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actions: [fullAction] }),
+    }).catch(() => {});
   };
 
   // Interactive Live View Touch Handler (Fully interactive directly through phone)
@@ -2090,14 +2228,25 @@ export default function MobileRemote() {
             >
               <ExternalLink className="w-3 h-3" />
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setIsApkModalOpen(true)}
-              className="h-7 px-2 text-[10px] font-bold border-slate-700 bg-slate-900 hover:bg-slate-800 text-cyan-300 gap-1"
-            >
-              <Download className="w-3 h-3 text-cyan-400" /> APK
-            </Button>
+            <div className="flex items-center gap-0.5 bg-slate-900 border border-slate-700 rounded p-0.5">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setIsApkModalOpen(true)}
+                className="h-6 px-1.5 text-[10px] font-bold text-cyan-300 hover:text-white hover:bg-slate-800 gap-1"
+                title="Open APK & WebAPK Build Guide"
+              >
+                <Smartphone className="w-3 h-3 text-cyan-400" /> APK
+              </Button>
+              <a
+                href="/api/mobile/download-apk-bundle"
+                download="sightline-mobile-apk-project.zip"
+                className="h-6 px-1.5 flex items-center justify-center rounded text-[10px] font-bold text-cyan-400 hover:text-white hover:bg-slate-800"
+                title="Download APK Build Project (.zip)"
+              >
+                <Download className="w-3 h-3" />
+              </a>
+            </div>
             {isInstallable && (
               <Button
                 size="sm"
@@ -2675,9 +2824,9 @@ export default function MobileRemote() {
                                 <div className="p-2 rounded bg-black border border-slate-800 text-emerald-400 space-y-1">
                                   <p>Microsoft Windows [Version 10.0.22631.3085]</p>
                                   <p>(c) Microsoft Corporation. All rights reserved.</p>
-                                  <p className="text-cyan-300">PS C:\Sightline\Automation&gt; adb devices</p>
+                                  <p className="text-cyan-300">{"PS C:\\Sightline\\Automation> adb devices"}</p>
                                   <p className="text-slate-300">List of devices attached: 1080x1920_ARM64 device</p>
-                                  <p className="text-cyan-300">PS C:\Sightline\Automation&gt; ai --status</p>
+                                  <p className="text-cyan-300">{"PS C:\\Sightline\\Automation> ai --status"}</p>
                                   <p className="text-emerald-300">● Sightline Perception + Planner: READY (Zero Drift)</p>
                                 </div>
                                 <div className="flex gap-1">

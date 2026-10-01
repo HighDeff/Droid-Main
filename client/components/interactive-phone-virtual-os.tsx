@@ -101,6 +101,40 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
   const [navStack, setNavStack] = useState<Array<VirtualPhoneState["activeApp"]>>(["home"]);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [touchRipples, setTouchRipples] = useState<Array<{ id: string; x: number; y: number }>>([]);
+  const lastLocalActionTimeRef = useRef<number>(0);
+
+  // Sync state helper to broadcast app switch to server & desktop HUD immediately
+  const syncStateToServer = async (targetApp: string, extra?: Record<string, any>) => {
+    lastLocalActionTimeRef.current = Date.now();
+    try {
+      fetch("/api/virtual-os/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          activeApp: targetApp,
+          chromeUrl,
+          chromeQuery: chromeSearch,
+          calcDisplay,
+          notesContent: notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"),
+          settingsWifi: settings.wifi,
+          settingsBluetooth: settings.bluetooth,
+          ...extra,
+        }),
+      }).catch(() => {});
+
+      fetch("/api/mobile-stream/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: {
+            type: "open_app",
+            appName: targetApp,
+            description: `App switch to ${targetApp}`,
+          },
+        }),
+      }).catch(() => {});
+    } catch {}
+  };
 
   // Multi-Level Navigation History States
   const [chromeUrl, setChromeUrl] = useState("https://google.com");
@@ -249,8 +283,12 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
 
     window.addEventListener("sightline-virtual-os-sync", handleExternalSync);
 
-    // Fast polling backend for multi-client / mobile remote updates
+    // Polling backend for remote updates while protecting active local user sessions
     const pollInterval = window.setInterval(async () => {
+      // If user performed an action locally in the last 3.5 seconds, don't overwrite
+      if (Date.now() - lastLocalActionTimeRef.current < 3500) {
+        return;
+      }
       try {
         const res = await fetch("/api/virtual-os/state");
         if (res.ok) {
@@ -272,7 +310,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
           }
         }
       } catch {}
-    }, 400);
+    }, 1200);
 
     return () => {
       window.removeEventListener("sightline-virtual-os-sync", handleExternalSync);
@@ -286,17 +324,38 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
     setNotesViewMode("list");
     setActiveApp("home");
     setNavStack(["home"]);
+    syncStateToServer("home");
     onActionLogged?.("BUTTON", "Pressed Home (Returned to Main Menu / Launcher)");
     toast.success("🏠 Main Menu / Home Launcher Active");
   };
 
-  // Listen for global navigate home and reset app state events
+  // Listen for global navigate home and app launch events
   useEffect(() => {
     const handleGlobalHome = () => {
       handleHome();
     };
+    const handleAppLaunch = (e: any) => {
+      const name = (e.detail?.appName || e.detail?.package || "").toLowerCase();
+      if (name.includes("calc")) setActiveApp("calculator");
+      else if (name.includes("note") || name.includes("memo")) setActiveApp("notes");
+      else if (name.includes("cam") || name.includes("photo")) setActiveApp("camera");
+      else if (name.includes("setting")) setActiveApp("settings");
+      else if (name.includes("terminal") || name.includes("termux")) setActiveApp("terminal");
+      else if (name.includes("file")) setActiveApp("files");
+      else if (name.includes("youtube") || name.includes("video")) setActiveApp("youtube");
+      else if (name.includes("music") || name.includes("spotify")) setActiveApp("spotify");
+      else if (name.includes("chrome") || name.includes("browser") || name.includes("google")) setActiveApp("chrome");
+      else if (name.includes("home") || name.includes("launcher")) handleHome();
+      if (e.detail?.appUrl) {
+        setChromeUrl(e.detail.appUrl);
+      }
+    };
     window.addEventListener("sightline-navigate-home", handleGlobalHome);
-    return () => window.removeEventListener("sightline-navigate-home", handleGlobalHome);
+    window.addEventListener("sightline-app-launch", handleAppLaunch);
+    return () => {
+      window.removeEventListener("sightline-navigate-home", handleGlobalHome);
+      window.removeEventListener("sightline-app-launch", handleAppLaunch);
+    };
   }, []);
 
   // React to Step Forwarding and Current Sequence Actions to visibly mutate template
@@ -483,6 +542,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
     setActiveApp(app);
     setNavStack((prev) => [...prev, app]);
     setIsNotificationsOpen(false);
+    syncStateToServer(app, { appName: label });
     onActionLogged?.("APP_LAUNCH", `Opened ${label}`);
     toast.success(`📱 Opened ${label}`);
   };
@@ -504,6 +564,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
         setChromeHistoryStack(updatedHistory);
         setChromeUrl(prevUrl);
         setChromeSearch(prevUrl.includes("?q=") ? decodeURIComponent(prevUrl.split("?q=")[1]) : "AI Automation Agents");
+        syncStateToServer("chrome", { chromeUrl: prevUrl });
         onActionLogged?.("BROWSER_BACK", `Navigated Back in Chrome to: ${prevUrl}`);
         toast.info("◀ Chrome Browser: Navigated Back a Page");
         return;
@@ -533,10 +594,12 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
       const prevApp = newStack[newStack.length - 1];
       setNavStack(newStack);
       setActiveApp(prevApp);
+      syncStateToServer(prevApp);
       onActionLogged?.("BUTTON", `Navigated Back to ${prevApp.toUpperCase()}`);
       toast.info(`◀ Navigated Back to ${prevApp.toUpperCase()}`);
     } else {
       setActiveApp("home");
+      syncStateToServer("home");
       onActionLogged?.("BUTTON", "Navigated to Main Menu / Home Launcher");
       toast.info("🏠 Returned to Main Menu (Home Launcher)");
     }
@@ -544,7 +607,9 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
 
   const handleOverview = () => {
     setIsNotificationsOpen(false);
-    setActiveApp((prev) => (prev === "overview" ? "home" : "overview"));
+    const nextApp = activeApp === "overview" ? "home" : "overview";
+    setActiveApp(nextApp);
+    syncStateToServer(nextApp);
     onActionLogged?.("BUTTON", "Toggled App Switcher / Overview");
   };
 

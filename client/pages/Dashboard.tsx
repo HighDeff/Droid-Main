@@ -31,6 +31,7 @@ import {
   Target,
   Terminal,
   Upload,
+  Download,
   Zap,
   X,
   Camera,
@@ -85,6 +86,7 @@ import { TemporalScreenshotTrioHUD } from "@/components/temporal-screenshot-trio
 import { CentralLogsConsole } from "@/components/central-logs-console";
 import { ScreenshotLayeringPanel } from "@/components/screenshot-layering-panel";
 import { MasterWorkflowOrchestrator } from "@/components/master-workflow-orchestrator";
+import { ApkAndPwaModal } from "@/components/ApkAndPwaModal";
 import { AIDecideActionHUD } from "@/components/ai-decide-action-hud";
 import { GoalsManagerPanel } from "@/components/goals-manager-panel";
 import { EntitiesRadarPanel } from "@/components/entities-radar-panel";
@@ -298,8 +300,9 @@ export default function Dashboard({
   ]);
   const [goalsState, setGoalsState] = useState<any[]>([]);
   const [globalCursorState, setGlobalCursorState] = useState<GlobalAICursorState | null>(null);
+  const [isApkModalOpen, setIsApkModalOpen] = useState(false);
 
-  // Listen for global AI cursor movement, tab switches, settings adjustments and workflow repairs
+  // Listen for global AI cursor movement, tab switches, settings adjustments, workflow repairs and clear steps
   useEffect(() => {
     const handleAiCursorEvent = (e: any) => {
       if (e.detail) {
@@ -335,6 +338,43 @@ export default function Dashboard({
         handleForwardMobileToLiveVisionHud(e.detail);
       }
     };
+    const handleClearHudStepsEvent = () => {
+      sequenceRunningRef.current = false;
+      setIsSequenceRunning(false);
+      setIsAutonomousRunning(false);
+      setActiveStepId(null);
+      setSequence([]);
+    };
+    const handleClearSelectedHudStepsEvent = (e: any) => {
+      if (e.detail?.stepIds && Array.isArray(e.detail.stepIds)) {
+        const ids = new Set(e.detail.stepIds);
+        if (activeStepId && ids.has(activeStepId)) {
+          setActiveStepId(null);
+          sequenceRunningRef.current = false;
+          setIsSequenceRunning(false);
+        }
+        setSequence((prev) =>
+          prev
+            .filter((s) => !ids.has(s.id))
+            .map((s, idx) => ({ ...s, stepNumber: idx + 1 }))
+        );
+      }
+    };
+    const handleMoveHudStepEvent = (e: any) => {
+      if (e.detail?.id && e.detail?.direction) {
+        handleMoveStep(e.detail.id, e.detail.direction);
+      }
+    };
+    const handleReorderHudStepsEvent = (e: any) => {
+      if (e.detail?.steps && Array.isArray(e.detail.steps)) {
+        setSequence(
+          e.detail.steps.map((s: any, idx: number) => ({
+            ...s,
+            stepNumber: idx + 1,
+          }))
+        );
+      }
+    };
 
     window.addEventListener("ai-cursor-action", handleAiCursorEvent);
     window.addEventListener("ai-switch-tab", handleAiSwitchTab);
@@ -342,6 +382,10 @@ export default function Dashboard({
     window.addEventListener("ai-fix-sequence", handleAiFixSequence);
     window.addEventListener("link-workflow-to-vision-hud", handleLinkWorkflowEvent);
     window.addEventListener("forward-mobile-to-vision-hud", handleForwardMobileEvent);
+    window.addEventListener("clear-hud-steps", handleClearHudStepsEvent);
+    window.addEventListener("clear-selected-hud-steps", handleClearSelectedHudStepsEvent);
+    window.addEventListener("move-hud-step", handleMoveHudStepEvent);
+    window.addEventListener("reorder-hud-steps", handleReorderHudStepsEvent);
     const handleOpenSettingsModal = () => setIsSettingsModalOpen(true);
     const handleOpenCalibrationModal = () => setIsCalibrationModalOpen(true);
     window.addEventListener("open-settings", handleOpenSettingsModal);
@@ -353,6 +397,10 @@ export default function Dashboard({
       window.removeEventListener("ai-fix-sequence", handleAiFixSequence);
       window.removeEventListener("link-workflow-to-vision-hud", handleLinkWorkflowEvent);
       window.removeEventListener("forward-mobile-to-vision-hud", handleForwardMobileEvent);
+      window.removeEventListener("clear-hud-steps", handleClearHudStepsEvent);
+      window.removeEventListener("clear-selected-hud-steps", handleClearSelectedHudStepsEvent);
+      window.removeEventListener("move-hud-step", handleMoveHudStepEvent);
+      window.removeEventListener("reorder-hud-steps", handleReorderHudStepsEvent);
       window.removeEventListener("open-settings", handleOpenSettingsModal);
       window.removeEventListener("open-calibration", handleOpenCalibrationModal);
     };
@@ -396,18 +444,13 @@ export default function Dashboard({
     const prevTab = currentTab;
     setCurrentTab(newTab);
 
-    // Auto-Actor verification & action execution on mode transition
-    if (autoActEnabled) {
+    // Auto-Actor verification & action execution on mode transition (only if steps exist)
+    if (autoActEnabled && sequence && sequence.length > 0) {
       const activeImg = activeCanvasUrl || screenshotUrl;
       safePostJson<{ autoActExecuted?: boolean; similarityScore?: number; matched?: boolean }>("/api/ai/auto-actor-trigger", {
         currentScreen: screenshotUrl,
         expectedScreen: activeImg,
-        step: sequence[0] || {
-          name: `Auto Step on Switch to ${newTab}`,
-          action: "click",
-          x: 960,
-          y: 540,
-        },
+        step: sequence[0],
         autoActEnabled: true,
         threshold: 0.75,
         modeTransition: `${prevTab}_to_${newTab}`,
@@ -733,26 +776,14 @@ export default function Dashboard({
     });
   const handleRunSequence = async () => {
     if (isSequenceRunning) return;
-    let targetSteps = sequence;
-    if (targetSteps.length === 0) {
-      const defaultStep: SequenceStep = {
-        id: `step_auto_${Date.now()}`,
-        stepNumber: 1,
-        name: targetDevice === "android" ? "Mobile Action Click" : "Screen Calibration Click",
-        action: "click",
-        x: 960,
-        y: 540,
-        delayMs: 600,
-        status: "pending",
-        confidence: 0.98,
-      };
-      targetSteps = [defaultStep];
-      setSequence([defaultStep]);
-      toast.info("Created initial execution step at (960, 540)");
+    if (sequence.length === 0) {
+      toast.info("No sequence steps to run. Add or record steps first.");
+      return;
     }
+    const targetSteps = sequence;
     setIsSequenceRunning(true);
     sequenceRunningRef.current = true;
-    setSequence((prev) => (prev.length > 0 ? prev : targetSteps).map((s) => ({ ...s, status: "pending" })));
+    setSequence((prev) => prev.map((s) => ({ ...s, status: "pending" })));
     for (let i = 0; i < targetSteps.length; i++) {
       if (!sequenceRunningRef.current) break;
       const current = targetSteps[i];
@@ -1273,6 +1304,25 @@ export default function Dashboard({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-slate-900 border border-cyan-500/40 rounded-lg p-0.5 shadow-sm">
+              <Button
+                size="sm"
+                onClick={() => setIsApkModalOpen(true)}
+                className="h-8 text-xs font-mono font-bold gap-1.5 bg-gradient-to-r from-sky-600 to-cyan-600 hover:from-sky-500 hover:to-cyan-500 text-white shadow-sm"
+                title="Android APK / WebAPK Hub: Download build zip or install native companion"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-cyan-200" />
+                <span>Download APK (.zip)</span>
+              </Button>
+              <a
+                href="/api/mobile/download-apk-bundle"
+                download="sightline-mobile-apk-project.zip"
+                className="h-8 px-2 flex items-center justify-center rounded-md text-xs font-mono font-bold bg-slate-950 hover:bg-slate-800 text-cyan-300 hover:text-white border border-slate-700 transition-colors"
+                title="Direct Download APK Build Project (.zip)"
+              >
+                <Download className="w-3.5 h-3.5 text-cyan-400" />
+              </a>
+            </div>
             <Button
               size="sm"
               onClick={() => setAutonomousModalOpen(true)}
@@ -1569,7 +1619,7 @@ export default function Dashboard({
           <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-900/95 border border-cyan-700/60 shadow-lg">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-mono font-bold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950/80 border border-cyan-800/80 flex items-center gap-1.5 shadow-sm">
-                <Brain className="w-4 h-4 text-cyan-400 animate-pulse" /> 1ST HUD • AI CONTROL & PERCEPTION
+                <Brain className="w-4 h-4 text-cyan-400 animate-pulse" /> 1ST HUD | AI CONTROL & PERCEPTION
               </span>
               <Button
                 size="sm"
@@ -1612,7 +1662,7 @@ export default function Dashboard({
           <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-950 border-2 border-cyan-600/70 shadow-xl shadow-cyan-950/30">
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-xs font-mono font-extrabold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-500/70 flex items-center gap-1.5 shadow-sm tracking-wider">
-                <Compass className="w-4 h-4 text-cyan-400 animate-pulse" /> 2ND HUD • MOVEMENT MODE
+                <Compass className="w-4 h-4 text-cyan-400 animate-pulse" /> 2ND HUD | MOVEMENT MODE
               </span>
               <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-700 shadow-inner">
                 {(["exact", "variation", "live"] as const).map((m) => (
@@ -1645,7 +1695,7 @@ export default function Dashboard({
                 {antiLoopEnabled ? (
                   <span className="text-emerald-400 font-extrabold">ON (frozen preview)</span>
                 ) : (
-                  <span className="text-amber-400 font-extrabold">OFF (live — may tunnel)</span>
+                  <span className="text-amber-400 font-extrabold">OFF (live - may tunnel)</span>
                 )}
               </label>
               <div className="flex items-center gap-2 bg-slate-900/80 px-3 py-1 rounded-lg border border-slate-700">
@@ -2176,6 +2226,17 @@ export default function Dashboard({
                   onAddStep={handleAddSequenceStep}
                   onRepositionStep={handleRepositionStep}
                   onSelectStep={setActiveStepId}
+                  onClearSteps={() => {
+                    sequenceRunningRef.current = false;
+                    setIsSequenceRunning(false);
+                    setIsAutonomousRunning(false);
+                    setSequence([]);
+                    setActiveStepId(null);
+                    toast.success("Cleared all HUD sequence steps");
+                  }}
+                  onDeleteStep={handleDeleteStep}
+                  onMoveStep={handleMoveStep}
+                  onReorderSteps={(newSteps) => setSequence(newSteps)}
                   onLiveStreamChange={handleHudLiveChange}
                   showSecondHudOverlay={show2ndHudOverlay}
                   onToggleSecondHudOverlay={setShow2ndHudOverlay}
@@ -3383,6 +3444,12 @@ export default function Dashboard({
         </footer>
         {/* Global AI Cursor & Motion Trail Overlay */}
         <GlobalAICursorOverlay enabled={true} cursorState={globalCursorState} theme="cyan" />
+
+        {/* Android APK & WebAPK Standalone Build Modal */}
+        <ApkAndPwaModal
+          open={isApkModalOpen}
+          onOpenChange={setIsApkModalOpen}
+        />
 
         {/* Global Mouse & Coordinate Drift Calibration Modal */}
         <CoordinateCalibrationModal

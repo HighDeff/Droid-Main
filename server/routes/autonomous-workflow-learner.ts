@@ -1,5 +1,5 @@
 import { RequestHandler } from "express";
-import { GoogleGenAI } from "@google/genai";
+import { getGenAIClient, setGeminiCooldown } from "../ai-gemini-service";
 
 interface WorkflowAction {
   id: string;
@@ -59,9 +59,6 @@ const learnedWorkflowsStore: LearnedWorkflow[] = [
   }
 ];
 
-const apiKey = process.env.GEMINI_API_KEY || "";
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
-
 /**
  * Detect similar actions from workflow history, save them, and create new automatic workflows
  */
@@ -78,7 +75,7 @@ export const handleLearnWorkflows: RequestHandler = async (req, res) => {
     }
 
     let synthesizedWorkflow: LearnedWorkflow | null = null;
-
+    const ai = getGenAIClient();
     if (ai) {
       try {
         const prompt = `You are an Autonomous AI Workflow Learning Engine.
@@ -136,8 +133,9 @@ Return ONLY a JSON object:
           };
           learnedWorkflowsStore.unshift(synthesizedWorkflow);
         }
-      } catch (geminiErr) {
-        console.warn("Gemini pattern learning error, falling back to heuristic clustering:", geminiErr);
+      } catch (geminiErr: any) {
+        setGeminiCooldown(20);
+        console.warn("[Autonomous Workflow Learner] Gemini pattern learning error, falling back to heuristic clustering:", geminiErr?.message || geminiErr);
       }
     }
 

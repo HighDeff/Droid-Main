@@ -1287,7 +1287,7 @@ export const SessionDifferentialViewer: React.FC<SessionDifferentialViewerProps>
                 >
                   <option value="frequency">Drift Frequency (Occurrence Count)</option>
                   <option value="displacement">Pixel Displacement (Delta Px)</option>
-                  <option value="critical_only">Critical Shifts Only (&gt;20px)</option>
+                  <option value="critical_only">{"Critical Shifts Only (>20px)"}</option>
                 </select>
               </div>
             </div>
@@ -1443,7 +1443,7 @@ export const SessionDifferentialViewer: React.FC<SessionDifferentialViewerProps>
                   TOP DETECTED SCREEN DRIFT HOTSPOT ZONES ({driftHotspots.length})
                 </span>
                 <span className="text-[10px] text-slate-400">
-                  Click any hotspot to focus canvas reticle &amp; scrubber
+                  Click any hotspot to focus canvas reticle & scrubber
                 </span>
               </div>
 

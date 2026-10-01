@@ -432,7 +432,7 @@ export const InteractiveDesktopVirtualOS: React.FC<InteractiveDesktopVirtualOSPr
                   </div>
 
                   <div className="flex items-center gap-1.5 pt-2 border-t border-emerald-900/50">
-                    <span className="text-emerald-500 font-bold">C:\Automation&gt;</span>
+                    <span className="text-emerald-500 font-bold">{"C:\\Automation>"}</span>
                     <input
                       value={terminalInput}
                       onChange={(e) => setTerminalInput(e.target.value)}

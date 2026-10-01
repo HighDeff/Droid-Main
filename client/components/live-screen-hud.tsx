@@ -226,6 +226,10 @@ interface LiveScreenHUDProps {
   showDriftHeatmap?: boolean;
   onToggleDriftHeatmap?: (enabled: boolean) => void;
   driftThresholdPx?: number;
+  onClearSteps?: () => void;
+  onDeleteStep?: (id: string) => void;
+  onMoveStep?: (id: string, direction: "up" | "down") => void;
+  onReorderSteps?: (reordered: SequenceStep[]) => void;
 }
 
 export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
@@ -254,10 +258,112 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   showDriftHeatmap,
   onToggleDriftHeatmap,
   driftThresholdPx,
+  onClearSteps,
+  onDeleteStep,
+  onMoveStep,
+  onReorderSteps,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const streamSyncIntervalRef = useRef<number | null>(null);
+  const [selectedStepIds, setSelectedStepIds] = useState<Set<string>>(new Set());
+
+  // Step Selection & Order Management Handlers
+  const handleToggleSelectStep = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSelectedStepIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllSteps = () => {
+    if (selectedStepIds.size === sequence.length) {
+      setSelectedStepIds(new Set());
+    } else {
+      setSelectedStepIds(new Set(sequence.map((s) => s.id)));
+    }
+  };
+
+  const handleClearSelectedSteps = () => {
+    if (selectedStepIds.size === 0) return;
+    setIsAutoPlayingWorkflow(false);
+    setHudActiveClickPoint(null);
+    setRecordingClickPos(null);
+    const ids = Array.from(selectedStepIds);
+    if (activeStepId && selectedStepIds.has(activeStepId)) {
+      onSelectStep?.(null as any);
+    }
+    if (onDeleteStep) {
+      ids.forEach((id) => onDeleteStep(id));
+    } else if (onReorderSteps) {
+      const remaining = sequence.filter((s) => !selectedStepIds.has(s.id));
+      onReorderSteps(remaining);
+    } else {
+      window.dispatchEvent(
+        new CustomEvent("clear-selected-hud-steps", {
+          detail: { stepIds: ids },
+        })
+      );
+    }
+    toast.success(`Cleared ${ids.length} selected step(s)`);
+    setSelectedStepIds(new Set());
+  };
+
+  const handleStepMove = (id: string, dir: "up" | "down", e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (onMoveStep) {
+      onMoveStep(id, dir);
+    } else if (onReorderSteps) {
+      const idx = sequence.findIndex((s) => s.id === id);
+      if (idx === -1) return;
+      if (dir === "up" && idx === 0) return;
+      if (dir === "down" && idx === sequence.length - 1) return;
+      const targetIdx = dir === "up" ? idx - 1 : idx + 1;
+      const copy = [...sequence];
+      const tmp = copy[idx];
+      copy[idx] = copy[targetIdx];
+      copy[targetIdx] = tmp;
+      onReorderSteps(copy);
+    } else {
+      window.dispatchEvent(
+        new CustomEvent("move-hud-step", {
+          detail: { id, direction: dir },
+        })
+      );
+    }
+    toast.info(`Step moved ${dir}`);
+  };
+
+  const handleDeleteSingleStep = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (activeStepId === id) {
+      onSelectStep?.(null as any);
+    }
+    if (onDeleteStep) {
+      onDeleteStep(id);
+    } else if (onReorderSteps) {
+      const remaining = sequence.filter((s) => s.id !== id);
+      onReorderSteps(remaining);
+    } else {
+      window.dispatchEvent(
+        new CustomEvent("clear-selected-hud-steps", {
+          detail: { stepIds: [id] },
+        })
+      );
+    }
+    setSelectedStepIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    toast.info("Step deleted from sequence");
+  };
   const [localShow2ndHudOverlay, setLocalShow2ndHudOverlay] = useState<boolean>(true);
   const [localShowDriftHeatmap, setLocalShowDriftHeatmap] = useState<boolean>(true);
   const [showHistoricalTrailOverlay, setShowHistoricalTrailOverlay] = useState<boolean>(true);
@@ -835,7 +941,13 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   };
 
   useEffect(() => {
-    if (!isAutoPlayingWorkflow || !sequence || sequence.length === 0) return;
+    if (!sequence || sequence.length === 0) {
+      if (isAutoPlayingWorkflow) {
+        setIsAutoPlayingWorkflow(false);
+      }
+      return;
+    }
+    if (!isAutoPlayingWorkflow) return;
     const timer = setInterval(() => {
       handleStepForward();
     }, 2200);
@@ -2523,7 +2635,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                     } : null}
                     forwardTrigger={forwardStepTriggerCount}
                     onActionLogged={(action, details) => {
-                      dispatchInteractiveHardwareAction("click", 960, 540);
+                      // Virtual OS user action logged - do not dispatch unwanted repeated hardware click
                     }}
                   />
                 </div>
@@ -2546,7 +2658,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                   } : null}
                   forwardTrigger={forwardStepTriggerCount}
                   onActionLogged={(action, details) => {
-                    dispatchInteractiveHardwareAction("click", 960, 540);
+                    // Virtual OS user action logged - do not dispatch unwanted repeated hardware click
                   }}
                 />
               </div>
@@ -3352,6 +3464,49 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             <Layers className="w-3.5 h-3.5 text-indigo-300" />
             📋 STEP MANAGER ({sequence.length})
           </Button>
+
+          {/* Clear Selected / All Steps in Screen HUD */}
+          {selectedStepIds.size > 0 && (
+            <div className="flex items-center gap-1 bg-rose-950/60 p-0.5 rounded-lg border border-rose-600/80 shadow-md">
+              <Button
+                size="sm"
+                onClick={handleClearSelectedSteps}
+                className="h-8 text-xs font-mono font-bold bg-rose-600 hover:bg-rose-500 text-white shadow gap-1.5 transition-all animate-pulse"
+                title="Clear only the selected sequence steps"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                <span>🗑️ CLEAR SELECTED ({selectedStepIds.size})</span>
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setSelectedStepIds(new Set())}
+                className="h-8 px-2 text-xs font-mono text-rose-300 hover:text-white hover:bg-rose-900/50"
+                title="Cancel selection"
+              >
+                ✕
+              </Button>
+            </div>
+          )}
+
+          {sequence.length > 0 && selectedStepIds.size === 0 && (
+            <Button
+              size="sm"
+              onClick={() => {
+                if (onClearSteps) {
+                  onClearSteps();
+                } else {
+                  window.dispatchEvent(new CustomEvent("clear-hud-steps"));
+                }
+                toast.success("Cleared all HUD sequence steps");
+              }}
+              className="h-8 text-xs font-mono font-bold bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-600/70 hover:text-white shadow-md gap-1.5 transition-all"
+              title="Clear all steps and reset HUD click targets"
+            >
+              <XCircle className="w-3.5 h-3.5 text-rose-400" />
+              <span>🗑️ CLEAR ALL STEPS ({sequence.length})</span>
+            </Button>
+          )}
 
           {/* Video Recording & AI Breakdown Sequence Generator Button */}
           <Button
@@ -5238,10 +5393,23 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             toast.success(`Updated Step #${index + 1}: ${updated.name}`);
           }
         }}
-        onDeleteStep={(index) => {
-          toast.info(`Step #${index + 1} deleted`);
+        onDeleteStep={(idOrIndex) => {
+          if (typeof idOrIndex === "string") {
+            handleDeleteSingleStep(idOrIndex);
+          } else if (typeof idOrIndex === "number" && sequence[idOrIndex]) {
+            handleDeleteSingleStep(sequence[idOrIndex].id);
+          }
         }}
         onReorderSteps={(reordered) => {
+          if (onReorderSteps) {
+            onReorderSteps(reordered as any);
+          } else {
+            window.dispatchEvent(
+              new CustomEvent("reorder-hud-steps", {
+                detail: { steps: reordered },
+              })
+            );
+          }
           toast.success(`Workflow reordered (${reordered.length} steps)`);
         }}
         clickedCoords={stepManagerClickedCoords}
@@ -5857,12 +6025,33 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
               {/* CoT Step-by-Step Reasoner & Execution Trace */}
               <div className="p-4 rounded-xl bg-slate-900/90 border border-cyan-500/40 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                  <div className="flex items-center gap-2 text-cyan-300 font-bold">
+                <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-2 gap-2">
+                  <div className="flex items-center gap-2 text-cyan-300 font-bold text-xs sm:text-sm">
                     <Shield className="w-4 h-4 text-cyan-400" />
                     <span>Chain-of-Thought (CoT) Verified Step Sequence ({sequence.length} Steps)</span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {sequence.length > 0 && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={handleSelectAllSteps}
+                        className="h-6 px-2 text-[10px] font-bold text-slate-400 hover:text-cyan-300"
+                      >
+                        {selectedStepIds.size === sequence.length ? "Deselect All" : "Select All"}
+                      </Button>
+                    )}
+                    {selectedStepIds.size > 0 && (
+                      <Button
+                        size="sm"
+                        onClick={handleClearSelectedSteps}
+                        className="h-6 px-2.5 text-[10px] bg-rose-600 hover:bg-rose-500 text-white font-bold gap-1 shadow-md animate-pulse"
+                        title="Clear selected steps only"
+                      >
+                        <XCircle className="w-3 h-3" />
+                        Clear Selected ({selectedStepIds.size})
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       onClick={handleStepForward}
@@ -5871,12 +6060,31 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                       <SkipForward className="w-3 h-3" />
                       Forward Next Step
                     </Button>
+                    {sequence.length > 0 && selectedStepIds.size === 0 && (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          if (onClearSteps) {
+                            onClearSteps();
+                          } else {
+                            window.dispatchEvent(new CustomEvent("clear-hud-steps"));
+                          }
+                          toast.success("Cleared all HUD sequence steps");
+                        }}
+                        className="h-6 px-2 text-[10px] bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-600/60 font-bold gap-1"
+                        title="Clear all steps in sequence"
+                      >
+                        <XCircle className="w-3 h-3 text-rose-400" />
+                        Clear All
+                      </Button>
+                    )}
                   </div>
                 </div>
 
-                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                   {sequence.map((step, idx) => {
                     const isCur = step.id === activeStepId;
+                    const isChecked = selectedStepIds.has(step.id);
                     return (
                       <div
                         key={step.id}
@@ -5887,19 +6095,30 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                         className={`p-2.5 rounded-lg border flex items-center justify-between cursor-pointer transition-all ${
                           isCur
                             ? "bg-cyan-950/80 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400 shadow-md"
-                            : "bg-slate-950/80 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+                            : isChecked
+                              ? "bg-rose-950/40 border-rose-500/60 text-slate-200"
+                              : "bg-slate-950/80 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200"
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold ${
+                          {/* Selection Checkbox */}
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => handleToggleSelectStep(step.id, e as any)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-950 text-rose-500 accent-rose-500 cursor-pointer shrink-0"
+                            title="Select to clear"
+                          />
+                          <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0 ${
                             isCur ? "bg-cyan-500 text-black" : "bg-slate-800 text-slate-300"
                           }`}>
                             {idx + 1}
                           </span>
                           <div className="min-w-0">
-                            <span className="font-bold truncate text-slate-200">{step.name || `Step #${idx + 1}`}</span>
-                            <div className="text-[10px] text-slate-500 flex items-center gap-2">
-                              <span>Action: {step.action.toUpperCase()}</span>
+                            <span className="font-bold truncate text-slate-200 block text-xs">{step.name || `Step #${idx + 1}`}</span>
+                            <div className="text-[10px] text-slate-500 flex items-center gap-1.5 flex-wrap">
+                              <span className="text-cyan-400 font-semibold">{step.action.toUpperCase()}</span>
                               <span>•</span>
                               <span>Target: ({step.x}, {step.y})</span>
                               {step.text && <span>• Text: "{step.text}"</span>}
@@ -5907,8 +6126,36 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/40">
+                        <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                          {/* Reorder Buttons (Move Up / Down) */}
+                          <div className="flex items-center gap-0.5 bg-slate-900 border border-slate-800 rounded p-0.5">
+                            <button
+                              disabled={idx === 0}
+                              onClick={(e) => handleStepMove(step.id, "up", e)}
+                              className="p-1 hover:text-cyan-300 disabled:opacity-20 text-slate-400 rounded hover:bg-slate-800 text-[10px]"
+                              title="Move Step Up (Order -1)"
+                            >
+                              ▲
+                            </button>
+                            <button
+                              disabled={idx === sequence.length - 1}
+                              onClick={(e) => handleStepMove(step.id, "down", e)}
+                              className="p-1 hover:text-cyan-300 disabled:opacity-20 text-slate-400 rounded hover:bg-slate-800 text-[10px]"
+                              title="Move Step Down (Order +1)"
+                            >
+                              ▼
+                            </button>
+                          </div>
+
+                          <button
+                            onClick={(e) => handleDeleteSingleStep(step.id, e)}
+                            className="p-1 text-slate-500 hover:text-rose-400 rounded hover:bg-rose-950/50 transition-colors"
+                            title="Delete this step"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+
+                          <span className="hidden sm:inline-block px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/40">
                             ✓ CoT Verified
                           </span>
                         </div>

@@ -1,17 +1,5 @@
 import { Request, Response } from "express";
-import { GoogleGenAI } from "@google/genai";
-
-let genAiClient: GoogleGenAI | null = null;
-
-function getGenAiClient(): GoogleGenAI | null {
-  if (!process.env.GEMINI_API_KEY) {
-    return null;
-  }
-  if (!genAiClient) {
-    genAiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  }
-  return genAiClient;
-}
+import { getGenAIClient, setGeminiCooldown } from "../ai-gemini-service";
 
 export function countWords(text: string): number {
   if (!text) return 0;
@@ -155,7 +143,7 @@ export async function handleRefineDescription(req: Request, res: Response) {
     const originalWordCount = countWords(rawText);
     const originalCharCount = rawText.length;
 
-    const client = getGenAiClient();
+    const client = getGenAIClient();
 
     let constraintDescription = `STRICTLY UNDER ${wordLimit} WORDS`;
     if (constraintMode === "twitter_brevity" || wordLimit <= 12) {
@@ -233,8 +221,9 @@ Respond ONLY with a valid JSON object matching this exact TypeScript structure:
             source: "gemini",
           });
         }
-      } catch (geminiError) {
-        console.warn("[Description Refiner] Gemini API error, falling back to heuristic engine:", geminiError);
+      } catch (geminiError: any) {
+        setGeminiCooldown(20);
+        console.warn("[Description Refiner] Gemini API error, falling back to heuristic engine:", geminiError?.message || geminiError);
       }
     }
 
@@ -332,7 +321,7 @@ export async function handleBulkGenerateNamesDescriptions(req: Request, res: Res
     const activeKeywords = keywordList.slice(0, 25);
     const wordLimit = Math.min(Math.max(Number(targetWords) || 18, 4), 80);
 
-    const client = getGenAiClient();
+    const client = getGenAIClient();
     if (client) {
       try {
         const prompt = `You are a world-class product strategist, creative naming director, and App Store copywriter.
@@ -402,8 +391,9 @@ Respond ONLY with a valid JSON array of objects matching this exact structure:
             });
           }
         }
-      } catch (geminiError) {
-        console.warn("[Bulk Generator] Gemini API error, falling back to heuristic engine:", geminiError);
+      } catch (geminiError: any) {
+        setGeminiCooldown(20);
+        console.warn("[Bulk Generator] Gemini API error, falling back to heuristic engine:", geminiError?.message || geminiError);
       }
     }
 
@@ -470,7 +460,7 @@ export async function handleGenerateFileSummary(req: Request, res: Response) {
     const safeName = String(fileName || "Unnamed file").trim();
     const safeMime = String(mimeType || "application/octet-stream").trim();
 
-    const client = getGenAiClient();
+    const client = getGenAIClient();
     if (client) {
       try {
         const prompt = `You are a concise file summary generator.
@@ -504,8 +494,9 @@ STRICT CONSTRAINTS:
             source: "gemini",
           });
         }
-      } catch (geminiError) {
-        console.warn("[File Summary] Gemini error, falling back to heuristic:", geminiError);
+      } catch (geminiError: any) {
+        setGeminiCooldown(20);
+        console.warn("[File Summary] Gemini error, falling back to heuristic:", geminiError?.message || geminiError);
       }
     }
 

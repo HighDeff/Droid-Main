@@ -383,6 +383,63 @@ export function UniversalDeviceBridgeHub({
   const [customPackageInput, setCustomPackageInput] = useState<string>("");
   const phoneDragStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
+  // Persistent Live Workflow & 10-Pack Recording State
+  const [isLiveRecording, setIsLiveRecording] = useState<boolean>(false);
+  const [isCapturing10Pack, setIsCapturing10Pack] = useState<boolean>(false);
+  const [packCaptureProgress, setPackCaptureProgress] = useState<number>(0);
+
+  // 10-Screenshot Differential Verification Pack Capture Handler
+  const handleCapture10PackScreenshots = async () => {
+    setIsCapturing10Pack(true);
+    setPackCaptureProgress(1);
+    toast.info("📸 Recording 10 Differential Screenshots Pack...");
+    try {
+      const capturedPack: MobileFrameSnapshot[] = [];
+      for (let i = 1; i <= 10; i++) {
+        setPackCaptureProgress(i);
+        const snapRes = await fetch("/api/mobile-stream/snapshot", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            note: `Auto 10-Pack Differential Frame #${i}`,
+            touchX: 0.5,
+            touchY: 0.1 * i,
+          }),
+        });
+        if (snapRes.ok) {
+          const snapData = await snapRes.json();
+          if (snapData.snapshot) {
+            capturedPack.push(snapData.snapshot);
+          }
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+
+      // Compile into workflow
+      const compileRes = await fetch("/api/mobile-stream/screenshot-pack-workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: `10-Snap Workflow (${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
+          description: `Differential verification pack with 10 captured steps`,
+          frames: capturedPack,
+          autoForwardToDesktop: true,
+        }),
+      });
+
+      if (compileRes.ok) {
+        toast.success("✅ Compiled and saved 10-Screenshot Differential Workflow!");
+        fetchWorkflows();
+        fetchRecentFrames();
+      }
+    } catch {
+      toast.error("Failed recording 10-pack differential screenshots");
+    } finally {
+      setIsCapturing10Pack(false);
+      setPackCaptureProgress(0);
+    }
+  };
+
   // Extend to Screen Overlay state
   const [extendedWorkflow, setExtendedWorkflow] = useState<any | null>(null);
   const [isExtendScreenActive, setIsExtendScreenActive] = useState<boolean>(false);
@@ -1758,6 +1815,107 @@ export function UniversalDeviceBridgeHub({
           >
             <Wifi className="w-3.5 h-3.5" /> WiFi ADB
           </button>
+        </div>
+
+        {/* PERSISTENT UNIVERSAL AUTOMATION ACTION BAR (VISIBLE ON ALL TABS & STREAM MODES) */}
+        <div className="w-full bg-slate-950 p-2 rounded-xl border border-indigo-500/40 shadow-xl flex flex-wrap items-center justify-between gap-2">
+          {/* Left: Recording Controls & Status */}
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                if (isLiveRecording) {
+                  setIsLiveRecording(false);
+                  if (liveRecordedActions.length > 0) {
+                    setIsSavingWorkflow(true);
+                  }
+                  toast.info("⏹️ Stopped Live Workflow Recording");
+                } else {
+                  setLiveRecordedActions([]);
+                  setIsLiveRecording(true);
+                  toast.info("🔴 Live Recording Active: Tap anywhere to record workflow steps!");
+                }
+              }}
+              className={`h-7 px-3 text-[10px] font-bold gap-1.5 shadow-md transition-all ${
+                isLiveRecording
+                  ? "bg-red-600 hover:bg-red-500 text-white animate-pulse"
+                  : "bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white"
+              }`}
+              title="Record workflow steps on live device stream"
+            >
+              {isLiveRecording ? (
+                <>
+                  <Square className="w-3 h-3 fill-white" /> Stop & Save ({liveRecordedActions.length})
+                </>
+              ) : (
+                <>
+                  <Play className="w-3 h-3 fill-white" /> 🔴 Record Workflow
+                </>
+              )}
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleCapture10PackScreenshots}
+              disabled={isCapturing10Pack}
+              className="h-7 px-2.5 text-[10px] font-mono border-teal-500/40 bg-slate-900 text-teal-300 hover:text-teal-200 gap-1"
+              title="Record 10-Screenshot Differential Verification Pack"
+            >
+              <Camera className={`w-3 h-3 ${isCapturing10Pack ? "animate-spin text-teal-400" : ""}`} />
+              {isCapturing10Pack ? `10-Snap (${packCaptureProgress}/10)` : "📸 10-Snap"}
+            </Button>
+          </div>
+
+          {/* Right: Send Live Camera/Screen Feed to AI & SOP Grounding */}
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="sm"
+              onClick={() => {
+                const goal = aiGoal.trim() || "Analyze screen elements and plan next automation step";
+                setAiGoal(goal);
+                handleRunAiGoal(false);
+                toast.success("📹 Live Feed sent to AI for instant perception!");
+              }}
+              disabled={isAiExecuting}
+              className="h-7 px-2.5 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-[10px] font-bold gap-1 shadow-md"
+              title="Capture current camera/screen frame and send directly to AI Gemini Vision"
+            >
+              {isAiExecuting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3 text-amber-300" />}
+              📹 Send Live Feed to AI
+            </Button>
+
+            <label className="h-7 px-2.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-blue-500 text-slate-200 hover:text-white text-[10px] font-bold cursor-pointer flex items-center gap-1">
+              <Upload className="w-2.5 h-2.5 text-blue-400" /> Ingest SOP
+              <input
+                type="file"
+                accept=".pdf,.txt,.docx,.json,.md,.csv,.png,.jpg"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const content = await file.text().catch(() => `[Binary: ${file.name}]`);
+                    await fetch("/api/mobile-stream/upload-doc", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        name: file.name,
+                        content,
+                        fileType: file.type || "text/plain",
+                        size: file.size,
+                        tags: ["grounding-doc", "sop"],
+                      }),
+                    });
+                    setAiGoal(`Follow uploaded SOP "${file.name}" to execute task`);
+                    toast.success(`📎 Ingested "${file.name}" for AI grounding!`);
+                  } catch {
+                    toast.error("Upload failed");
+                  }
+                }}
+              />
+            </label>
+          </div>
         </div>
       </div>
 

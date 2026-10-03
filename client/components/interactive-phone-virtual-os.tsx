@@ -107,32 +107,36 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
   const syncStateToServer = async (targetApp: string, extra?: Record<string, any>) => {
     lastLocalActionTimeRef.current = Date.now();
     try {
-      fetch("/api/virtual-os/state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          activeApp: targetApp,
-          chromeUrl,
-          chromeQuery: chromeSearch,
-          calcDisplay,
-          notesContent: notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"),
-          settingsWifi: settings.wifi,
-          settingsBluetooth: settings.bluetooth,
-          ...extra,
-        }),
-      }).catch(() => {});
+      const payload = {
+        activeApp: targetApp,
+        chromeUrl,
+        chromeQuery: chromeSearch,
+        calcDisplay,
+        notesContent: notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"),
+        settingsWifi: settings.wifi,
+        settingsBluetooth: settings.bluetooth,
+        lastTouchTime: Date.now(),
+        ...extra,
+      };
 
-      fetch("/api/mobile-stream/action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: {
-            type: "open_app",
-            appName: targetApp,
-            description: `App switch to ${targetApp}`,
-          },
+      await Promise.allSettled([
+        fetch("/api/virtual-os/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
         }),
-      }).catch(() => {});
+        fetch("/api/mobile-stream/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: {
+              type: "open_app",
+              appName: targetApp,
+              description: `App switch to ${targetApp}`,
+            },
+          }),
+        }),
+      ]);
     } catch {}
   };
 
@@ -285,8 +289,8 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
 
     // Polling backend for remote updates while protecting active local user sessions
     const pollInterval = window.setInterval(async () => {
-      // If user performed an action locally in the last 3.5 seconds, don't overwrite
-      if (Date.now() - lastLocalActionTimeRef.current < 3500) {
+      // If user performed an action locally in the last 8 seconds, don't overwrite local app state
+      if (Date.now() - lastLocalActionTimeRef.current < 8000) {
         return;
       }
       try {
@@ -310,7 +314,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
           }
         }
       } catch {}
-    }, 1200);
+    }, 2000);
 
     return () => {
       window.removeEventListener("sightline-virtual-os-sync", handleExternalSync);

@@ -46,6 +46,9 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { BulkGeneratorTab } from "./BulkGeneratorTab";
+import { AppBriefsHistoryView } from "./AppBriefsHistoryView";
+import { saveAppBrief, AppBriefRecord } from "@/lib/app-brief-history-store";
+import { useAppBriefHistory } from "@/hooks/useAppBriefHistory";
 
 export type WordConstraintMode =
   | "twitter_brevity"
@@ -281,7 +284,40 @@ export function DescriptionRefiner({
   const effectiveWordLimit = constraintMode === "custom" ? customWordLimit : activePreset.maxWords;
 
   // Persisted Saved Pitches & Names Deck State
-  const [activeMainTab, setActiveMainTab] = useState<"studio" | "bulk">("studio");
+  const [activeMainTab, setActiveMainTab] = useState<"studio" | "bulk" | "history">("studio");
+  const { stats: historyStats } = useAppBriefHistory();
+
+  const handleRevisitFromHistory = (brief: AppBriefRecord) => {
+    setActiveMainTab("studio");
+    setRoughText(brief.originalInput || brief.description);
+    if (
+      brief.constraintMode &&
+      ["twitter_brevity", "app_store_short", "tagline", "standard_pitch", "detailed_store", "custom"].includes(
+        brief.constraintMode
+      )
+    ) {
+      setConstraintMode(brief.constraintMode as WordConstraintMode);
+    }
+    if (brief.tone && ["high-impact", "technical", "minimalist", "marketing"].includes(brief.tone)) {
+      setTone(brief.tone as any);
+    }
+    if (brief.targetLimit) {
+      setCustomWordLimit(brief.targetLimit);
+    }
+    setResult({
+      success: true,
+      refinedDescription: brief.description,
+      wordCount: brief.wordCount,
+      charCount: brief.charCount,
+      keyPropositions: brief.keyPropositions,
+      constraintMode: brief.constraintMode,
+      targetWords: brief.targetLimit,
+      rationale: `Revisited from History Vault (${brief.source})`,
+    });
+    setActiveAppliedDesc(brief.description);
+    toast.success(`Loaded "${brief.title}" into Interactive Pitch Studio!`);
+  };
+
   const [savedPitches, setSavedPitches] = useState<SavedDescriptionItem[]>(() => {
     try {
       const cached = localStorage.getItem("saved_description_pitches_deck");
@@ -374,6 +410,24 @@ export function DescriptionRefiner({
       if (data.success) {
         setResult(data);
         setHistory((prev) => [data, ...prev.filter((item) => item.refinedDescription !== data.refinedDescription)].slice(0, 8));
+        
+        // Auto-persist to local state App Briefs History Vault
+        try {
+          saveAppBrief({
+            title: `${activePreset.label} (${data.wordCount}w)`,
+            description: data.refinedDescription,
+            wordCount: data.wordCount,
+            charCount: data.charCount || data.refinedDescription.length,
+            constraintMode: currentConstraint,
+            targetLimit: currentLimit,
+            tone,
+            source: "Interactive Pitch Studio",
+            keyPropositions: data.keyPropositions || [],
+            category: "Interactive Studio",
+            originalInput: textToRefine,
+          });
+        } catch {}
+
         toast.success(`Refined to ${data.wordCount} words for ${activePreset.label} (${data.charCount || data.refinedDescription.length} chars)!`);
       } else {
         toast.error(data.error || "Failed to refine description");
@@ -519,7 +573,25 @@ export function DescriptionRefiner({
     try {
       localStorage.setItem("saved_description_pitches_deck", JSON.stringify(updated));
     } catch {}
-    toast.success(`Saved to comparison list (${words}w / ${chars}c)!`);
+
+    // Save to App Briefs History Vault
+    try {
+      saveAppBrief({
+        title: newItem.title,
+        description: newItem.description,
+        wordCount: newItem.wordCount,
+        charCount: newItem.charCount,
+        constraintMode: newItem.constraintMode,
+        targetLimit: newItem.targetLimit,
+        tone,
+        source: newItem.source || "Saved Pitch Deck",
+        keyPropositions: newItem.keyPropositions,
+        category: "Saved Pitch Deck",
+        originalInput: roughText,
+      });
+    } catch {}
+
+    toast.success(`Saved to comparison list & history vault (${words}w / ${chars}c)!`);
   };
 
   const handleDeleteSavedPitch = (id: string) => {
@@ -682,9 +754,9 @@ export function DescriptionRefiner({
         </div>
       </div>
 
-      {/* Tab Switcher: Interactive Studio vs Bulk Keyword Generator */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-        <div className="flex items-center gap-2">
+      {/* Tab Switcher: Interactive Studio vs Bulk Keyword Generator vs Saved History */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-2 gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant={activeMainTab === "studio" ? "default" : "outline"}
             size="sm"
@@ -710,8 +782,21 @@ export function DescriptionRefiner({
           >
             <Layers className="w-3.5 h-3.5" />
             Bulk Keyword Generator
-            <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/40 text-[10px] px-1.5 py-0">
-              NEW
+          </Button>
+          <Button
+            variant={activeMainTab === "history" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setActiveMainTab("history")}
+            className={`h-9 px-4 text-xs font-mono font-bold gap-2 ${
+              activeMainTab === "history"
+                ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-950"
+                : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"
+            }`}
+          >
+            <History className="w-3.5 h-3.5 text-purple-400" />
+            Briefs History &amp; Revisit
+            <Badge className="bg-purple-950 text-purple-300 border-purple-600 text-[10px] px-1.5 py-0">
+              {historyStats.totalCount}
             </Badge>
           </Button>
         </div>
@@ -719,11 +804,21 @@ export function DescriptionRefiner({
         <div className="text-xs font-mono text-slate-500 hidden sm:block">
           {activeMainTab === "studio"
             ? "Fine-tune single descriptions with live slider & comparison"
-            : "Generate multiple paired names & descriptions in batches"}
+            : activeMainTab === "bulk"
+            ? "Generate multiple paired names & descriptions in batches"
+            : "Persisted vault of generated briefs, versions, and outputs"}
         </div>
       </div>
 
-      {activeMainTab === "bulk" ? (
+      {activeMainTab === "history" ? (
+        <AppBriefsHistoryView
+          onRevisitBrief={handleRevisitFromHistory}
+          onApplyPitch={(name, desc) => {
+            onApplyDescription?.(desc);
+            setActiveAppliedDesc(desc);
+          }}
+        />
+      ) : activeMainTab === "bulk" ? (
         <BulkGeneratorTab
           onApplyPitch={(name, desc) => {
             onApplyDescription?.(desc);

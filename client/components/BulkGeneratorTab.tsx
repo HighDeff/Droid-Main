@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { WordConstraintMode, CONSTRAINT_PRESETS } from "./DescriptionRefiner";
+import { bulkSaveAppBriefs, saveAppBrief } from "@/lib/app-brief-history-store";
 
 export interface BulkItemResult {
   id: string;
@@ -162,8 +163,29 @@ export const BulkGeneratorTab: React.FC<BulkGeneratorTabProps> = ({
         try {
           localStorage.setItem("bulk_generated_pitches_v1", JSON.stringify(data.items));
         } catch {}
+
+        // Persist to App Briefs History Vault
+        try {
+          bulkSaveAppBriefs(
+            data.items.map((it: BulkItemResult) => ({
+              id: it.id,
+              title: it.name,
+              description: it.description,
+              wordCount: it.wordCount,
+              charCount: it.charCount,
+              constraintMode: it.constraintMode || constraintMode,
+              targetLimit: it.targetWords || effectiveWordLimit,
+              tone,
+              source: "Bulk Generator",
+              keyPropositions: it.keyPropositions || [],
+              category: it.category || "Bulk Generation",
+              originalInput: it.keyword,
+            }))
+          );
+        } catch {}
+
         toast.success(`Generated ${data.items.length} name & description pairs!`, {
-          description: `All descriptions strictly under ≤ ${effectiveWordLimit} words.`,
+          description: `All descriptions strictly under ≤ ${effectiveWordLimit} words and saved to history.`,
         });
       } else {
         toast.error("Failed to generate bulk items", {
@@ -206,7 +228,22 @@ export const BulkGeneratorTab: React.FC<BulkGeneratorTabProps> = ({
       keyPropositions: item.keyPropositions || ["Core Value", "Fast Delivery"],
       source: "Bulk AI Generator",
     });
-    toast.success(`Saved "${item.name}" to your Pitch Deck!`);
+    try {
+      saveAppBrief({
+        title: item.name,
+        description: item.description,
+        wordCount: item.wordCount,
+        charCount: item.charCount,
+        constraintMode: item.constraintMode || constraintMode,
+        targetLimit: item.targetWords || effectiveWordLimit,
+        tone,
+        source: "Bulk Generator",
+        keyPropositions: item.keyPropositions || [],
+        category: item.category || "Bulk Generation",
+        originalInput: item.keyword,
+      });
+    } catch {}
+    toast.success(`Saved "${item.name}" to your Pitch Deck & History Vault!`);
   };
 
   const handleSaveAllToDeck = () => {
@@ -223,8 +260,23 @@ export const BulkGeneratorTab: React.FC<BulkGeneratorTabProps> = ({
         keyPropositions: item.keyPropositions || [],
         source: "Bulk AI Generator",
       });
+      try {
+        saveAppBrief({
+          title: item.name,
+          description: item.description,
+          wordCount: item.wordCount,
+          charCount: item.charCount,
+          constraintMode: item.constraintMode || constraintMode,
+          targetLimit: item.targetWords || effectiveWordLimit,
+          tone,
+          source: "Bulk Generator",
+          keyPropositions: item.keyPropositions || [],
+          category: item.category || "Bulk Generation",
+          originalInput: item.keyword,
+        });
+      } catch {}
     });
-    toast.success(`Saved all ${results.length} pairs to your Pitch Deck!`);
+    toast.success(`Saved all ${results.length} pairs to your Pitch Deck & History Vault!`);
   };
 
   const handleExportJSON = () => {
@@ -427,7 +479,7 @@ export const BulkGeneratorTab: React.FC<BulkGeneratorTabProps> = ({
             <textarea
               value={keywordsText}
               onChange={(e) => setKeywordsText(e.target.value)}
-              placeholder="e.g.&#10;AI Game Vision Bot&#10;Autonomous Mouse Orchestrator&#10;Cloud Observability Hub&#10;Crypto Portfolio Tracker&#10;Collaborative Whiteboard"
+              placeholder={`e.g.\nAI Game Vision Bot\nAutonomous Mouse Orchestrator\nCloud Observability Hub\nCrypto Portfolio Tracker\nCollaborative Whiteboard`}
               rows={5}
               className="w-full bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all resize-y"
             />

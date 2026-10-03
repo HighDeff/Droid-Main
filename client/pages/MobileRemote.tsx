@@ -1049,12 +1049,44 @@ export default function MobileRemote() {
     };
   }, [isStreaming, triggerFrameProcess]);
 
+  // Handle Tab Switch with Instant Device Sync & Mirror Frame Broadcast
+  const handleTabChange = async (newTab: "stream" | "chat" | "docs" | "workflows" | "scheduled" | "pack10" | "actions") => {
+    setActiveTab(newTab);
+    try {
+      await fetch("/api/virtual-os/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          activeTab: newTab,
+          streamMode,
+          activeApp: virtualOsActiveApp,
+          docCount: uploadedDocs.length,
+          workflowCount: workflows.length,
+          scheduledCount: scheduledWorkflows.length,
+        }),
+      });
+    } catch {}
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("sightline-virtual-os-sync", {
+          detail: {
+            activeTab: newTab,
+            streamMode,
+            activeApp: virtualOsActiveApp,
+          },
+        })
+      );
+    }
+    setTriggerFrameProcess((prev) => prev + 1);
+  };
+
   // Frame Capture & Sync to PC Engine
   const processFrameTick = async () => {
     if (!canvasRef.current || !isStreamingRef.current) return;
 
     // 1. Synthetic Frame Rendering for Interactive & Live View Modes
-    if (streamModeRef.current === "interactive_phone" || streamModeRef.current === "live_view") {
+    if (streamModeRef.current === "interactive_phone" || streamModeRef.current === "live_view" || streamModeRef.current === "mirror_pc") {
       if (isSendingFrameRef.current) return;
       try {
         isSendingFrameRef.current = true;
@@ -1087,15 +1119,171 @@ export default function MobileRemote() {
 
         ctx.fillStyle = "#38bdf8";
         ctx.font = "bold 12px -apple-system, BlinkMacSystemFont, sans-serif";
-        ctx.fillText(`Sightline Phone • ${streamModeRef.current === "live_view" ? "LIVE VIEW" : "MIRROR"}`, 16, 23);
+        ctx.fillText(`Sightline Phone • ${activeTab.toUpperCase()}`, 16, 23);
 
         const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         ctx.fillStyle = "#94a3b8";
         ctx.font = "11px monospace";
         ctx.fillText(`98% ⚡ ${timeStr}`, canvas.width - 96, 23);
 
-        // Active App Canvas Drawing
-        if (virtualOsActiveApp === "chrome") {
+        // A. Tab-specific drawing
+        if (activeTab === "chat") {
+          // AI Chat Tab Frame
+          ctx.fillStyle = "#1e112a";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
+          ctx.fill();
+          ctx.strokeStyle = "#ec4899";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          ctx.fillStyle = "#f472b6";
+          ctx.font = "bold 14px sans-serif";
+          ctx.fillText("✨ Main AI Live Chat & Copilot", 28, 76);
+
+          // Chat Bubbles
+          ctx.fillStyle = "#1e293b";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 110, canvas.width - 64, 120, 12) : ctx.rect(16, 110, canvas.width - 64, 120);
+          ctx.fill();
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 11px sans-serif";
+          ctx.fillText("🤖 Sightline AI Copilot", 28, 132);
+          ctx.fillStyle = "#f8fafc";
+          ctx.font = "11px sans-serif";
+          ctx.fillText("Live phone automation connected.", 28, 155);
+          ctx.fillText("Ready to dispatch taps, apps, and workflows.", 28, 175);
+
+          ctx.fillStyle = "#065f46";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(64, 250, canvas.width - 80, 60, 12) : ctx.rect(64, 250, canvas.width - 80, 60);
+          ctx.fill();
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "11px sans-serif";
+          ctx.fillText("👤 Switch to Calculator and compute taxes", 76, 285);
+
+          // Chat Input
+          ctx.fillStyle = "#0f172a";
+          ctx.fillRect(16, canvas.height - 110, canvas.width - 32, 45);
+          ctx.strokeStyle = "#ec4899";
+          ctx.strokeRect(16, canvas.height - 110, canvas.width - 32, 45);
+          ctx.fillStyle = "#94a3b8";
+          ctx.font = "11px sans-serif";
+          ctx.fillText("Type command for AI...", 28, canvas.height - 82);
+        } else if (activeTab === "docs") {
+          // Docs Tab Frame
+          ctx.fillStyle = "#1e293b";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
+          ctx.fill();
+          ctx.fillStyle = "#60a5fa";
+          ctx.font = "bold 14px sans-serif";
+          ctx.fillText("📄 Document Grounding & KB", 28, 76);
+
+          ctx.fillStyle = "#0f172a";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 110, canvas.width - 32, 100, 12) : ctx.rect(16, 110, canvas.width - 32, 100);
+          ctx.fill();
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 12px sans-serif";
+          ctx.fillText("📑 automation_system_manual.pdf", 28, 140);
+          ctx.fillStyle = "#94a3b8";
+          ctx.font = "10px sans-serif";
+          ctx.fillText("24 Pages • Vector Indexed & Semantic Chunked", 28, 165);
+        } else if (activeTab === "scheduled") {
+          // Scheduled Tab Frame
+          ctx.fillStyle = "#2d1b06";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
+          ctx.fill();
+          ctx.fillStyle = "#fbbf24";
+          ctx.font = "bold 14px sans-serif";
+          ctx.fillText("⏰ Scheduled Automation Routines", 28, 76);
+
+          ctx.fillStyle = "#1e293b";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 110, canvas.width - 32, 90, 12) : ctx.rect(16, 110, canvas.width - 32, 90);
+          ctx.fill();
+          ctx.fillStyle = "#fef3c7";
+          ctx.font = "bold 12px sans-serif";
+          ctx.fillText("⚡ Social Feed Sync (Every 15m)", 28, 140);
+          ctx.fillStyle = "#34d399";
+          ctx.font = "10px monospace";
+          ctx.fillText("RUNNING • Next run in 4m 12s", 28, 165);
+        } else if (activeTab === "workflows") {
+          // Workflows Tab Frame
+          ctx.fillStyle = "#1e1b4b";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
+          ctx.fill();
+          ctx.fillStyle = "#a5b4fc";
+          ctx.font = "bold 14px sans-serif";
+          ctx.fillText("⚡ Workflow Orchestrator & Macros", 28, 76);
+
+          ctx.fillStyle = "#1e293b";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 110, canvas.width - 32, 90, 12) : ctx.rect(16, 110, canvas.width - 32, 90);
+          ctx.fill();
+          ctx.fillStyle = "#e0e7ff";
+          ctx.font = "bold 12px sans-serif";
+          ctx.fillText("🚀 Quick App Switch & Form Fill", 28, 140);
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "10px monospace";
+          ctx.fillText("6 Steps • Ready for Replay", 28, 165);
+        } else if (activeTab === "pack10") {
+          // Pack 10 Tab Frame
+          ctx.fillStyle = "#042f2e";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
+          ctx.fill();
+          ctx.fillStyle = "#2dd4bf";
+          ctx.font = "bold 14px sans-serif";
+          ctx.fillText("📷 10-Differential Frame Sequence", 28, 76);
+
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(16, 110, 100, 130);
+          ctx.fillRect(130, 110, 100, 130);
+          ctx.fillRect(244, 110, 100, 130);
+          ctx.fillRect(358, 110, 100, 130);
+          ctx.fillStyle = "#2dd4bf";
+          ctx.font = "bold 12px monospace";
+          ctx.fillText("#1", 55, 180);
+          ctx.fillText("#2", 170, 180);
+          ctx.fillText("#3", 285, 180);
+          ctx.fillText("#4", 400, 180);
+        } else if (activeTab === "actions") {
+          // Actions Tab Frame
+          ctx.fillStyle = "#064e3b";
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
+          ctx.fill();
+          ctx.fillStyle = "#34d399";
+          ctx.font = "bold 14px sans-serif";
+          ctx.fillText("⚡ ADB & Device Control Surface", 28, 76);
+
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(16, 110, 130, 50);
+          ctx.fillRect(160, 110, 130, 50);
+          ctx.fillRect(304, 110, 130, 50);
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 11px sans-serif";
+          ctx.fillText("◀ BACK", 55, 140);
+          ctx.fillText("🏠 HOME", 200, 140);
+          ctx.fillText("🔀 RECENTS", 335, 140);
+        } else if (streamMode === "mirror_pc") {
+          // PC Mirror Mode
+          ctx.fillStyle = "#0f172a";
+          ctx.fillRect(16, 46, canvas.width - 32, 680);
+          ctx.strokeStyle = "#6366f1";
+          ctx.strokeRect(16, 46, canvas.width - 32, 680);
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 14px sans-serif";
+          ctx.fillText("🖥️ Desktop PC Viewport Surface", 28, 76);
+          ctx.fillStyle = "#f8fafc";
+          ctx.font = "11px monospace";
+          ctx.fillText("PS C:\\Sightline> adb devices", 28, 110);
+          ctx.fillText("Attached: 1080x1920_ARM64 device [ACTIVE]", 28, 130);
+        } else if (virtualOsActiveApp === "chrome") {
           // Chrome Browser App
           ctx.fillStyle = "#1e293b";
           ctx.beginPath();
@@ -1163,6 +1351,64 @@ export default function MobileRemote() {
           ctx.fillStyle = "#f8fafc";
           ctx.font = "12px sans-serif";
           ctx.fillText(virtualOsNotes || "• Live interactive notes on mobile bridge", 32, 120);
+        } else if (virtualOsActiveApp === "camera") {
+          // Camera App
+          ctx.fillStyle = "#020617";
+          ctx.fillRect(16, 46, canvas.width - 32, 640);
+          ctx.strokeStyle = "#10b981";
+          ctx.strokeRect(16, 46, canvas.width - 32, 640);
+          ctx.fillStyle = "#34d399";
+          ctx.font = "bold 16px sans-serif";
+          ctx.fillText("📷 Camera Viewfinder (60 FPS)", 32, 80);
+          ctx.strokeStyle = "#34d399";
+          ctx.beginPath();
+          ctx.arc(canvas.width / 2, 360, 60, 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (virtualOsActiveApp === "terminal") {
+          // Terminal App
+          ctx.fillStyle = "#020617";
+          ctx.fillRect(16, 46, canvas.width - 32, 640);
+          ctx.strokeStyle = "#10b981";
+          ctx.strokeRect(16, 46, canvas.width - 32, 640);
+          ctx.fillStyle = "#10b981";
+          ctx.font = "bold 13px monospace";
+          ctx.fillText("$ adb shell input keyevent KEYCODE_HOME", 32, 80);
+          ctx.fillText("android:sightline_os ARM64 active", 32, 105);
+        } else if (virtualOsActiveApp === "files") {
+          // Files App
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(16, 46, canvas.width - 32, 640);
+          ctx.fillStyle = "#f97316";
+          ctx.font = "bold 16px sans-serif";
+          ctx.fillText("📁 Internal Storage (128GB)", 32, 80);
+        } else if (virtualOsActiveApp === "settings") {
+          // Settings App
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(16, 46, canvas.width - 32, 640);
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 16px sans-serif";
+          ctx.fillText("⚙️ Settings & Device Controls", 32, 80);
+        } else if (virtualOsActiveApp === "youtube") {
+          // YouTube App
+          ctx.fillStyle = "#0f172a";
+          ctx.fillRect(16, 46, canvas.width - 32, 640);
+          ctx.fillStyle = "#e11d48";
+          ctx.font = "bold 16px sans-serif";
+          ctx.fillText("▶ YouTube Video Player", 32, 80);
+        } else if (virtualOsActiveApp === "recents" || virtualOsActiveApp === "overview") {
+          // Recents App Switcher
+          ctx.fillStyle = "#0f172a";
+          ctx.fillRect(16, 46, canvas.width - 32, 640);
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 16px sans-serif";
+          ctx.fillText("🔀 Running Apps (Tap to switch)", 32, 80);
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(32, 110, 180, 220);
+          ctx.fillRect(230, 110, 180, 220);
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 12px sans-serif";
+          ctx.fillText("Chrome", 45, 140);
+          ctx.fillText("Calculator", 245, 140);
         } else {
           // Home Screen with App Grid
           ctx.fillStyle = "rgba(30, 41, 59, 0.85)";
@@ -1177,7 +1423,7 @@ export default function MobileRemote() {
           ctx.font = "11px sans-serif";
           ctx.fillText("🔍 Search apps, actions, or ask AI...", 28, 70);
 
-          // Draw 6 Quick App Tiles
+          // Draw 8 Quick App Tiles
           const apps = [
             { name: "Chrome", color: "#2563eb", icon: "🌐", x: 30, y: 110 },
             { name: "Calc", color: "#d97706", icon: "🔢", x: 140, y: 110 },
@@ -2298,7 +2544,7 @@ export default function MobileRemote() {
         {/* 7 Main Module Navigation Tabs (Including AI Chat & Document Grounding) */}
         <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800 gap-1 mt-1 overflow-x-auto no-scrollbar">
           <button
-            onClick={() => setActiveTab("stream")}
+            onClick={() => handleTabChange("stream")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "stream" ? "bg-cyan-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2306,7 +2552,7 @@ export default function MobileRemote() {
             <Video className="w-3 h-3" /> Screen
           </button>
           <button
-            onClick={() => setActiveTab("chat")}
+            onClick={() => handleTabChange("chat")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "chat" ? "bg-pink-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2314,7 +2560,7 @@ export default function MobileRemote() {
             <MessageSquare className="w-3 h-3 text-pink-300" /> AI Chat
           </button>
           <button
-            onClick={() => setActiveTab("docs")}
+            onClick={() => handleTabChange("docs")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "docs" ? "bg-blue-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2325,7 +2571,7 @@ export default function MobileRemote() {
             )}
           </button>
           <button
-            onClick={() => setActiveTab("scheduled")}
+            onClick={() => handleTabChange("scheduled")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "scheduled" ? "bg-amber-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2336,7 +2582,7 @@ export default function MobileRemote() {
             )}
           </button>
           <button
-            onClick={() => setActiveTab("workflows")}
+            onClick={() => handleTabChange("workflows")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "workflows" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2345,7 +2591,7 @@ export default function MobileRemote() {
             <span className="text-[8px] px-1 rounded-full bg-black/40">{workflows.length}</span>
           </button>
           <button
-            onClick={() => setActiveTab("pack10")}
+            onClick={() => handleTabChange("pack10")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "pack10" ? "bg-teal-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2353,7 +2599,7 @@ export default function MobileRemote() {
             <Camera className="w-3 h-3" /> 10-Snap
           </button>
           <button
-            onClick={() => setActiveTab("actions")}
+            onClick={() => handleTabChange("actions")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "actions" ? "bg-emerald-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2407,6 +2653,7 @@ export default function MobileRemote() {
                     if (state.notesList && state.notesList.length > 0) {
                       setVirtualOsNotes(state.notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"));
                     }
+                    setTriggerFrameProcess((prev) => prev + 1);
                   }}
                   onActionLogged={(action, details) => {
                     setStatus(`Action: ${action} - ${details}`);
@@ -3360,6 +3607,79 @@ export default function MobileRemote() {
             </button>
           </div>
 
+          {/* AI Live Control & Full Phone Recording Command Deck */}
+          <div className="p-2.5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950/60 to-slate-900 border border-indigo-500/50 shadow-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <div className="p-1 rounded-lg bg-indigo-600/30 text-indigo-400 border border-indigo-500/40">
+                  <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+                </div>
+                <span className="text-[11px] font-bold text-white font-mono">AI Live Control & Copilot</span>
+                {aiLiveStatusBadge && (
+                  <Badge className="bg-indigo-950 text-indigo-300 border-indigo-600 text-[8px] animate-pulse">
+                    {aiLiveStatusBadge}
+                  </Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5">
+                {isFullPhoneRecording ? (
+                  <Button
+                    size="sm"
+                    onClick={handleToggleFullPhoneRecording}
+                    className="h-6 px-2 text-[9px] font-bold bg-red-600 hover:bg-red-500 text-white animate-pulse gap-1"
+                  >
+                    <Square className="w-2.5 h-2.5" /> Stop REC ({fullPhoneRecordDuration}s)
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={handleToggleFullPhoneRecording}
+                    variant="outline"
+                    className="h-6 px-2 text-[9px] font-bold border-red-500/60 text-red-300 bg-red-950/40 hover:bg-red-900/60 gap-1"
+                  >
+                    <Radio className="w-2.5 h-2.5 text-red-400" /> Full Phone REC
+                  </Button>
+                )}
+                {recordedSessionFrames.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleDownloadRecordedSession}
+                    className="h-6 px-1.5 text-[9px] font-bold text-cyan-300 hover:text-white"
+                    title="Download recorded phone session JSON"
+                  >
+                    <Download className="w-3 h-3" />
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {/* AI Live Goal Input */}
+            <div className="flex items-center gap-1.5">
+              <Input
+                value={aiLiveGoalPrompt}
+                onChange={(e) => setAiLiveGoalPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleExecuteAiLiveGoal();
+                }}
+                placeholder="Ask AI: e.g. 'Open Calculator', 'Type admin', 'Press Home'..."
+                className="h-8 text-xs bg-slate-950 border-slate-700 text-cyan-200 font-mono focus:border-indigo-400"
+              />
+              <Button
+                size="sm"
+                onClick={() => handleExecuteAiLiveGoal()}
+                disabled={isAiLiveGoalRunning || !aiLiveGoalPrompt.trim()}
+                className="h-8 px-3 text-xs font-bold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shrink-0"
+              >
+                {isAiLiveGoalRunning ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Send className="w-3.5 h-3.5" />
+                )}
+              </Button>
+            </div>
+          </div>
+
           {/* Quick Hardware Action Bar */}
           <div className="grid grid-cols-4 gap-1.5">
             <Button
@@ -3375,13 +3695,13 @@ export default function MobileRemote() {
                   setIsRecordingWorkflow((prev) => !prev);
                   if (!isRecordingWorkflow) {
                     setRecordedSteps([]);
-                    toast.info("🔴 Workflow Recording Started: Tap apps to record steps");
+                    toast.info("Workflow Recording Started: Tap apps to record steps");
                   }
                 } else {
                   handleSwitchStreamSource("interactive_phone");
                   setIsRecordingWorkflow(true);
                   setRecordedSteps([]);
-                  toast.info("🔴 Switched to Phone & Started Recording Steps");
+                  toast.info("Switched to Phone & Started Recording Steps");
                 }
               }}
               variant="outline"
@@ -3408,6 +3728,27 @@ export default function MobileRemote() {
               <Zap className="w-3 h-3" /> Snap
             </Button>
           </div>
+        </div>
+      )}
+
+      {/* ---------------------------------------------------- */}
+      {/* TAB: MAIN AI CHAT & COPILOT FULL VIEWPORT */}
+      {/* ---------------------------------------------------- */}
+      {activeTab === "chat" && (
+        <div className="w-full max-w-md flex-1 space-y-2.5 my-2">
+          <MainAiLiveChat
+            currentScreenSnapshot={pcMirrorFrame || undefined}
+            currentTab="screen"
+            targetDevice="android"
+            onRunWorkflow={(wf) => {
+              if (wf?.steps) {
+                toast.success(`Loaded workflow "${wf.name}" with ${wf.steps.length} steps`);
+                setActiveTab("workflows");
+              }
+            }}
+            compact={false}
+            className="h-[620px] border-pink-500/40 shadow-2xl"
+          />
         </div>
       )}
 

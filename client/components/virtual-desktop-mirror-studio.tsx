@@ -935,7 +935,7 @@ export const VirtualDesktopMirrorStudio: React.FC = () => {
                                 ))}
                               </div>
                               <form onSubmit={handleExecuteTerminalCommand} className="flex items-center gap-1">
-                                <span className="text-emerald-400 font-bold text-xs">&gt;</span>
+                                <span className="text-emerald-400 font-bold text-xs">{">"}</span>
                                 <input
                                   type="text"
                                   value={terminalInput}

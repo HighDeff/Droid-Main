@@ -331,7 +331,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
                     <span>Stable (≤{Math.round(thresholdPx / 2)}px)</span>
                     <span>Warning</span>
                     <span className="text-red-400 font-bold">
-                      Critical (&gt;{thresholdPx}px)
+                      Critical ({">"}{thresholdPx}px)
                     </span>
                   </div>
                   <div className="h-2 w-full rounded-full bg-gradient-to-r from-emerald-500 via-amber-500 to-red-500 shadow-inner" />

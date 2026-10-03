@@ -58,6 +58,7 @@ export interface ChatMessage {
 export interface MainAiLiveChatProps {
   currentScreenSnapshot?: string | null;
   currentTab?: string;
+  targetDevice?: "desktop" | "android";
   onNavigateTab?: (tabId: string) => void;
   onRunWorkflow?: (workflow: any) => void;
   onExtendToScreen?: (workflow: any) => void;
@@ -67,9 +68,18 @@ export interface MainAiLiveChatProps {
   compact?: boolean;
 }
 
+const DEFAULT_INITIAL_WELCOME: ChatMessage = {
+  id: "welcome-init",
+  role: "assistant",
+  content:
+    "👋 **Sightline Main AI Copilot & Automation Executive**\n\nConnected directly to your live phone stream, PyAutoGUI, ADB hardware engines, and workflow generator.\n\n**You can command:**\n- 📱 **Device Navigation:** *\"Open Chrome\"*, *\"Open Calculator\"*, *\"Minimize App\"*, *\"Press Home\"*\n- 🎯 **Direct Coordinates:** *\"Click (960, 540)\"*, *\"Swipe up on phone\"*\n- ✍️ **Hardware Typing:** *\"Type admin123 and press enter\"*\n- ⚡ **Autonomous Workflows:** *\"Create a 4-step workflow to login and verify status\"*\n- 🔀 **Tab Switching:** *\"Switch to Movement Tab\"*, *\"Open AI Monitor\"*",
+  timestamp: Date.now(),
+};
+
 export function MainAiLiveChat({
   currentScreenSnapshot,
   currentTab = "screen",
+  targetDevice: targetDeviceProp = "desktop",
   onNavigateTab,
   onRunWorkflow,
   onExtendToScreen,
@@ -78,16 +88,23 @@ export function MainAiLiveChat({
   className = "",
   compact = false,
 }: MainAiLiveChatProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([DEFAULT_INITIAL_WELCOME]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(!compact);
   const [sessions, setSessions] = useState<Array<{ id: string; title: string; updatedAt: number }>>([]);
   const [currentSessionId, setCurrentSessionId] = useState("main-live-session");
   const [attachLiveScreen, setAttachLiveScreen] = useState(true);
-  const [targetDevice, setTargetDevice] = useState<"desktop" | "android">("desktop");
+  const [targetDevice, setTargetDevice] = useState<"desktop" | "android">(targetDeviceProp);
   const [expandedWorkflowIds, setExpandedWorkflowIds] = useState<Record<string, boolean>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Sync prop changes for targetDevice
+  useEffect(() => {
+    if (targetDeviceProp) {
+      setTargetDevice(targetDeviceProp);
+    }
+  }, [targetDeviceProp]);
 
   // Load session messages on mount or session change
   useEffect(() => {
@@ -105,7 +122,7 @@ export function MainAiLiveChat({
       const res = await fetch(`/api/ai/main-chat/session/${sessionId}`);
       if (res.ok) {
         const data = await res.json();
-        if (data.session?.messages) {
+        if (data.session?.messages && data.session.messages.length > 0) {
           setMessages(data.session.messages);
         }
       }

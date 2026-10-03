@@ -180,7 +180,7 @@ export const TaskProgressWatchdogAgent: React.FC = () => {
                 Autonomous Remedy Policies:
               </span>
               <p>
-                • <strong>Threshold Stall (&gt;2.5s):</strong> Triggers instant
+                • <strong>Threshold Stall ({">"}2.5s):</strong> Triggers instant
                 micro-retry & focus lock.
               </p>
               <p>

@@ -261,7 +261,9 @@ const recentFramesBuffer: MobileFrameSnapshot[] = [];
 const MAX_FRAMES = 20;
 
 export interface ServerSimulatedPhoneState {
-  activeApp: "home" | "chrome" | "calculator" | "notes" | "camera" | "settings" | "terminal" | "files" | "recents";
+  activeTab?: "stream" | "chat" | "docs" | "workflows" | "scheduled" | "pack10" | "actions";
+  streamMode?: "interactive_phone" | "live_view" | "mirror_pc" | "screen" | "camera_back" | "camera_front" | "dual";
+  activeApp: "home" | "chrome" | "calculator" | "notes" | "camera" | "settings" | "terminal" | "files" | "youtube" | "spotify" | "recents";
   chromeUrl: string;
   chromeQuery: string;
   calcDisplay: string;
@@ -275,9 +277,14 @@ export interface ServerSimulatedPhoneState {
   lastTouchY?: number;
   lastTouchTime?: number;
   lastActionText?: string;
+  docCount?: number;
+  workflowCount?: number;
+  scheduledCount?: number;
 }
 
 const serverPhoneState: ServerSimulatedPhoneState = {
+  activeTab: "stream",
+  streamMode: "interactive_phone",
   activeApp: "home",
   chromeUrl: "https://google.com",
   chromeQuery: "AI Vision & Automation Engine",
@@ -288,6 +295,9 @@ const serverPhoneState: ServerSimulatedPhoneState = {
   settingsWifi: true,
   settingsBluetooth: true,
   battery: 98,
+  docCount: 1,
+  workflowCount: 3,
+  scheduledCount: 2,
 };
 
 export function generateServerPhoneFrame(state: ServerSimulatedPhoneState = serverPhoneState): string {
@@ -300,7 +310,231 @@ export function generateServerPhoneFrame(state: ServerSimulatedPhoneState = serv
 
   let appContentSvg = "";
 
-  if (state.activeApp === "home") {
+  // 1. Check if user navigated to one of the built-in top tabs (AI Chat, Docs, Workflows, Scheduled, Pack 10, Actions)
+  if (state.activeTab === "chat") {
+    appContentSvg = `
+      <!-- AI Live Chat Screen View -->
+      <g transform="translate(60, 220)">
+        <rect width="960" height="1520" rx="32" fill="#090d16" stroke="#ec4899" stroke-width="2" stroke-opacity="0.5"/>
+        
+        <!-- Chat Header -->
+        <rect width="960" height="120" rx="32" fill="#1e112a" stroke="#ec4899" stroke-width="1.5"/>
+        <circle cx="70" cy="60" r="30" fill="#ec4899" fill-opacity="0.2" stroke="#ec4899" stroke-width="2"/>
+        <text x="70" y="68" text-anchor="middle" fill="#f472b6" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="28" font-weight="bold">✨</text>
+        <text x="120" y="55" fill="#fdf2f8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">Main AI Live Chat &amp; Copilot</text>
+        <text x="120" y="90" fill="#f472b6" font-family="monospace" font-size="20">Gemini 2.5 Flash • Connected to Phone &amp; ADB</text>
+        
+        <!-- Chat Messages -->
+        <!-- Assistant Msg 1 -->
+        <g transform="translate(40, 160)">
+          <rect width="780" height="220" rx="24" fill="#1e293b" stroke="#334155" stroke-width="2"/>
+          <text x="35" y="45" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24" font-weight="bold">🤖 Sightline AI Copilot</text>
+          <text x="35" y="90" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22">👋 Live control ready. You can command:</text>
+          <text x="35" y="130" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="20">• "Open Calculator" or "Type search query"</text>
+          <text x="35" y="165" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="20">• "Tap coordinate (960, 540)" or "Swipe up"</text>
+          <text x="35" y="200" fill="#a855f7" font-family="monospace" font-size="18">⚡ Real-time PyAutoGUI &amp; ADB dispatch active</text>
+        </g>
+
+        <!-- User Msg -->
+        <g transform="translate(180, 420)">
+          <rect width="740" height="110" rx="24" fill="#065f46" stroke="#10b981" stroke-width="2"/>
+          <text x="35" y="45" fill="#a7f3d0" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="bold">👤 User Command</text>
+          <text x="35" y="85" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">Switch to Calculator and compute taxes</text>
+        </g>
+
+        <!-- Assistant Msg 2 (Tool execution card) -->
+        <g transform="translate(40, 560)">
+          <rect width="840" height="260" rx="24" fill="#1e1b4b" stroke="#6366f1" stroke-width="2"/>
+          <text x="35" y="45" fill="#818cf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24" font-weight="bold">⚡ Tool Execution: open_app("calculator")</text>
+          <rect x="35" y="70" width="770" height="50" rx="12" fill="#0f172a"/>
+          <text x="55" y="102" fill="#34d399" font-family="monospace" font-size="20">✓ Success • Switched active phone app to Calculator</text>
+          <text x="35" y="160" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22">Executing sequence: Type formula and capture result</text>
+          <rect x="35" y="185" width="260" height="45" rx="10" fill="#4f46e5"/>
+          <text x="165" y="215" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" font-weight="bold">▶ Run on Device</text>
+        </g>
+
+        <!-- Chat Input Bar -->
+        <g transform="translate(40, 1380)">
+          <rect width="880" height="90" rx="24" fill="#1e293b" stroke="#ec4899" stroke-width="2"/>
+          <text x="35" y="55" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">Type command for AI (e.g. 'Open Chrome', 'Tap Home')...</text>
+          <rect x="760" y="15" width="95" height="60" rx="16" fill="#ec4899"/>
+          <text x="807" y="52" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">➤</text>
+        </g>
+      </g>
+    `;
+  } else if (state.activeTab === "docs") {
+    appContentSvg = `
+      <!-- Document Grounding Tab View -->
+      <g transform="translate(60, 220)">
+        <rect width="960" height="1520" rx="32" fill="#090d16" stroke="#3b82f6" stroke-width="2" stroke-opacity="0.5"/>
+        
+        <!-- Header -->
+        <rect width="960" height="120" rx="32" fill="#1e293b" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="60" y="55" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">📄 Document Grounding &amp; Knowledge Base</text>
+        <text x="60" y="90" fill="#60a5fa" font-family="monospace" font-size="20">${state.docCount || 3} Documents Vector-Indexed • AI Knowledge Active</text>
+
+        <!-- Document Cards -->
+        <g transform="translate(40, 160)">
+          <rect width="880" height="180" rx="20" fill="#1e293b" stroke="#334155" stroke-width="2"/>
+          <text x="35" y="48" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">📑 automation_system_manual.pdf</text>
+          <text x="35" y="88" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="20">24 Pages • OCR &amp; Semantic Chunks Processed</text>
+          <rect x="35" y="110" width="140" height="40" rx="8" fill="#065f46"/>
+          <text x="105" y="136" text-anchor="middle" fill="#34d399" font-family="monospace" font-size="18" font-weight="bold">INDEXED</text>
+        </g>
+
+        <g transform="translate(40, 370)">
+          <rect width="880" height="180" rx="20" fill="#1e293b" stroke="#334155" stroke-width="2"/>
+          <text x="35" y="48" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">📋 device_test_credentials.txt</text>
+          <text x="35" y="88" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="20">Form Autocomplete &amp; Coordinate Targets Grounded</text>
+          <rect x="35" y="110" width="140" height="40" rx="8" fill="#065f46"/>
+          <text x="105" y="136" text-anchor="middle" fill="#34d399" font-family="monospace" font-size="18" font-weight="bold">INDEXED</text>
+        </g>
+      </g>
+    `;
+  } else if (state.activeTab === "scheduled") {
+    appContentSvg = `
+      <!-- Scheduled Tab View -->
+      <g transform="translate(60, 220)">
+        <rect width="960" height="1520" rx="32" fill="#090d16" stroke="#f59e0b" stroke-width="2" stroke-opacity="0.5"/>
+        <rect width="960" height="120" rx="32" fill="#2d1b06" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="60" y="55" fill="#fef3c7" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">⏰ Scheduled Phone Automation Routines</text>
+        <text x="60" y="90" fill="#fbbf24" font-family="monospace" font-size="20">3 Cron Triggers Active • Self-Executing Background Sentinel</text>
+
+        <!-- Cron Task 1 -->
+        <g transform="translate(40, 160)">
+          <rect width="880" height="200" rx="20" fill="#1e293b" stroke="#d97706" stroke-width="2"/>
+          <text x="35" y="48" fill="#fef3c7" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">⚡ Social Feed Sync &amp; Stock Alert</text>
+          <text x="35" y="88" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="20">Interval: Every 15 minutes • Target: Android Phone</text>
+          <text x="35" y="125" fill="#38bdf8" font-family="monospace" font-size="20">Next Run: in 4m 18s • Executed: 42 times</text>
+          <rect x="700" y="30" width="140" height="45" rx="10" fill="#065f46"/>
+          <text x="770" y="60" text-anchor="middle" fill="#34d399" font-family="monospace" font-size="20" font-weight="bold">RUNNING</text>
+        </g>
+      </g>
+    `;
+  } else if (state.activeTab === "workflows") {
+    appContentSvg = `
+      <!-- Workflows Tab View -->
+      <g transform="translate(60, 220)">
+        <rect width="960" height="1520" rx="32" fill="#090d16" stroke="#6366f1" stroke-width="2" stroke-opacity="0.5"/>
+        <rect width="960" height="120" rx="32" fill="#1e1b4b" stroke="#6366f1" stroke-width="1.5"/>
+        <text x="60" y="55" fill="#e0e7ff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">⚡ Workflow Orchestrator &amp; Macros</text>
+        <text x="60" y="90" fill="#a5b4fc" font-family="monospace" font-size="20">4 Recorded Workflows Available for Instant Replay</text>
+
+        <!-- Wf 1 -->
+        <g transform="translate(40, 160)">
+          <rect width="880" height="220" rx="20" fill="#1e293b" stroke="#6366f1" stroke-width="2"/>
+          <text x="35" y="48" fill="#e0e7ff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">🚀 Quick App Switch &amp; Form Fill</text>
+          <text x="35" y="88" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="20">6 Steps: Home -> Chrome -> Search -> Scroll -> Tap</text>
+          <rect x="35" y="130" width="180" height="50" rx="12" fill="#10b981"/>
+          <text x="125" y="162" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="bold">▶ Replay Now</text>
+        </g>
+      </g>
+    `;
+  } else if (state.activeTab === "pack10") {
+    appContentSvg = `
+      <!-- Pack 10 Tab View -->
+      <g transform="translate(60, 220)">
+        <rect width="960" height="1520" rx="32" fill="#090d16" stroke="#14b8a6" stroke-width="2" stroke-opacity="0.5"/>
+        <rect width="960" height="120" rx="32" fill="#042f2e" stroke="#14b8a6" stroke-width="1.5"/>
+        <text x="60" y="55" fill="#ccfbf1" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">📷 10-Differential Frame Sequence Pack</text>
+        <text x="60" y="90" fill="#2dd4bf" font-family="monospace" font-size="20">Sub-pixel Optical Drift &amp; Visual Heatmap Verification</text>
+      </g>
+    `;
+  } else if (state.activeTab === "actions") {
+    appContentSvg = `
+      <!-- Actions Tab View -->
+      <g transform="translate(60, 220)">
+        <rect width="960" height="1520" rx="32" fill="#090d16" stroke="#10b981" stroke-width="2" stroke-opacity="0.5"/>
+        <rect width="960" height="120" rx="32" fill="#064e3b" stroke="#10b981" stroke-width="1.5"/>
+        <text x="60" y="55" fill="#d1fae5" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="bold">⚡ Direct ADB &amp; Device Control Surface</text>
+        <text x="60" y="90" fill="#34d399" font-family="monospace" font-size="20">Hardware Touch Injection &amp; Keycodes</text>
+
+        <!-- Controls -->
+        <g transform="translate(40, 160)">
+          <rect x="0" y="0" width="260" height="100" rx="16" fill="#1e293b" stroke="#334155" stroke-width="2"/>
+          <text x="130" y="60" text-anchor="middle" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24" font-weight="bold">◀ BACK</text>
+          <rect x="310" y="0" width="260" height="100" rx="16" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+          <text x="440" y="60" text-anchor="middle" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24" font-weight="bold">🏠 HOME</text>
+          <rect x="620" y="0" width="260" height="100" rx="16" fill="#1e293b" stroke="#334155" stroke-width="2"/>
+          <text x="750" y="60" text-anchor="middle" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24" font-weight="bold">🔀 RECENTS</text>
+        </g>
+      </g>
+    `;
+  } else if (state.streamMode === "mirror_pc") {
+    appContentSvg = `
+      <!-- PC Mirror Mode (Full Windows/Linux Desktop Environment) -->
+      <g transform="translate(60, 220)">
+        <rect width="960" height="1520" rx="24" fill="#0f172a" stroke="#6366f1" stroke-width="3"/>
+        
+        <!-- PC Window 1: Chrome Browser -->
+        <g transform="translate(40, 40)">
+          <rect width="880" height="600" rx="16" fill="#1e293b" stroke="#3b82f6" stroke-width="2"/>
+          <rect width="880" height="50" rx="16" fill="#0f172a"/>
+          <circle cx="30" cy="25" r="8" fill="#ef4444"/>
+          <circle cx="55" cy="25" r="8" fill="#f59e0b"/>
+          <circle cx="80" cy="25" r="8" fill="#10b981"/>
+          <text x="440" y="32" text-anchor="middle" fill="#94a3b8" font-family="monospace" font-size="18">Chrome - Sightline Automation Controller</text>
+          <text x="60" y="140" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="28" font-weight="bold">🖥️ Live Desktop PC Surface</text>
+          <text x="60" y="190" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22">PyAutoGUI click &amp; drag stream active (1920x1080 -> 60Hz)</text>
+        </g>
+
+        <!-- PC Window 2: Terminal -->
+        <g transform="translate(40, 680)">
+          <rect width="880" height="500" rx="16" fill="#020617" stroke="#10b981" stroke-width="2"/>
+          <text x="40" y="60" fill="#10b981" font-family="monospace" font-size="22">PS C:\\Sightline\\Automation> adb devices</text>
+          <text x="40" y="100" fill="#f8fafc" font-family="monospace" font-size="20">List of devices attached: 1080x1920_ARM64 device [ACTIVE]</text>
+          <text x="40" y="140" fill="#38bdf8" font-family="monospace" font-size="20">Vision HUD Calibrated: 0ms drift</text>
+        </g>
+
+        <!-- PC Taskbar -->
+        <rect x="0" y="1450" width="960" height="70" rx="14" fill="#020617" stroke="#334155" stroke-width="1"/>
+        <rect x="20" y="1460" width="100" height="50" rx="8" fill="#2563eb"/>
+        <text x="70" y="1493" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="20" font-weight="bold">Start</text>
+      </g>
+    `;
+  } else if (state.streamMode === "camera_back" || state.streamMode === "camera_front") {
+    appContentSvg = `
+      <!-- Camera Viewfinder Mirror -->
+      <g transform="translate(60, 220)">
+        <rect width="960" height="1520" rx="32" fill="#020617" stroke="#14b8a6" stroke-width="3"/>
+        <text x="480" y="80" text-anchor="middle" fill="#2dd4bf" font-family="monospace" font-size="28" font-weight="bold">📷 LIVE CAMERA FEED (${state.streamMode === "camera_front" ? "FRONT" : "REAR"})</text>
+        
+        <!-- Reticle -->
+        <circle cx="480" cy="760" r="180" fill="none" stroke="#2dd4bf" stroke-width="4" stroke-dasharray="16, 12"/>
+        <circle cx="480" cy="760" r="12" fill="#2dd4bf"/>
+        <line x1="260" y1="760" x2="700" y2="760" stroke="#2dd4bf" stroke-width="2" stroke-opacity="0.4"/>
+        <line x1="480" y1="540" x2="480" y2="980" stroke="#2dd4bf" stroke-width="2" stroke-opacity="0.4"/>
+        <text x="480" y="1040" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="24">Real-time Visual OCR &amp; OCR Target Detection Active</text>
+      </g>
+    `;
+  } else if (state.activeApp === "youtube") {
+    appContentSvg = `
+      <!-- YouTube Screen -->
+      <g transform="translate(60, 230)">
+        <rect width="960" height="1500" rx="32" fill="#0f172a" stroke="#e11d48" stroke-width="2"/>
+        <rect width="960" height="100" rx="32" fill="#e11d48"/>
+        <text x="60" y="62" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="32" font-weight="bold">▶ YouTube</text>
+        
+        <!-- Video Player Frame -->
+        <g transform="translate(40, 140)">
+          <rect width="880" height="520" rx="20" fill="#020617" stroke="#334155" stroke-width="2"/>
+          <circle cx="440" cy="260" r="50" fill="#e11d48"/>
+          <polygon points="430,240 460,260 430,280" fill="#ffffff"/>
+          <text x="440" y="360" text-anchor="middle" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="26" font-weight="bold">Sightline Vision AI Demo Video</text>
+        </g>
+      </g>
+    `;
+  } else if (state.activeApp === "spotify") {
+    appContentSvg = `
+      <!-- Music Player Screen -->
+      <g transform="translate(60, 230)">
+        <rect width="960" height="1500" rx="32" fill="#064e3b" stroke="#10b981" stroke-width="2"/>
+        <text x="480" y="100" text-anchor="middle" fill="#34d399" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="34" font-weight="bold">🎵 Spotify Music Player</text>
+        <circle cx="480" cy="500" r="200" fill="#10b981" fill-opacity="0.2" stroke="#10b981" stroke-width="4"/>
+        <text x="480" y="520" text-anchor="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="32" font-weight="bold">Synthetic Cognition</text>
+      </g>
+    `;
+  } else if (state.activeApp === "home") {
     appContentSvg = `
       <!-- Search Bar -->
       <rect x="60" y="240" width="960" height="90" rx="24" fill="#1e293b" stroke="#38bdf8" stroke-width="2" stroke-opacity="0.4"/>
@@ -1236,6 +1470,8 @@ mobileStreamRouter.get("/api/mobile-stream/virtual-os/state", (_req, res) => {
 // POST update synchronized Virtual OS State
 mobileStreamRouter.post("/api/virtual-os/state", (req, res) => {
   const updates = req.body?.state || req.body || {};
+  if (updates.activeTab) serverPhoneState.activeTab = updates.activeTab;
+  if (updates.streamMode) serverPhoneState.streamMode = updates.streamMode;
   if (updates.activeApp) serverPhoneState.activeApp = updates.activeApp;
   if (updates.chromeUrl !== undefined) serverPhoneState.chromeUrl = updates.chromeUrl;
   if (updates.chromeQuery !== undefined) serverPhoneState.chromeQuery = updates.chromeQuery;
@@ -1245,18 +1481,36 @@ mobileStreamRouter.post("/api/virtual-os/state", (req, res) => {
   if (updates.cameraSnapped !== undefined) serverPhoneState.cameraSnapped = updates.cameraSnapped;
   if (updates.settingsWifi !== undefined) serverPhoneState.settingsWifi = updates.settingsWifi;
   if (updates.settingsBluetooth !== undefined) serverPhoneState.settingsBluetooth = updates.settingsBluetooth;
+  if (updates.docCount !== undefined) serverPhoneState.docCount = updates.docCount;
+  if (updates.workflowCount !== undefined) serverPhoneState.workflowCount = updates.workflowCount;
+  if (updates.scheduledCount !== undefined) serverPhoneState.scheduledCount = updates.scheduledCount;
   if (updates.lastTouchX !== undefined) serverPhoneState.lastTouchX = updates.lastTouchX;
   if (updates.lastTouchY !== undefined) serverPhoneState.lastTouchY = updates.lastTouchY;
   serverPhoneState.lastTouchTime = Date.now();
 
+  const newFrame = generateServerPhoneFrame(serverPhoneState);
+  latestMobileFrame = {
+    imageData: newFrame,
+    timestamp: Date.now(),
+    deviceName: "Mobile Phone (Sightline Mirror)",
+    streamType: "mirror",
+    fps: 30,
+    touchX: serverPhoneState.lastTouchX,
+    touchY: serverPhoneState.lastTouchY,
+  };
+  setLatestSyncedRealFrame(newFrame);
+
   res.json({
     success: true,
     state: serverPhoneState,
+    imageData: newFrame,
     timestamp: Date.now(),
   });
 });
 mobileStreamRouter.post("/api/mobile-stream/virtual-os/state", (req, res) => {
   const updates = req.body?.state || req.body || {};
+  if (updates.activeTab) serverPhoneState.activeTab = updates.activeTab;
+  if (updates.streamMode) serverPhoneState.streamMode = updates.streamMode;
   if (updates.activeApp) serverPhoneState.activeApp = updates.activeApp;
   if (updates.chromeUrl !== undefined) serverPhoneState.chromeUrl = updates.chromeUrl;
   if (updates.chromeQuery !== undefined) serverPhoneState.chromeQuery = updates.chromeQuery;
@@ -1266,13 +1520,29 @@ mobileStreamRouter.post("/api/mobile-stream/virtual-os/state", (req, res) => {
   if (updates.cameraSnapped !== undefined) serverPhoneState.cameraSnapped = updates.cameraSnapped;
   if (updates.settingsWifi !== undefined) serverPhoneState.settingsWifi = updates.settingsWifi;
   if (updates.settingsBluetooth !== undefined) serverPhoneState.settingsBluetooth = updates.settingsBluetooth;
+  if (updates.docCount !== undefined) serverPhoneState.docCount = updates.docCount;
+  if (updates.workflowCount !== undefined) serverPhoneState.workflowCount = updates.workflowCount;
+  if (updates.scheduledCount !== undefined) serverPhoneState.scheduledCount = updates.scheduledCount;
   if (updates.lastTouchX !== undefined) serverPhoneState.lastTouchX = updates.lastTouchX;
   if (updates.lastTouchY !== undefined) serverPhoneState.lastTouchY = updates.lastTouchY;
   serverPhoneState.lastTouchTime = Date.now();
 
+  const newFrame = generateServerPhoneFrame(serverPhoneState);
+  latestMobileFrame = {
+    imageData: newFrame,
+    timestamp: Date.now(),
+    deviceName: "Mobile Phone (Sightline Mirror)",
+    streamType: "mirror",
+    fps: 30,
+    touchX: serverPhoneState.lastTouchX,
+    touchY: serverPhoneState.lastTouchY,
+  };
+  setLatestSyncedRealFrame(newFrame);
+
   res.json({
     success: true,
     state: serverPhoneState,
+    imageData: newFrame,
     timestamp: Date.now(),
   });
 });

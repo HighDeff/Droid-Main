@@ -1,3 +1,4 @@
+import { replayRouter } from "./routes/replay";
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -35,6 +36,7 @@ import { assistantReportsRouter } from "./routes/assistant-reports";
 import { verificationReportsRouter } from "./routes/verification-reports";
 import { schedulingRouter } from "./routes/scheduling";
 import { methodLearningRouter } from "./routes/method-learning";
+import { createPhoneRouter } from "./routes/phone";
 import { mobileStreamRouter, getLatestMobileFrameSnapshot } from "./routes/mobile-stream";
 import { workflowRuntime } from "./workflow-runtime";
 import { redactSensitive } from "./security";
@@ -222,7 +224,7 @@ export function createServer() {
   // AppBrief HUD sync (in-memory)
   app.get("/api/capture-screen", async (_req, res) => {
     try {
-      if (lastSyncedFrame) {
+      if (lastSyncedFrame && Date.now() - lastSyncedTimestamp <= 5000) {
         return res.json({
           success: true,
           imageData: lastSyncedFrame,
@@ -235,25 +237,8 @@ export function createServer() {
       const result = await master.captureDesktopFrame();
       if (result.success && result.imageData) return res.json(result);
 
-      // Fallback to live mobile stream / mirror frame
-      const mobileSnap = getLatestMobileFrameSnapshot();
-      if (mobileSnap?.imageData) {
-        return res.json({
-          success: true,
-          imageData: mobileSnap.imageData,
-          timestamp: mobileSnap.timestamp,
-          source: "mobile_stream_mirror",
-          deviceName: mobileSnap.deviceName,
-        });
-      }
+      res.status(503).json({ success: false, error: result.error || "Desktop capture unavailable" });
 
-      res.json({
-        success: true,
-        imageData: null,
-        timestamp: Date.now(),
-        source: "standby",
-        message: "Waiting for HUD screen share frame",
-      });
     } catch (e) {
       res.status(500).json({ success: false, error: String(e) });
     }
@@ -307,7 +292,8 @@ export function createServer() {
   });
 
   // Task execution and logs
-  app.post("/api/execute-task", handleExecuteTask);
+  app.use("/api/replay", requireApiAccess, replayRouter);
+  app.post("/api/execute-task", requireApiAccess, handleExecuteTask);
   app.get("/api/interactions", handleGetInteractions);
   app.delete("/api/interactions", handleClearInteractions);
 
@@ -433,7 +419,7 @@ export function createServer() {
   app.post("/api/pyautogui/replay-trail", handleReplayTrail);
   app.get("/api/screen/capture", async (_req, res) => {
     try {
-      if (lastSyncedFrame) {
+      if (lastSyncedFrame && Date.now() - lastSyncedTimestamp <= 5000) {
         return res.json({
           success: true,
           imageData: lastSyncedFrame,
@@ -1106,6 +1092,7 @@ except Exception as e:
     res.json({ success: true });
   });
 
+  app.use("/api/phone", createPhoneRouter());
   app.use(mobileStreamRouter);
 
   workflowRuntime.start();

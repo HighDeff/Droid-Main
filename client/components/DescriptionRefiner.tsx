@@ -303,7 +303,7 @@ export function DescriptionRefiner({
       if (data.success) {
         setResult(data);
         setHistory((prev) => [data, ...prev.filter((item) => item.refinedDescription !== data.refinedDescription)].slice(0, 8));
-        
+
         // Auto-persist to local state App Briefs History Vault
         try {
           saveAppBrief({

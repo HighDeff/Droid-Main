@@ -164,47 +164,6 @@ assistantExecutionRouter.post("/:executionId/approve-alternate", (req, res) => {
       success: false,
       error: "Explicit confirmation is required to select an alternate step",
     });
-
-    assistantExecutionRouter.post("/:executionId/approve", (req, res) => {
-      if (req.body?.confirmation !== true) {
-        return res.status(400).json({
-          success: false,
-          error:
-            "Explicit confirmation is required to continue after uncertain analysis",
-        });
-      }
-      const execution = executionStateRepository.get(req.params.executionId);
-      if (!execution)
-        return res
-          .status(404)
-          .json({ success: false, error: "Execution not found" });
-      const plan = assistantStateRepository.getPlan(
-        execution.planId,
-        execution.sessionId,
-      );
-      if (!plan)
-        return res
-          .status(404)
-          .json({ success: false, error: "Assistant plan not found" });
-      void executionStateRepository
-        .approvePending(execution.id, plan)
-        .then((updated) => {
-          if (!updated) {
-            res.status(409).json({
-              success: false,
-              error: "No pending approval exists",
-            });
-            return;
-          }
-          res.json({ success: true, execution: updated });
-        })
-        .catch((error) =>
-          res.status(500).json({
-            success: false,
-            error: error instanceof Error ? error.message : "Approval failed",
-          }),
-        );
-    });
   }
   const execution = executionStateRepository.get(req.params.executionId);
   if (!execution)
@@ -235,6 +194,47 @@ assistantExecutionRouter.post("/:executionId/approve-alternate", (req, res) => {
       res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : "Alternate failed",
+      }),
+    );
+});
+
+assistantExecutionRouter.post("/:executionId/approve", (req, res) => {
+  if (req.body?.confirmation !== true) {
+    return res.status(400).json({
+      success: false,
+      error:
+        "Explicit confirmation is required to continue after uncertain analysis",
+    });
+  }
+  const execution = executionStateRepository.get(req.params.executionId);
+  if (!execution)
+    return res
+      .status(404)
+      .json({ success: false, error: "Execution not found" });
+  const plan = assistantStateRepository.getPlan(
+    execution.planId,
+    execution.sessionId,
+  );
+  if (!plan)
+    return res
+      .status(404)
+      .json({ success: false, error: "Assistant plan not found" });
+  void executionStateRepository
+    .approvePending(execution.id, plan)
+    .then((updated) => {
+      if (!updated) {
+        res.status(409).json({
+          success: false,
+          error: "No pending approval exists",
+        });
+        return;
+      }
+      res.json({ success: true, execution: updated });
+    })
+    .catch((error) =>
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Approval failed",
       }),
     );
 });

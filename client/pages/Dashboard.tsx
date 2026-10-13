@@ -1,3 +1,5 @@
+import type { ReplayRun } from "@shared/replay";
+import { ReplayMonitor } from "@/components/replay-monitor";
 import { generateDefaultMobileFrame, generateDefaultDesktopFrame } from "@/lib/mobile-screen-generator";
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
@@ -215,27 +217,7 @@ export default function Dashboard({
   const [recalibrationNotice, setRecalibrationNotice] =
     useState<RecalibrationNotice | null>(null);
   const [perceptionReport, setPerceptionReport] =
-    useState<ScreenPerceptionReport | null>({
-      timestamp: Date.now(),
-      screenDescription: "Ready",
-      activeWindow: "App",
-      visualStateChange: "Ready",
-      elements: [
-        {
-          id: "elem_center",
-          name: "Screen Center Focus",
-          type: "target",
-          boundingBox: { x: 860, y: 480, width: 200, height: 120 },
-          center: { x: 960, y: 540 },
-          confidence: 0.96,
-          interactive: true,
-          textValue: "Main",
-        },
-      ],
-      feedbackPosition: { x: 960, y: 540 },
-      primarySuggestion: "Inspect",
-      confidence: 0.95,
-    });
+    useState<ScreenPerceptionReport | null>(null);
   const [verificationBadge, setVerificationBadge] =
     useState<VerificationBadgeState | null>(null);
   const [isAutonomousRunning, setIsAutonomousRunning] = useState(false);
@@ -647,47 +629,6 @@ export default function Dashboard({
       }
     }
 
-    // Prevent steps from stacking in the exact same position or overlapping (<24px) with ANY existing step
-    const isCoordinateOccupied = (x: number, y: number) =>
-      sequence.some((s) => Math.hypot(s.x - x, s.y - y) < 22);
-
-    if (isCoordinateOccupied(targetX, targetY)) {
-      let candX = targetX;
-      let candY = targetY;
-      let resolved = false;
-
-      // Try linear flow trajectory from last step first
-      if (sequence.length > 0) {
-        const last = sequence[sequence.length - 1];
-        const stepOffset = 50;
-        const testX = (last.x + stepOffset > 1820) ? 140 : last.x + stepOffset;
-        const testY = (last.y + 35 > 980) ? 160 : last.y + 35;
-        if (!isCoordinateOccupied(testX, testY)) {
-          candX = testX;
-          candY = testY;
-          resolved = true;
-        }
-      }
-
-      if (!resolved) {
-        for (let attempt = 1; attempt <= 28; attempt++) {
-          const angle = (attempt * 45 * Math.PI) / 180;
-          const radius = 35 + Math.floor(attempt / 4) * 20;
-          const testX = Math.round(targetX + Math.cos(angle) * radius);
-          const testY = Math.round(targetY + Math.sin(angle) * radius);
-          if (testX >= 80 && testX <= 1840 && testY >= 80 && testY <= 1000) {
-            if (!isCoordinateOccupied(testX, testY)) {
-              candX = testX;
-              candY = testY;
-              break;
-            }
-          }
-        }
-      }
-      targetX = candX;
-      targetY = candY;
-    }
-
     if (typeof stepData === "number") {
       newStep = {
         id: generateUniqueId(`step_${Date.now()}_${stepNum}`),
@@ -715,6 +656,7 @@ export default function Dashboard({
           : generateUniqueId(existingId || `step_${Date.now()}_${stepNum}`);
 
       newStep = {
+        ...stepData,
         id: finalId,
         stepNumber: stepNum,
         name:
@@ -723,7 +665,7 @@ export default function Dashboard({
         action: (stepData.action as any) || (isRight ? "right_click" : "click"),
         x: targetX,
         y: targetY,
-        delayMs: stepData.delayMs || 500,
+        delayMs: stepData.delayMs ?? 500,
         text: stepData.text,
         keyPayload: stepData.keyPayload,
         status: "pending",
@@ -733,40 +675,8 @@ export default function Dashboard({
       };
     }
 
-    setSequence((prev) => [...prev, newStep]);
+    setSequence((prev) => [...prev, { ...newStep, stepNumber: prev.length + 1 }]);
 
-    // If mobile is active or forwarded, dispatch click/touch/text directly to actual phone device
-    if (targetDevice === "android" || activeCanvasSourceId === "mobile") {
-      const normX = Math.max(0, Math.min(1, newStep.x / 1920));
-      const normY = Math.max(0, Math.min(1, newStep.y / 1080));
-      const actType = (newStep.action as any) === "swipe" ? "swipe" : (newStep.action as any) === "type_text" ? "type" : "tap";
-      fetch("/api/mobile-stream/action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: {
-            type: actType,
-            x: normX,
-            y: normY,
-            text: newStep.text,
-            key: newStep.keyPayload,
-            description: newStep.name,
-          },
-        }),
-      }).catch(() => {});
-
-      if (selectedAdbDevice) {
-        fetch("/api/adb/tap", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            deviceId: selectedAdbDevice,
-            x: newStep.x,
-            y: newStep.y,
-          }),
-        }).catch(() => {});
-      }
-    }
   };
   const handleStripUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -849,170 +759,98 @@ export default function Dashboard({
       copy[t] = tmp;
       return copy.map((s, i) => ({ ...s, stepNumber: i + 1 }));
     });
-  const handleRunSequence = async () => {
-    if (isSequenceRunning) return;
-    if (sequence.length === 0) {
-      toast.info("No sequence steps to run. Add or record steps first.");
-      return;
-    }
-    const targetSteps = sequence;
-    setIsSequenceRunning(true);
-    sequenceRunningRef.current = true;
-    setSequence((prev) => prev.map((s) => ({ ...s, status: "pending" })));
-    for (let i = 0; i < targetSteps.length; i++) {
-      if (!sequenceRunningRef.current) break;
-      const current = targetSteps[i];
-      setActiveStepId(current.id);
-      setSequence((prev) =>
-        prev.map((s) =>
-          s.id === current.id ? { ...s, status: "running" } : s,
-        ),
-      );
-      const isTyping = current.action === "type_text" || current.action === "clear_and_type";
-      const actionType = isTyping
-        ? "typing"
-        : (current.action as any) === "right_click"
-          ? "right_clicking"
-          : (current.action as any) === "double_click"
-            ? "double_clicking"
-            : (current.action as any) === "move"
-              ? "moving"
-              : "clicking";
-      setGlobalCursorState({
-        x: current.x,
-        y: current.y,
-        action: actionType,
-        textPayload: isTyping ? (current.text || "input_data_field") : undefined,
-        targetLabel: current.name,
-        isActing: true,
-      });
-      setAiThinking({
-        x: current.x,
-        y: current.y,
-        action: `Executing ${current.name} (${current.action})`,
-        confidence: 0.95,
-        isThinking: true,
-        targetLabel: current.name,
-      });
-      const stepDelay = driftRandomInterval
-        ? 1000 + Math.floor(Math.random() * 2000)
-        : current.delayMs;
-      await new Promise((r) => setTimeout(r, stepDelay));
-      if (!sequenceRunningRef.current) break;
+  const [replayRun, setReplayRun] = useState<ReplayRun | null>(null);
+  const replayIdRef = useRef<string | null>(null);
+  const replayStopRequested = useRef(false);
+  const [replayApiKey, setReplayApiKey] = useState("");
+  const replayRequest = async (url: string, body?: unknown) => {
+    const response = await fetch(url, {
+      method: body === undefined ? "GET" : "POST", headers: { "Content-Type": "application/json", ...(replayApiKey ? { "x-api-key": replayApiKey } : {}) }, body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok || data.success !== true) throw new Error(data.error || "Replay request failed");
+    return data;
+  };
+  const applyReplay = (run: ReplayRun) => {
+    setReplayRun(run);
+    const active = run.status === "running" || run.status === "paused";
+    sequenceRunningRef.current = active;
+    setIsSequenceRunning(active);
+    setIsAutonomousRunning(active);
+    setActiveStepId(active ? run.steps[run.currentStep]?.id : null);
+    setSequence(prev => prev.map(step => ({ ...step, status: run.steps.find(s => s.id === step.id)?.status || step.status })));
+    if (!active) { setAiThinking(null); setGlobalCursorState(null); }
+  };
+  useEffect(() => {
+    if (!replayRun || !["running", "paused"].includes(replayRun.status)) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
       try {
-        let taskDescription = `Click at ${current.x}, ${current.y}`;
-        if (current.action === "right_click")
-          taskDescription = `Right click at ${current.x}, ${current.y}`;
-        else if (current.action === "clear_and_type")
-          taskDescription = `Clear and type "${current.text || ""}" at ${current.x}, ${current.y}`;
-        else if (current.action === "type_text")
-          taskDescription = `Type "${current.text || ""}" at ${current.x}, ${current.y}`;
-        const baseDrift = movementMode === "exact" ? 0 : driftPx;
-        const variedDrift =
-          driftPerStepVariate && baseDrift > 0
-            ? Math.max(
-                0,
-                baseDrift + Math.floor((Math.random() - 0.5) * baseDrift),
-              )
-            : baseDrift;
-        const driftToSend =
-          movementMode === "live" ? Math.max(variedDrift, 6) : variedDrift;
-        await fetch("/api/execute-task", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            targetDevice,
-            deviceId: selectedAdbDevice,
-            task: {
-              id: current.id,
-              name: current.name,
-              description: taskDescription,
-              action: current.action,
-              x: current.x,
-              y: current.y,
-              targetPosition: { x: current.x, y: current.y },
-              textPayload: current.text || "",
-              keyPayload: current.keyPayload || "enter",
-              delayMs: current.delayMs,
-              driftPx: driftToSend,
-              variationMode: movementMode,
-            },
-          }),
-        });
-        setSequence((prev) =>
-          prev.map((s) =>
-            s.id === current.id ? { ...s, status: "completed" } : s,
-          ),
-        );
-
-        // Conditional Branching Evaluation (Jump to step, retry, workaround, failover)
-        const condType = (current as any).conditionType;
-        const condVal = (current as any).conditionValue;
-        const thenBranch = (current as any).thenBranchAction;
-        if (condType && condType !== "always") {
-          let conditionTriggered = false;
-          if (condType === "ocr_error" || condType === "ocr_contains") {
-            const pattern = condType === "ocr_error" ? "error" : (condVal || "").toLowerCase();
-            const label = (current.name || "").toLowerCase();
-            conditionTriggered = label.includes(pattern) || (condVal && label.includes(condVal.toLowerCase()));
-          } else if (condType === "pixel_diff" || condType === "element_missing") {
-            conditionTriggered = false;
-          }
-
-          if (conditionTriggered && thenBranch) {
-            if (thenBranch === "jump_to_step") {
-              const targetIdx = sequence.findIndex(
-                (s) => s.stepNumber === Number(condVal) || s.name.toLowerCase().includes((condVal || "").toLowerCase())
-              );
-              if (targetIdx >= 0) {
-                toast.info(`Conditional branch: Jumping to Step #${sequence[targetIdx].stepNumber}`);
-                i = targetIdx - 1;
-                continue;
-              }
-            } else if (thenBranch === "workaround_escape") {
-              toast.info("Conditional branch: Triggering Escape Workaround");
-              await fetch("/api/execute-task", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  targetDevice,
-                  deviceId: selectedAdbDevice,
-                  task: {
-                    id: `escape_${Date.now()}`,
-                    name: "Escape Workaround",
-                    action: "press_key",
-                    keyPayload: "escape",
-                    delayMs: 200,
-                  },
-                }),
-              });
-            }
-          }
-        }
-      } catch {
-        setSequence((prev) =>
-          prev.map((s) =>
-            s.id === current.id ? { ...s, status: "failed" } : s,
-          ),
-        );
-      }
+        const data = await replayRequest(`/api/replay/${replayRun.id}`);
+        if (!disposed) applyReplay(data.run);
+      } catch (error) { if (!disposed) setAutoActFeedback(`Monitor disconnected: ${error instanceof Error ? error.message : error}. Stop is available; reconnect to confirm status.`); }
+      if (!disposed) timer = setTimeout(poll, 1000);
+    };
+    timer = setTimeout(poll, 300);
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [replayRun?.id, replayRun?.status, replayApiKey]);
+  useEffect(() => {
+    const id = sessionStorage.getItem("screen-replay-id");
+    if (!id) return;
+    let disposed = false;
+    void replayRequest(`/api/replay/${id}`).then(data => {
+      if (!disposed) { replayIdRef.current = data.run.id; applyReplay(data.run); }
+    }).catch(() => {});
+    return () => { disposed = true; };
+  }, [replayApiKey]);
+  const handleRunSequence = async (stepsToRun?: SequenceStep[], iterations = 1) => {
+    if (sequenceRunningRef.current) return;
+    const steps = Array.isArray(stepsToRun) ? stepsToRun : sequence;
+    if (!steps.length) { toast.info("Add or record steps first."); return; }
+    sequenceRunningRef.current = true;
+    replayStopRequested.current = false;
+    setIsSequenceRunning(true);
+    try {
+      const data = await replayRequest("/api/replay", { targetDevice, deviceId: selectedAdbDevice || undefined,
+        steps: steps.map(step => ({ ...step, referenceScreenshotUrl: step.referenceScreenshotUrl || undefined })), iterations, confirmation: true });
+      replayIdRef.current = data.run.id;
+      sessionStorage.setItem("screen-replay-id", data.run.id);
+      applyReplay(data.run);
+      if (replayStopRequested.current) await replayRequest(`/api/replay/${data.run.id}/cancel`, {});
+      return data.run.id as string;
+    } catch (error) {
+      sequenceRunningRef.current = false; setIsSequenceRunning(false); setIsAutonomousRunning(false);
+      toast.error(error instanceof Error ? error.message : "Replay failed");
     }
-    setActiveStepId(null);
-    setIsSequenceRunning(false);
-    sequenceRunningRef.current = false;
+  };
+  const handleReplayControl = async (command: "pause" | "resume" | "cancel") => {
+    if (!replayIdRef.current) return;
+    try { const data = await replayRequest(`/api/replay/${replayIdRef.current}/${command}`, {}); applyReplay(data.run); }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Control failed"); }
   };
   const handleStopSequence = async () => {
-    sequenceRunningRef.current = false;
-    setIsSequenceRunning(false);
+    replayStopRequested.current = true;
+    await handleReplayControl("cancel");
     setIsRecordMode(false);
-    setIsAutonomousRunning(false);
-    setActiveStepId(null);
-    setAiThinking(null);
-    setGlobalCursorState(null);
-    try {
-      await fetch("/api/pyautogui/stop", { method: "POST" });
-    } catch {}
-    toast.error("⏹ STOPPED: Sequence execution, bridge subprocess & recording halted.");
+    toast.info("Stop requested. In-flight device actions cannot be undone; the monitor confirms when replay stops.");
+  };
+  const executeHubTask = async (_url: string, options: RequestInit) => {
+    const body = JSON.parse(String(options.body));
+    const task = body.task;
+    const id = await handleRunSequence([{
+      ...task, id: task.id || crypto.randomUUID(), stepNumber: 1, status: "pending", delayMs: task.delayMs ?? 500,
+      x: task.targetPosition?.x ?? task.x ?? 0, y: task.targetPosition?.y ?? task.y ?? 0,
+      text: task.textPayload ?? task.text, keyPayload: task.keyPayload ?? task.key,
+    }]);
+    if (!id) throw new Error("Replay could not start. Check the monitor and selected device.");
+    for (;;) {
+      const data = await replayRequest(`/api/replay/${id}`);
+      applyReplay(data.run);
+      if (data.run.status === "completed") return new Response(JSON.stringify({ success: true, verified: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (["failed", "cancelled"].includes(data.run.status)) throw new Error(data.run.error || "Replay stopped");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   };
   const captureScreen = async () => {
     try {
@@ -1071,302 +909,32 @@ export default function Dashboard({
     }
   }, [targetDevice]);
   const handleTriggerDescribeScreen = async () => {
-    let liveImg = aiLiveUrl || screenshotUrl;
-    if (!liveImg) {
-      // Auto-fetch latest frame from server or mobile stream
-      try {
-        const capData = await safeFetchJson<{ imageData?: string }>("/api/capture-screen");
-        if (capData?.success && capData?.imageData) {
-          liveImg = capData.imageData;
-          setScreenshotUrl(capData.imageData);
-          setAiLiveUrl(capData.imageData);
-        } else {
-          // Fallback to mobile frame
-          const mobData = await safeFetchJson<{ frame?: { imageData?: string } }>("/api/mobile-stream/frame");
-          if (mobData?.success && mobData?.frame?.imageData) {
-            liveImg = mobData.frame.imageData;
-            setScreenshotUrl(mobData.frame.imageData);
-            setAiLiveUrl(mobData.frame.imageData);
-          }
-        }
-      } catch {}
-    }
-
-    if (!liveImg) {
-      // Clean fallback canvas representation so perception always proceeds
-      liveImg = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-    }
-
     setIsPerceiving(true);
-    setVerificationBadge({
-      status: "verifying",
-      message: "Perceiving live screen via AI #1...",
-    });
     try {
-      const data = await safePostJson<{ report?: any }>("/api/ai/describe-screen", {
-        imageData: liveImg,
-        model: "qwen2.5vl:7b",
-      });
-      if (data.success && data.report) {
-        setPerceptionReport(data.report);
-        setVerificationBadge({
-          status: "verified",
-          message: `Perceived: ${data.report.screenDescription.slice(0, 40)}...`,
-        });
-        setTimeout(() => setVerificationBadge(null), 3000);
-        setAiThinking({
-          x: data.report.feedbackPosition.x,
-          y: data.report.feedbackPosition.y,
-          action: data.report.primarySuggestion.slice(0, 40),
-          confidence: data.report.confidence,
-          isThinking: true,
-          targetLabel: data.report.activeWindow,
-        });
-        return data.report;
-      } else {
-        // Provide structured local fallback
-        const fallbackReport = {
-          timestamp: Date.now(),
-          screenDescription: "Active workspace display with interactive elements.",
-          activeWindow: targetDevice === "android" ? "Android Phone Display" : "Desktop Workspace",
-          visualStateChange: "State synchronized",
-          elements: [
-            { id: "elem_1", name: "Primary Center Action", type: "button" as const, boundingBox: { x: 960, y: 540, width: 120, height: 40 }, center: { x: 960, y: 540 }, confidence: 0.9, interactive: true },
-          ],
-          feedbackPosition: { x: 960, y: 540 },
-          primarySuggestion: "Focus & execute action on primary element",
-          confidence: 0.92,
-        };
-        setPerceptionReport(fallbackReport);
-        setVerificationBadge({
-          status: "verified",
-          message: "Perceived: Active interactive interface",
-        });
-        setTimeout(() => setVerificationBadge(null), 3000);
-        return fallbackReport;
-      }
-    } catch (e) {
-      // Resilient fallback on network blip
-      const fallbackReport = {
-        timestamp: Date.now(),
-        screenDescription: "Active workspace display with interactive elements.",
-        activeWindow: targetDevice === "android" ? "Android Phone Display" : "Desktop Workspace",
-        visualStateChange: "State synchronized",
-        elements: [
-          { id: "elem_1", name: "Center Target", type: "button" as const, boundingBox: { x: 960, y: 540, width: 120, height: 40 }, center: { x: 960, y: 540 }, confidence: 0.9, interactive: true },
-        ],
-        feedbackPosition: { x: 960, y: 540 },
-        primarySuggestion: "Inspect & execute primary target",
-        confidence: 0.9,
-      };
-      setPerceptionReport(fallbackReport);
-      setVerificationBadge({
-        status: "verified",
-        message: "Perception active (heuristic fallback)",
-      });
-      setTimeout(() => setVerificationBadge(null), 3000);
-      return fallbackReport;
-    } finally {
-      setIsPerceiving(false);
-    }
+      const capture = await replayRequest("/api/replay/capture", { targetDevice, deviceId: selectedAdbDevice || undefined });
+      setScreenshotUrl(capture.frame.image); setAiLiveUrl(capture.frame.image);
+      const data = await replayRequest("/api/ai/describe-screen", { imageData: capture.frame.image });
+      if (!data.success || !data.report) throw new Error(data.error || "Perception unavailable");
+      setPerceptionReport(data.report);
+      setVerificationBadge({ status: "verifying", message: "Screen analyzed; actions still require outcome verification" });
+      return data.report;
+    } catch (error) {
+      setPerceptionReport(null);
+      setVerificationBadge({ status: "failed", message: error instanceof Error ? error.message : "Screen analysis failed" });
+    } finally { setIsPerceiving(false); }
   };
   const handleTriggerPlanAndAct = async () => {
-    let report: any = perceptionReport;
-    if (!report) {
-      const liveImg = aiLiveUrl || screenshotUrl;
-      if (!liveImg) {
-        setVerificationBadge({
-          status: "failed",
-          message: "No live image for planning",
-        });
-        setTimeout(() => setVerificationBadge(null), 2500);
-        return;
-      }
-      setVerificationBadge({
-        status: "verifying",
-        message: "Perceiving before planning...",
-      });
-      const fresh = await handleTriggerDescribeScreen();
-      if (fresh) report = fresh;
-      else {
-        setVerificationBadge({
-          status: "failed",
-          message: "Need perception first",
-        });
-        setTimeout(() => setVerificationBadge(null), 2500);
-        return;
-      }
-    }
-    setVerificationBadge({
-      status: "verifying",
-      message: "AI #2 planning next action...",
-    });
-    try {
-      const data = await safePostJson<{
-        decision?: any;
-        executionResult?: any;
-        error?: string;
-      }>("/api/ai/plan-and-act", {
-        perceptionReport: report,
-        userObjective: "auto",
-        model: "qwen2.5vl:7b",
-        executeImmediately: true,
-      });
-      if (data.success && data.decision) {
-        if (data.decision.nextAction) {
-          setAiThinking({
-            x: data.decision.nextAction.x || 960,
-            y: data.decision.nextAction.y || 540,
-            action: data.decision.nextAction.title,
-            confidence: data.decision.thinking?.confidence || 0.92,
-            isThinking: true,
-            targetLabel: data.decision.nextAction.targetName,
-          });
-          setPlannerDecision(data.decision);
-        }
-        if (data.decision.verificationRule) {
-          setVerificationBadge({
-            status: "verified",
-            message:
-              data.decision.statusSummary ||
-              `Planned: ${data.decision.nextAction?.title || "next"}`,
-          });
-          setTimeout(() => setVerificationBadge(null), 3500);
-        } else {
-          setVerificationBadge({
-            status: "verified",
-            message: data.decision.statusSummary || "Planned",
-          });
-          setTimeout(() => setVerificationBadge(null), 3000);
-        }
-        setExecutionHistory((prev) =>
-          [
-            {
-              stepName: data.decision.nextAction?.title || "Plan",
-              status: "planned",
-              timestamp: Date.now(),
-              thought: data.decision.thinking?.reasoning,
-            },
-            ...prev,
-          ].slice(0, 20),
-        );
-        if (data.executionResult) {
-          const ok = data.executionResult.success;
-          setVerificationBadge({
-            status: ok ? "verified" : "failed",
-            message:
-              data.executionResult.explanation ||
-              (ok ? "Executed via pyautogui" : "Execute failed"),
-          });
-          setTimeout(() => setVerificationBadge(null), 3000);
-          fetch("/api/logs", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              source: "PyAutoGUI",
-              level: ok ? "SUCCESS" : "ERROR",
-              message: `Plan&Act: ${data.decision.nextAction?.title} -> ${data.executionResult.explanation || ""}`,
-            }),
-          }).catch(() => {});
-        }
-        setPerceptionReport(report);
-      } else {
-        setVerificationBadge({
-          status: "failed",
-          message: "Plan fallback: " + (data.error || "standby"),
-        });
-        setTimeout(() => setVerificationBadge(null), 3000);
-      }
-    } catch (e) {
-      setVerificationBadge({ status: "failed", message: "Plan & Act error" });
-      setTimeout(() => setVerificationBadge(null), 3000);
-    }
+    await handleRunSequence();
   };
   const handleGlobalExecuteOnActualPC = async () => {
-    const x = aiThinking?.x || perceptionReport?.feedbackPosition?.x || 960;
-    const y = aiThinking?.y || perceptionReport?.feedbackPosition?.y || 540;
-    const label =
-      aiThinking?.action ||
-      perceptionReport?.primarySuggestion ||
-      "Global Execute";
-    setVerificationBadge({
-      status: "verifying",
-      message: `Executing ${label.slice(0, 30)} @ (${x},${y}) via ${targetDevice}...`,
-    });
-    try {
-      if (targetDevice === "android") {
-        fetch("/api/mobile-stream/action", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: {
-              type: "tap",
-              x: x > 1 ? x / 1920 : x,
-              y: y > 1 ? y / 1080 : y,
-              description: `AI Tap @ (${x}, ${y})`,
-            },
-          }),
-        }).catch(() => {});
-      }
-
-      const res = await fetch("/api/execute-task", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          targetDevice,
-          deviceId: selectedAdbDevice,
-          task: {
-            id: `pc_${Date.now()}`,
-            name: label,
-            action: "click",
-            targetPosition: { x, y },
-            driftPx: movementMode === "exact" ? 0 : driftPx,
-          },
-        }),
-      });
-      const data = await res.json();
-      if (data.success !== false) {
-        setVerificationBadge({
-          status: "verified",
-          message: data.explanation || `Executed on ${targetDevice === "android" ? "Phone" : "PC"} @ (${x},${y})`,
-        });
-        setExecutionHistory((prev) =>
-          [
-            {
-              stepName: label,
-              status: "success",
-              timestamp: Date.now(),
-              explanation: data.explanation || `Action dispatched to ${targetDevice}`,
-            },
-            ...prev,
-          ].slice(0, 20),
-        );
-        fetch("/api/logs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            source: targetDevice === "android" ? "Mobile-Bridge" : "PyAutoGUI",
-            level: "SUCCESS",
-            message: `Execute: ${label} @ (${x},${y})`,
-          }),
-        }).catch(() => {});
-      } else {
-        setVerificationBadge({
-          status: "verified",
-          message: `Executed @ (${x},${y})`,
-        });
-      }
-      setTimeout(() => setVerificationBadge(null), 3000);
-    } catch (e) {
-      setVerificationBadge({
-        status: "verified",
-        message: `Dispatched action @ (${x},${y})`,
-      });
-      setTimeout(() => setVerificationBadge(null), 3000);
-    }
+    const step = sequence.find(s => s.id === activeStepId);
+    if (!step) { toast.info("Select a recorded step to execute and verify."); return; }
+    await handleRunSequence([step]);
   };
-  const handleToggleAutonomousLoop = async () =>
-    setIsAutonomousRunning((v) => !v);
+  const handleToggleAutonomousLoop = async () => {
+    if (sequenceRunningRef.current) await handleStopSequence();
+    else await handleRunSequence();
+  };
   const handleTriggerAutoLoop = handleToggleAutonomousLoop;
   const toggleCapture = () => setIsCapturing((v) => !v);
   return (
@@ -1492,7 +1060,7 @@ export default function Dashboard({
                   onClick={() => setTargetDevice("desktop")}
                   className={`px-3 py-1 rounded-md text-xs font-mono font-bold flex items-center gap-1.5 transition-colors ${targetDevice === "desktop" ? "bg-cyan-600 text-white shadow-sm" : "text-slate-300 hover:text-white"}`}
                 >
-                  <Monitor className="w-3.5 h-3.5" /> Desktop
+                  <Monitor className="w-3.5 h-3.5" /> Server desktop
                 </button>
                 <button
                   onClick={() => {
@@ -1680,6 +1248,7 @@ export default function Dashboard({
           </div>
           {targetDevice === "android" && (
             <UniversalDeviceBridgeHub
+              replaySteps={sequence}
               selectedAdbDevice={selectedAdbDevice}
               onDeviceSelected={setSelectedAdbDevice}
               adbDevices={adbDevices}
@@ -1836,7 +1405,7 @@ export default function Dashboard({
           className="w-full"
         >
           <div className="mb-6">
-            <MasterWorkflowOrchestrator />
+            <MasterWorkflowOrchestrator run={replayRun} onRun={() => { void handleRunSequence(); }} onControl={handleReplayControl} />
           </div>
           <TabsList className="flex flex-wrap h-auto gap-1.5 bg-slate-900 border border-slate-800 p-2 rounded-xl mb-4">
             <span className="text-[10px] font-mono font-bold text-cyan-400 px-1 py-1">
@@ -2287,6 +1856,8 @@ export default function Dashboard({
               </CardHeader>
               <CardContent className="p-2">
                 <LiveScreenHUD
+                  onReplaySteps={steps => { void handleRunSequence(steps); }}
+                  onExecuteTask={executeHubTask}
                   screenshotUrl={activeCanvasUrl || screenshotUrl}
                   isCapturing={isCapturing}
                   aiThinking={aiThinking}
@@ -2308,7 +1879,7 @@ export default function Dashboard({
                   isRecordMode={isRecordMode}
                   onToggleRecordMode={() => setIsRecordMode(!isRecordMode)}
                   onStopSequence={handleStopSequence}
-                  onRunSequence={handleRunSequence}
+                  onRunSequence={() => { void handleRunSequence(); }}
                   onAddStep={handleAddSequenceStep}
                   onRepositionStep={handleRepositionStep}
                   onSelectStep={setActiveStepId}
@@ -2417,7 +1988,7 @@ export default function Dashboard({
                   isRunning={isSequenceRunning}
                   isRecordMode={isRecordMode}
                   onToggleRecordMode={() => setIsRecordMode(!isRecordMode)}
-                  onRunSequence={handleRunSequence}
+                  onRunSequence={() => { void handleRunSequence(); }}
                   onStopSequence={handleStopSequence}
                   onResetSequence={() =>
                     setSequence((prev) =>
@@ -2441,16 +2012,18 @@ export default function Dashboard({
                   onClearSequence={() => setSequence([])}
                   onSelectStep={setActiveStepId}
                   onAiReviewSteps={handleTriggerDashboardAiReview}
+                  onImportSequence={steps => setSequence(steps)}
                 />
 
-                <MainScreenLoopVerificationHub
-                  onRunAutonomousLoop={(iters) => {
-                    setWifiStatus(`Loop ${iters} iterations`);
-                    handleTriggerAutoLoop();
-                  }}
-                />
+                <MainScreenLoopVerificationHub run={replayRun} onStop={handleStopSequence}
+                  onRunAutonomousLoop={(iters) => { void handleRunSequence(undefined, iters); }} />
+                <label className="text-xs text-slate-400 flex gap-2 items-center">Replay server API key (when configured)
+                  <input type="password" autoComplete="off" value={replayApiKey} onChange={e => setReplayApiKey(e.target.value)} className="bg-slate-950 border rounded p-2" />
+                </label>
+                <ReplayMonitor run={replayRun} onControl={handleReplayControl} apiKey={replayApiKey} />
 
                 <AIDecideActionHUD
+                  onReplayStep={step => { void handleRunSequence([{ id: crypto.randomUUID(), stepNumber: 1, name: "Action", action: "click", delayMs: 500, status: "pending", ...step }]); }}
                   perceptionReport={perceptionReport}
                   sequence={sequence}
                   activeStepId={activeStepId}
@@ -2458,7 +2031,7 @@ export default function Dashboard({
                   targetDevice={targetDevice}
                   deviceId={selectedAdbDevice}
                   onAddStep={handleAddSequenceStep}
-                  onRunSequence={handleRunSequence}
+                  onRunSequence={() => { void handleRunSequence(); }}
                   onNavigate={(x, y, label) => {
                     handleAddSequenceStep({
                       x,
@@ -2499,12 +2072,9 @@ export default function Dashboard({
                       backdrop_click: { action: "click", x: 100, y: 100 },
                       escape_key: { action: "press_key", keyPayload: "escape" },
                     };
-                    const act = map[method] || {
-                      action: "click",
-                      x: 100,
-                      y: 100,
-                    };
-                    await fetch("/api/execute-task", {
+                    const act = map[method];
+                    if (!act) { toast.error("Unknown recovery method"); return; }
+                    await executeHubTask("/api/execute-task", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
@@ -2514,13 +2084,14 @@ export default function Dashboard({
                           id: `trio_${Date.now()}`,
                           name: method,
                           action: act.action,
+                          keyPayload: act.keyPayload,
                           targetPosition: { x: act.x, y: act.y },
                         },
                       }),
                     });
                   }}
                   onTriggerStepAction={async (coords, action) => {
-                    await fetch("/api/execute-task", {
+                    await executeHubTask("/api/execute-task", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
@@ -2579,7 +2150,7 @@ export default function Dashboard({
                               confidence: 0.93,
                               isThinking: true,
                             });
-                            await fetch("/api/execute-task", {
+                            await executeHubTask("/api/execute-task", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({
@@ -2659,7 +2230,7 @@ export default function Dashboard({
               currentScreenshot={aiLiveUrl || screenshotUrl}
               onSelectLayerTarget={(x, y, name) => handleAddSequenceStep(x, y)}
               onExecuteLayerSequence={(id) =>
-                fetch("/api/execute-task", {
+                executeHubTask("/api/execute-task", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -2760,7 +2331,7 @@ export default function Dashboard({
               }
               onDispatchAiMove={(entity) => {
                 handleAddSequenceStep(entity.position.x, entity.position.y);
-                fetch("/api/execute-task", {
+                executeHubTask("/api/execute-task", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -3032,9 +2603,9 @@ export default function Dashboard({
               autoActEnabled={autoActEnabled}
               onToggleAutoAct={setAutoActEnabled}
               onExecuteStep={(step) => {
-                setAutoActFeedback(
-                  `Auto-Actor Triggered: Executed ${step.name} (${step.action} at ${step.x}, ${step.y})`
-                );
+                const recorded = sequence.find(s => s.id === step.id);
+                if (recorded) void handleRunSequence([recorded]);
+                else toast.error("Save this action in the sequence before replaying it.");
               }}
               onTriggerSequenceExecution={() => {
                 handleRunSequence();
@@ -3051,7 +2622,7 @@ export default function Dashboard({
                 const t = pipelineTasks.find((x) => x.id === taskId);
                 if (!t) return;
                 const driftToSend = movementMode === "exact" ? 0 : driftPx;
-                await fetch("/api/execute-task", {
+                await executeHubTask("/api/execute-task", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -3108,7 +2679,7 @@ export default function Dashboard({
                 const x = g?.targetCenter?.x || 960;
                 const y = g?.targetCenter?.y || 540;
                 handleAddSequenceStep(x, y);
-                await fetch("/api/execute-task", {
+                await executeHubTask("/api/execute-task", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -3321,7 +2892,7 @@ export default function Dashboard({
                               confidence: 0.93,
                               isThinking: true,
                             });
-                            await fetch("/api/execute-task", {
+                            await executeHubTask("/api/execute-task", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({
@@ -3599,7 +3170,7 @@ export default function Dashboard({
           currentScreenshot={aiLiveUrl || frozenLiveSnapshot || screenshotUrl}
           activeSequence={sequence}
           onUpdateSequence={(newSeq) => setSequence(newSeq)}
-          onRunSequence={handleRunSequence}
+          onRunSequence={() => { void handleRunSequence(); }}
         />
       </main>
     </div>

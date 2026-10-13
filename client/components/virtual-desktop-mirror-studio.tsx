@@ -1,3 +1,4 @@
+import { evaluateCalculator } from "@/lib/calculator";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Monitor,
@@ -112,7 +113,7 @@ export const VirtualDesktopMirrorStudio: React.FC = () => {
     "[AI Hardware Bridge] Zero-drift mouse listener connected.",
     "[PyAutoGUI Engine] Ready for interactive click dispatch.",
   ]);
-  const [calcDisplay, setCalcDisplay] = useState<string>("15");
+  const [calcDisplay, setCalcDisplay] = useState<string>("0");
   const [calcEquation, setCalcEquation] = useState<string>("7 + 8 =");
   const [selectedFile, setSelectedFile] = useState<string | null>("automation_routine.py");
   const [cpuUsage, setCpuUsage] = useState<number>(18);
@@ -968,14 +969,17 @@ export const VirtualDesktopMirrorStudio: React.FC = () => {
                                         setCalcEquation("");
                                       } else if (btn === "=") {
                                         try {
-                                          const evaluated = String(eval(calcDisplay.replace(/×/g, "*").replace(/÷/g, "/")));
+                                          const evaluated = String(evaluateCalculator(calcDisplay));
                                           setCalcEquation(`${calcDisplay} =`);
                                           setCalcDisplay(evaluated);
                                         } catch {
                                           setCalcDisplay("Error");
                                         }
+                                      } else if (btn === "±" || btn === "%") {
+                                        try { setCalcDisplay(String(evaluateCalculator(calcDisplay) * (btn === "±" ? -1 : .01))); }
+                                        catch { setCalcDisplay("Error"); }
                                       } else {
-                                        setCalcDisplay((prev) => (prev === "0" || prev === "15" ? btn : prev + btn));
+                                        setCalcDisplay((prev) => (prev === "0" || prev === "Error" ? btn : prev + btn));
                                       }
                                     }}
                                     className={`rounded p-1.5 font-bold text-xs transition-colors ${

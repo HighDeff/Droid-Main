@@ -135,6 +135,7 @@ export interface SequenceStep {
   allowedVariancePercent?: number;
   dynamicVariablePayloads?: string[];
   targetOcrLabel?: string;
+  expectedOutcome?: string;
   fallbackMethod?: "direct_click" | "tab_enter" | "arrow_keys" | "escape_retry";
   selector?: string;
   originalX?: number;
@@ -236,6 +237,8 @@ interface LiveScreenHUDProps {
   onToggleRecordMode?: () => void;
   onStopSequence?: () => void;
   onRunSequence?: () => void;
+  onReplaySteps?: (steps: SequenceStep[]) => void;
+  onExecuteTask?: (url: string, options: RequestInit) => Promise<Response>;
   onReviewStepsWithAI?: () => void;
 }
 
@@ -272,8 +275,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   onToggleRecordMode,
   onStopSequence,
   onRunSequence,
+  onReplaySteps,
+  onExecuteTask,
   onReviewStepsWithAI,
 }) => {
+  const executeVerifiedTask = (url: string, options: RequestInit) => {
+    if (!onExecuteTask) return Promise.reject(new Error("Open Screen Hub to use verified device execution"));
+    return onExecuteTask(url, options);
+  };
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const streamSyncIntervalRef = useRef<number | null>(null);
@@ -659,7 +668,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     if (isRecordMode) {
       onToggleRecordMode?.();
     }
-    toast.error("⏹ STOPPED: All execution, sequence playback, and active recording halted immediately.");
+    toast.error("Stop requested. Check the Replay agent monitor for confirmation.");
   };
 
   const handleTriggerAiReviewSteps = async () => {
@@ -937,7 +946,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   const [isAutoPlayingWorkflow, setIsAutoPlayingWorkflow] = useState<boolean>(false);
   const [showTestModeModal, setShowTestModeModal] = useState<boolean>(false);
   const [activeWorkflowName, setActiveWorkflowName] = useState<string>("Smart Vision Automation Flow");
-  
+
   // Flow Replay Packs & Recent Steps Playback State
   const [flowReplayPacks, setFlowReplayPacks] = useState<
     Array<{ id: string; name: string; steps: SequenceStep[]; createdAt: number }>
@@ -1218,7 +1227,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         precondition: nextIdx === 0 ? "Initial clean baseline" : `Step #${nextIdx} completed`,
         thought: `Advancing to Step #${nextIdx + 1} (${replayScope === "pack" ? "Pack Step" : "Flow Step"}): Target (${targetStep.x}, ${targetStep.y}) -> Execute ${targetStep.action.toUpperCase()}`,
         expectedState: `Mutate virtual template state for ${targetStep.name || targetStep.action}`,
-        verification: "VERIFIED",
+        verification: "PENDING",
         timestamp: now,
       }
     ]);
@@ -1247,64 +1256,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   };
 
   const handleToggleAutoPlayWorkflow = () => {
-    if (isAutoPlayingWorkflow) {
-      setIsAutoPlayingWorkflow(false);
-      toast.info("⏸️ Step playback paused");
-    } else {
-      if (!sequence || sequence.length === 0) {
-        toast.error("No steps to play");
-        return;
-      }
-
-      // Automatically create a new pack with the current flow to allow users to easily replay recent steps
-      const packCount = flowReplayPacks.length + 1;
-      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const newPackName = `Flow_Pack_${packCount} (${sequence.length} steps @ ${timeStr})`;
-      const newPack = {
-        id: `pack_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        name: newPackName,
-        steps: sequence.map((s, idx) => ({ ...s, stepNumber: idx + 1 })),
-        createdAt: Date.now(),
-      };
-      const updatedPacks = [newPack, ...flowReplayPacks.slice(0, 19)];
-      setFlowReplayPacks(updatedPacks);
-      try {
-        localStorage.setItem("flow_replay_packs", JSON.stringify(updatedPacks));
-      } catch {}
-      setActivePackId(newPack.id);
-
-      const pool = getScopedFlowSteps();
-      if (pool.length > 0) {
-        onSelectStep?.(pool[0].id);
-        setReplayingCursorPos({ x: pool[0].x, y: pool[0].y });
-        setMousePos({ x: pool[0].x, y: pool[0].y });
-      }
-      setIsAutoPlayingWorkflow(true);
-
-      const activePack = updatedPacks.find((p) => p.id === newPack.id);
-      const scopeLabel =
-        replayScope === "pack" && activePack
-          ? `Pack "${activePack.name}" (${pool.length} steps)`
-          : replayScope === "all"
-          ? `All Steps (${sequence.length})`
-          : `Recent Steps (${pool.length} of ${sequence.length})`;
-      toast.success(`▶️ Created Pack & Auto-Playing: ${scopeLabel}`);
-    }
+    const steps = getScopedFlowSteps();
+    if (!steps.length || !onReplaySteps) { toast.info("Select a flow with recorded steps to replay"); return; }
+    onReplaySteps(steps);
   };
-
-  useEffect(() => {
-    if (!sequence || sequence.length === 0) {
-      if (isAutoPlayingWorkflow) {
-        setIsAutoPlayingWorkflow(false);
-      }
-      return;
-    }
-    if (!isAutoPlayingWorkflow) return;
-    const timer = setInterval(() => {
-      handleStepForward();
-    }, 2200);
-    return () => clearInterval(timer);
-  }, [isAutoPlayingWorkflow, sequence, activeStepId, replayScope, activePackId]);
 
   const handleSaveWorkflowToLibrary = async (customName?: string) => {
     try {
@@ -1789,88 +1744,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
   // AI Play Similar Action on Screen for Frames 1-10 with PC Execution & Clickpoint ("..")
   const handleReplayFrames1To10OnPC = async () => {
-    if (isPlayingFrames1To10) return;
-    setIsPlayingFrames1To10(true);
-
-    try {
-      if (qwenGuideEnabled) {
-        setQwenLiveThought("Qwen Agent Guide: Inspecting frame 1-10 sequence for missing text or path adjustments...");
-        try {
-          const guideRes = await fetch("/api/ai/qwen-guide-step", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              currentStep: sequence[0] || null,
-              driftDetected: false,
-              driftPx: 0,
-              isTypingIncomplete: false,
-            }),
-          });
-          const guideData = await guideRes.json();
-          if (guideData?.reasoning) {
-            setQwenLiveThought(guideData.reasoning);
-          }
-        } catch {}
-      }
-
-      for (let i = 0; i < Math.min(10, Math.max(10, sequence.length)); i++) {
-        const frameNum = i + 1;
-        setActiveReplayFrame(frameNum);
-        const currentStep = sequence[i] || {
-          id: `f_${frameNum}`,
-          name: `Action Frame #${frameNum}`,
-          action: "click",
-          x: 420 + i * 35,
-          y: 220 + i * 20,
-        };
-
-        // If Qwen guide detects incomplete typing on frame 6, demonstrate backtracking
-        if (qwenGuideEnabled && frameNum === 6) {
-          setQwenIncompleteTypingAlert("⚠️ Qwen Guide: Incomplete typing detected ('engin' found). Backtracking to finish...");
-          await new Promise((r) => setTimeout(r, 600));
-          setQwenIncompleteTypingAlert(null);
-        }
-
-        // Clickpoint contact ("..")
-        const isClick = currentStep.action === "click" || currentStep.action === "double_click" || !currentStep.action;
-        if (isClick) {
-          playClickPip();
-          setHudActiveClickPoint({
-            x: currentStep.x,
-            y: currentStep.y,
-            frame: frameNum,
-            text: `AI CLICKPOINT [${currentStep.x}, ${currentStep.y}]`,
-          });
-        }
-
-        // Send task to desktop PC
-        fetch("/api/execute-task", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            targetDevice: "desktop",
-            task: {
-              id: currentStep.id,
-              name: currentStep.name,
-              action: currentStep.action || "click",
-              targetPosition: { x: currentStep.x, y: currentStep.y },
-              text: (currentStep as any).text,
-            },
-          }),
-        }).catch(() => {});
-
-        await new Promise((r) => setTimeout(r, 700));
-      }
-
-      setHudActiveClickPoint(null);
-      setActiveReplayFrame(null);
-    } catch (e) {
-      console.error("Frame replay error:", e);
-    } finally {
-      setIsPlayingFrames1To10(false);
-      setHudActiveClickPoint(null);
-      setActiveReplayFrame(null);
-    }
+    if (!sequence.length || !onReplaySteps) { toast.info("Add recorded steps before replaying frames"); return; }
+    onReplaySteps(sequence.slice(0, 10));
+    setQwenLiveThought("Replay requested; fresh screenshot decisions appear in the Replay agent monitor.");
   };
 
   // Repeating Drawing with Auto-Tool Selection and Qwen AI Thinking Between Steps
@@ -1899,7 +1775,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         setFreehandRoutePoints(pts);
 
         // Dispatched to PC
-        fetch("/api/execute-task", {
+        executeVerifiedTask("/api/execute-task", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2131,54 +2007,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
   // Replay exact recorded user mouse trail directly on PC via PyAutoGUI & Subprocess
   const handleExecuteRecordedTrailOnPC = async () => {
-    if (liveMouseTrail.length === 0) {
-      alert("Please record a mouse trail first using 'Record Mouse Trail'.");
-      return;
-    }
-    setIsExecutingTrailOnPC(true);
-    setAiCheckStatus({
-      status: "verifying",
-      message: `Streaming ${liveMouseTrail.length} user mouse coordinates to PC hardware via PyAutoGUI...`,
-    });
-
-    try {
-      const res = await fetch("/api/execute-task", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          targetDevice: "desktop",
-          task: {
-            id: `trail_${Date.now()}`,
-            name: `Replay User Mouse Trail (${liveMouseTrail.length} waypoints)`,
-            action: "stream_mouse_route",
-            routePoints: liveMouseTrail,
-            speedMultiplier: trailSpeedMultiplier,
-            driftPx: humanDriftPx,
-          },
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setAiCheckStatus({
-          status: "verified",
-          message: `✅ Exact user mouse trail streamed across PC desktop (${liveMouseTrail.length} waypoints via PyAutoGUI)!`,
-          score: 1.0,
-        });
-        setTimeout(() => setAiCheckStatus(null), 4500);
-      } else {
-        setAiCheckStatus({
-          status: "stuck",
-          message: `Trail execution failed: ${data.error || "Subprocess returned error"}`,
-        });
-      }
-    } catch (err) {
-      setAiCheckStatus({
-        status: "stuck",
-        message: `Trail network error: ${String(err)}`,
-      });
-    } finally {
-      setIsExecutingTrailOnPC(false);
-    }
+    const clicks = liveMouseTrail.filter(point => point.isClick);
+    if (!clicks.length || !onReplaySteps) { toast.info("Record click actions first; movement-only trails are previewable"); return; }
+    onReplaySteps(clicks.slice(0, 100).map((point, index) => ({ id: `trail-${Date.now()}-${index}`, stepNumber: index + 1, name: `Recorded click ${index + 1}`, action: "click", x: point.x, y: point.y, delayMs: 500, status: "pending" })));
   };
 
   const handleClearRecordedTrail = () => {
@@ -2189,382 +2020,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   // Physically execute entire sequence or active step on real user desktop via PyAutoGUI
   // With detailed step-by-step progress updates, frame-by-frame diff verification, and auto-recalculation
   const handleExecuteAllOnActualPC = async () => {
-    const stepsToRun =
-      sequence.length > 0
-        ? sequence
-        : recordedTrajectory.length > 0
-          ? recordedTrajectory.map((t, idx) => ({
-              id: `t_${idx}`,
-              name: `Step #${idx + 1}`,
-              action: "click" as const,
-              x: t.x,
-              y: t.y,
-              dwellDurationMs: 300,
-            }))
-          : [
-              {
-                id: "def_1",
-                name: "Center Focus Click",
-                action: "click" as const,
-                x: 960,
-                y: 540,
-                dwellDurationMs: 300,
-              },
-            ];
-
-    stopExecutionRef.current = false;
-    setIsExecutingStepByStep(true);
-    setExecutingStepIndex(0);
-    setDriftNotificationAlert(null);
-
-    setAiCheckStatus({
-      status: "verifying",
-      message: `Executing ${stepsToRun.length} action(s) step-by-step on PC hardware with visual diff verification...`,
-    });
-
-    for (let i = 0; i < stepsToRun.length; i++) {
-      if (stopExecutionRef.current) {
-        break;
-      }
-      const step: any = stepsToRun[i];
-      setExecutingStepIndex(i);
-
-      let targetExecutionX = step.x;
-      let targetExecutionY = step.y;
-      const stepName = step.name || `Step #${i + 1} (${step.action || "click"})`;
-
-      // 1. Pre-Execution Phase: Frame-by-Frame Diff & Integrity Verification
-      setExecutingStepProgress({
-        current: i + 1,
-        total: stepsToRun.length,
-        stepName,
-        coords: { x: targetExecutionX, y: targetExecutionY },
-        phase: "pre_diff",
-        message: `Step ${i + 1}/${stepsToRun.length}: Verifying visual frame alignment against saved template...`,
-      });
-
-      // Synchronize Focus Attention Spotlight to target coordinate
-      setFocusAttentionConfig((prev) => ({
-        ...prev,
-        enabled: true,
-        x: targetExecutionX,
-        y: targetExecutionY,
-        label: `Step ${i + 1}: ${stepName}`,
-        color: step.action?.includes("click") ? "amber" : "cyan",
-        confidence: 0.95,
-      }));
-
-      // Pre-Execution Screenshot Check & AI Frame Verification
-      if (preStepScreenshotCheck) {
-        try {
-          const navCheckRes = await fetch("/api/pyautogui/ai-navigation-check", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              currentStepIndex: i,
-              currentStepName: stepName,
-              expectedAction: step.action || "click",
-              expectedCoordinates: { x: targetExecutionX, y: targetExecutionY },
-              storedSteps: sequence,
-              allowFreeDrift,
-            }),
-          });
-          const navData = await navCheckRes.json();
-          if (navData.success) {
-            setAiNavigationEvidenceLogs((prev) => [
-              {
-                id: `log_${Date.now()}_${i}`,
-                timestamp: Date.now(),
-                stepIndex: i,
-                stepName,
-                isCorrectFrame: navData.isCorrectFrame,
-                evidence: navData.frameEvidence || "Target UI element matches template",
-                suggestedFrame: navData.suggestedFrame?.evidence,
-                autoRerouteNote: navData.autoReroute?.reason,
-              },
-              ...prev.slice(0, 49),
-            ]);
-
-            if (!navData.isCorrectFrame && autoCrossReference) {
-              setAiCheckStatus({
-                status: "stuck",
-                message: `⚠️ UI Frame diversion detected. Auto-rerouting back to Step ${i + 1}...`,
-              });
-              toast.warning(`Frame diversion detected on Step ${i + 1}`, {
-                description: navData.frameEvidence || "Cross-referencing previous screenshots to auto-reroute.",
-              });
-              await new Promise((r) => setTimeout(r, 600));
-            }
-          }
-        } catch (e) {
-          console.error("AI Pre-Step frame verification error:", e);
-        }
-      }
-
-      // 2. Automatic Screenshot Integrity Check & Auto-Recalculation on Drift
-      if (screenshotIntegrityCheckEnabled) {
-        const liveSnapshot = handleCaptureFreshFrame();
-        const refSnapshot = step.referenceScreenshotUrl || frozenSnapshotUrl || screenshotUrl;
-        const evidenceId = "EVID-" + Math.random().toString(36).substring(2, 7).toUpperCase();
-
-        if (liveSnapshot || refSnapshot) {
-          try {
-            // HTML5 Canvas Pixel-Level Frame Verification & Granular Root-Cause Diffing
-            let pixelDiffReport: any = null;
-            if (liveSnapshot && refSnapshot) {
-              try {
-                pixelDiffReport = await compareFramesPixelLevel(refSnapshot, liveSnapshot, {
-                  threshold: 22,
-                  targetCoords: { x: targetExecutionX, y: targetExecutionY },
-                  roiRadius: 85,
-                  generateHeatmap: true,
-                });
-              } catch (canvasErr) {
-                console.warn("[HUD] HTML5 Canvas pixel diff check notice:", canvasErr);
-              }
-            }
-
-            const integRes = await fetch("/api/ai/screenshot-integrity-check", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                stepIndex: i,
-                stepName,
-                expectedAction: step.action || "click",
-                expectedCoordinates: { x: targetExecutionX, y: targetExecutionY },
-                currentLiveScreenshot: liveSnapshot,
-                originalRecordingScreenshot: refSnapshot,
-                driftThresholdPx: localDriftThreshold || 15,
-                allowAutoReroute: true,
-                pixelDiffMetrics: pixelDiffReport
-                  ? {
-                      diffPercentage: pixelDiffReport.diffPercentage,
-                      similarityScore: pixelDiffReport.similarityScore,
-                      avgLuminanceDelta: pixelDiffReport.avgLuminanceDelta,
-                      roiDiffPercentage: pixelDiffReport.roiAnalysis?.roiDiffPercentage,
-                      roiCentroidShift: pixelDiffReport.roiAnalysis?.centroidShift,
-                      rootCause: pixelDiffReport.rootCauseAnalysis,
-                    }
-                  : undefined,
-              }),
-            });
-            const integData = await integRes.json();
-            const driftPx = integData.driftVector?.distancePx ?? (pixelDiffReport?.roiAnalysis?.centroidShift?.distancePx || 0);
-
-            logActionExecution({
-              level: "integrity",
-              stepIndex: i,
-              stepName,
-              evidenceId,
-              reasoning:
-                pixelDiffReport?.rootCauseAnalysis ||
-                integData.reasoning ||
-                "HTML5 Canvas pixel diff analyzed screenshot alignment against reference template.",
-              targetCoords: { x: step.x, y: step.y },
-              detectedCoords: integData.recalculatedCoordinates || { x: step.x, y: step.y },
-              driftPx,
-              message: `🛡️ Pixel-Level Canvas Validator: Step #${i + 1} diff=${pixelDiffReport ? pixelDiffReport.diffPercentage + "%" : "0%"} (drift: ${driftPx.toFixed(1)}px, threshold: ${localDriftThreshold}px).`,
-            });
-
-            // Trigger auto-recalculation & notify user through HUD banner if drift exceeds threshold
-            if (driftPx > (localDriftThreshold || 15) || (integData.success && integData.rerouteNeeded)) {
-              const recalculatedX = integData.recalculatedCoordinates?.x ?? (step.x + (integData.driftVector?.dx || 0));
-              const recalculatedY = integData.recalculatedCoordinates?.y ?? (step.y + (integData.driftVector?.dy || 0));
-
-              setDriftNotificationAlert({
-                stepIndex: i + 1,
-                stepName,
-                originalCoords: { x: step.x, y: step.y },
-                recalculatedCoords: { x: recalculatedX, y: recalculatedY },
-                driftDistancePx: driftPx,
-                reason: integData.reasoning || `Detected visual coordinate drift of ${driftPx.toFixed(1)}px.`,
-                confidence: 0.94,
-                autoApplied: true,
-              });
-
-              targetExecutionX = recalculatedX;
-              targetExecutionY = recalculatedY;
-
-              setExecutingStepProgress({
-                current: i + 1,
-                total: stepsToRun.length,
-                stepName,
-                coords: { x: targetExecutionX, y: targetExecutionY },
-                phase: "recalibrating",
-                driftPx,
-                message: `⚡ Drift Detected (${driftPx.toFixed(1)}px). Auto-recalculated to (${targetExecutionX}, ${targetExecutionY})...`,
-              });
-
-              logActionExecution({
-                level: "reroute",
-                stepIndex: i,
-                stepName,
-                evidenceId,
-                targetCoords: { x: targetExecutionX, y: targetExecutionY },
-                driftPx,
-                message: `⚡ Auto-recalculated Step #${i + 1} to (${targetExecutionX}, ${targetExecutionY}) [${evidenceId}].`,
-              });
-
-              // Also update Focus Attention to the newly recalibrated coordinates
-              setFocusAttentionConfig((prev) => ({
-                ...prev,
-                x: targetExecutionX,
-                y: targetExecutionY,
-                label: `Recalibrated Step ${i + 1} (${driftPx.toFixed(1)}px offset)`,
-                color: "emerald",
-              }));
-
-              await new Promise((r) => setTimeout(r, 400));
-            }
-          } catch (integErr) {
-            console.error("Screenshot integrity check error:", integErr);
-          }
-        }
-      }
-
-      // 3. Hardware Dispatch Phase (PyAutoGUI Bridge)
-      const dispatchStartTime = Date.now();
-      setExecutingStepProgress({
-        current: i + 1,
-        total: stepsToRun.length,
-        stepName,
-        coords: { x: targetExecutionX, y: targetExecutionY },
-        phase: "hardware_dispatch",
-        message: `Step ${i + 1}/${stepsToRun.length}: Dispatching "${step.action || "click"}" at (${targetExecutionX}, ${targetExecutionY}) on PC hardware...`,
-      });
-
-      let execSuccess = false;
-      let latencyMs = 0;
-      try {
-        const res = await fetch("/api/execute-task", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            targetDevice: "desktop",
-            task: {
-              id: step.id,
-              name: stepName,
-              action: step.action || "click",
-              targetPosition: { x: targetExecutionX, y: targetExecutionY },
-              textPayload: step.textPayload || step.text || "",
-              keyPayload: step.keyPayload || "enter",
-              speedMultiplier: trailSpeedMultiplier,
-            },
-          }),
-        });
-        const d = await res.json();
-        execSuccess = d.success;
-        latencyMs = Date.now() - dispatchStartTime;
-
-        logActionExecution({
-          level: execSuccess ? "action" : "error",
-          stepIndex: i,
-          stepName,
-          targetCoords: { x: targetExecutionX, y: targetExecutionY },
-          message: `${execSuccess ? "🎯 Executed" : "❌ Failed"}: ${stepName} @ (${targetExecutionX}, ${targetExecutionY}) [${latencyMs}ms].`,
-        });
-      } catch (err: any) {
-        console.error("Step execution error:", err);
-        latencyMs = Date.now() - dispatchStartTime;
-        logActionExecution({
-          level: "error",
-          stepIndex: i,
-          stepName,
-          message: `Hardware bridge execution error: ${err.message}`,
-        });
-      }
-
-      // 4. Post-Execution Verification Phase
-      setExecutingStepProgress({
-        current: i + 1,
-        total: stepsToRun.length,
-        stepName,
-        coords: { x: targetExecutionX, y: targetExecutionY },
-        phase: "post_verify",
-        latencyMs,
-        message: `Step ${i + 1}/${stepsToRun.length}: Action dispatched (${latencyMs}ms). Verifying screen stability...`,
-      });
-
-      // Pause between steps for UI settling
-      await new Promise((r) => setTimeout(r, step.dwellDurationMs || 350));
-      if (stopExecutionRef.current) {
-        break;
-      }
-
-      // AI Accuracy Check After Action
-      if (autoCheckAfterAction) {
-        const currentSnap = handleCaptureFreshFrame();
-        if (currentSnap) {
-          try {
-            const verRes = await fetch("/api/ai/verify-step", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                imageData: currentSnap,
-                step: {
-                  id: step.id,
-                  name: stepName,
-                  action: step.action || "click",
-                  x: targetExecutionX,
-                  y: targetExecutionY,
-                  text: step.textPayload || step.text,
-                },
-                userObjective: "Automate desktop task with accuracy",
-              }),
-            });
-            const verData = await verRes.json();
-            if (verData.success && verData.verification) {
-              const v = verData.verification;
-              if (v.goalFinished) {
-                setAiCheckStatus({
-                  status: "early_completed",
-                  message: `🎉 Goal achieved early! ${v.analysis}`,
-                  score: v.accuracyScore,
-                });
-                break;
-              } else if (v.status === "obstructed" || v.status === "missed" || !execSuccess) {
-                setAiCheckStatus({
-                  status: "stuck",
-                  message: `AI Obstacle: ${v.analysis}. Engaging AI Stuck-Resolver...`,
-                  score: v.accuracyScore,
-                });
-              } else {
-                setAiCheckStatus({
-                  status: "verified",
-                  message: `AI Accuracy: ${Math.round((v.accuracyScore || 0.95) * 100)}% - ${v.analysis}`,
-                  score: v.accuracyScore,
-                });
-              }
-            }
-          } catch (e) {
-            console.error("AI post-check error:", e);
-          }
-        }
-      }
-    }
-
-    setExecutingStepProgress({
-      current: stepsToRun.length,
-      total: stepsToRun.length,
-      stepName: "Workflow Completed",
-      coords: { x: 960, y: 540 },
-      phase: "completed",
-      message: `✅ All ${stepsToRun.length} steps executed and verified on PC hardware!`,
-    });
-
-    setIsExecutingStepByStep(false);
-    setExecutingStepIndex(null);
-
-    setTimeout(() => {
-      setAiCheckStatus((prev) =>
-        prev?.status === "early_completed"
-          ? prev
-          : { status: "verified", message: "Workflow finished successfully on PC.", score: 1.0 }
-      );
-    }, 1000);
+    if (!sequence.length) { toast.info("Record or add actions before replaying"); return; }
+    if (!onRunSequence) { toast.error("Verified replay is unavailable here"); return; }
+    onRunSequence();
+    setAiCheckStatus({ status: "verifying", message: "Replay requested. Inspect the Replay agent monitor for actual completion and screenshot evidence." });
   };
 
   const handleReplayUserMovementWithDrift = (executeOnHardware = false) => {
+    if (executeOnHardware) { void handleExecuteRecordedTrailOnPC(); return; }
     if (sequence.length === 0 && recordedTrajectory.length === 0 && liveMouseTrail.length === 0) {
       alert("Please record or create at least one step/path to replay.");
       return;
@@ -2590,50 +2053,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             isClick: s.action?.includes("click") ?? true,
           }))
         : recordedTrajectory.map((t) => ({ x: t.x, y: t.y, dwell: 40, isClick: false }));
-
-    // If physical execution requested alongside visual drift simulation, stream whole route once to PyAutoGUI
-    if (executeOnHardware && waypoints.length > 0) {
-      setIsExecutingTrailOnPC(true);
-      fetch("/api/execute-task", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          targetDevice: "desktop",
-          task: {
-            id: `replay_route_${Date.now()}`,
-            name: `Replay Route with Drift (±${humanDriftPx}px)`,
-            action: "stream_mouse_route",
-            routePoints: waypoints,
-            speedMultiplier: trailSpeedMultiplier,
-            driftPx: humanDriftPx,
-          },
-        }),
-      })
-        .then(async (r) => {
-          try {
-            const text = await r.text();
-            return JSON.parse(text);
-          } catch {
-            return { success: r.ok, simulated: true };
-          }
-        })
-        .then((res) => {
-          if (res.success) {
-            setAiCheckStatus({
-              status: "verified",
-              message: `✅ Replayed route on PC with ±${humanDriftPx}px drift (${waypoints.length} pts)`,
-              score: 1.0,
-            });
-            setTimeout(() => setAiCheckStatus(null), 4000);
-          }
-        })
-        .catch((err) => {
-          console.error("Failed to execute route on PC:", err);
-        })
-        .finally(() => {
-          setIsExecutingTrailOnPC(false);
-        });
-    }
 
     let currentWaypointIdx = 0;
     let startX = waypoints[0]?.x || 960;
@@ -6017,7 +5436,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         screenshotUrl={screenshotUrl || frozenSnapshotUrl || undefined}
         onExecuteStepOnPC={(step) => {
           playClickPip();
-          fetch("/api/execute-task", {
+          executeVerifiedTask("/api/execute-task", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -6089,7 +5508,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
               status: "verifying",
               message: `Streaming "${session.name}" (${session.points.length} waypoints) to PC hardware via PyAutoGUI...`,
             });
-            fetch("/api/execute-task", {
+            executeVerifiedTask("/api/execute-task", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -6274,7 +5693,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           const targetStep = sequence.find((s) => s.id === stepId);
           if (!targetStep) return;
           try {
-            await fetch("/api/execute-task", {
+            await executeVerifiedTask("/api/execute-task", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({

@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Private on-device recordings copied to the host
+.phone-recordings/

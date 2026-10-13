@@ -1,3 +1,4 @@
+import { evaluateCalculator } from "@/lib/calculator";
 import React, { useState, useEffect, useRef } from "react";
 import {
   Search,
@@ -623,9 +624,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
       setCalcDisplay("0");
     } else if (char === "=") {
       try {
-        const sanitized = calcDisplay.replace(/×/g, "*").replace(/÷/g, "/");
-        // eslint-disable-next-line no-new-func
-        const result = Function(`'use strict'; return (${sanitized})`)();
+        const result = evaluateCalculator(calcDisplay);
         const resStr = String(Math.round(result * 10000) / 10000);
         setCalcHistory((prev) => [`${calcDisplay} = ${resStr}`, ...prev].slice(0, 5));
         setCalcDisplay(resStr);
@@ -640,8 +639,8 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
         setCalcDisplay("-" + calcDisplay);
       }
     } else if (char === "%") {
-      const num = parseFloat(calcDisplay) / 100;
-      setCalcDisplay(String(num));
+      try { setCalcDisplay(String(evaluateCalculator(calcDisplay) / 100)); }
+      catch { setCalcDisplay("Error"); }
     } else {
       setCalcDisplay((prev) => (prev === "0" || prev === "Error" ? char : prev + char));
     }

@@ -17,20 +17,21 @@ function hasValidApiKey(req: Request, expected: string): boolean {
   const supplied =
     req.header("x-api-key") ??
     req.header("authorization")?.replace(/^Bearer\s+/i, "");
-  if (!supplied || supplied.length !== expected.length) return false;
+  if (!supplied || Buffer.byteLength(supplied) !== Buffer.byteLength(expected)) return false;
   return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
 }
 
 export const requireApiAccess: RequestHandler = (req, res, next) => {
-  if (req.path === "/ping" || req.path === "/demo" || req.path === "/health") return next();
+  if (res.locals?.apiAuthenticated === true) return next();
+  if (req.path === "/ping" || req.path === "/demo") return next();
   const expected = configuredApiKey();
-  if (expected) {
-    if (isLoopback(req) || hasValidApiKey(req, expected)) return next();
-    return res.status(401).json({ success: false, error: "Authentication required" });
-  }
+  if (expected && hasValidApiKey(req, expected)) return next();
 
-  // Without configured API key, allow access for web studio interface
-  return next();
+  // Local development remains convenient, but never silently exposes the control plane.
+  if (process.env.NODE_ENV !== "production" && !expected && isLoopback(req))
+    return next();
+
+  res.status(401).json({ success: false, error: "Authentication required" });
 };
 
 export function createCorsMiddleware(): RequestHandler {
@@ -39,44 +40,25 @@ export function createCorsMiddleware(): RequestHandler {
     .map((origin) => origin.trim())
     .filter(Boolean);
 
-  if (configuredOrigins.length > 0) {
-    return cors({
-      origin: (origin, callback) => {
-        if (!origin || configuredOrigins.includes(origin))
-          return callback(null, true);
-        return callback(null, true);
-      },
-      credentials: true,
-    });
-  }
-
   return cors({
-    origin: true,
-    credentials: true,
+    origin: configuredOrigins.length
+      ? (origin, callback) => {
+          if (!origin || configuredOrigins.includes(origin))
+            return callback(null, true);
+          return callback(new Error("Origin is not allowed"));
+        }
+      : false,
+    credentials: false,
   });
 }
 
 export function createApiRateLimiter(
   windowMs = 60_000,
-  maxRequests = 100_000,
+  maxRequests = 120,
 ): RequestHandler {
   const requests = new Map<string, { count: number; resetAt: number }>();
 
   return (req: Request, res: Response, next: NextFunction) => {
-    // Whitelist high-frequency streaming and polling routes
-    if (
-      req.path.startsWith("/api/mobile-stream") ||
-      req.path.startsWith("/api/screen") ||
-      req.path.startsWith("/api/capture-screen") ||
-      req.path.startsWith("/api/sync-real-frame") ||
-      req.path.startsWith("/api/pyautogui") ||
-      req.path.startsWith("/api/assistant/live") ||
-      req.path.startsWith("/api/health") ||
-      req.path.startsWith("/api/ping")
-    ) {
-      return next();
-    }
-
     const now = Date.now();
     const key = req.ip ?? "unknown";
     const current = requests.get(key);
@@ -87,10 +69,9 @@ export function createApiRateLimiter(
     current.count += 1;
     if (current.count > maxRequests) {
       res.setHeader("Retry-After", Math.ceil((current.resetAt - now) / 1000));
-      res.setHeader("Content-Type", "application/json");
       return res
         .status(429)
-        .json({ success: false, error: "Rate limit exceeded. Please retry shortly." });
+        .json({ success: false, error: "Rate limit exceeded" });
     }
     return next();
   };

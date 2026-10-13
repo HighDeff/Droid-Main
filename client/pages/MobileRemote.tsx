@@ -993,8 +993,9 @@ export default function MobileRemote() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         actionId: act.id,
-        success: true,
-        result: `Executed ${act.type} on phone`,
+        success: false,
+        result: `Dispatched ${act.type} to browser UI only; native phone execution is not verified`,
+        scope: "browser",
         action: act,
       }),
     }).catch(() => {});
@@ -2430,6 +2431,7 @@ export default function MobileRemote() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-start p-2 sm:p-4 font-sans select-none max-w-7xl mx-auto">
       {/* ---------------------------------------------------- */}
       {/* TOP HEADER & TELEMETRY STRIP */}
+      <a href="/phone-control" className="text-emerald-300 underline text-sm mb-3">Paired Android controls & background recording (scan a desktop device QR first)</a>
       {/* ---------------------------------------------------- */}
       <div className="w-full max-w-md flex flex-col gap-1.5 mb-2">
         <div className="flex items-center justify-between">

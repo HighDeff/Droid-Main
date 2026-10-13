@@ -1,3 +1,4 @@
+import { replayStepSchema } from "@shared/replay";
 import { audioSynthesizer } from "@/lib/audio-synthesizer";
 import React, { useState, useEffect } from "react";
 import {
@@ -79,6 +80,7 @@ interface ClickSequenceRegisterProps {
   onClearSequence: () => void;
   onSelectStep: (id: string) => void;
   onAiReviewSteps?: () => void;
+  onImportSequence?: (steps: SequenceStep[]) => void;
 }
 
 export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
@@ -98,10 +100,10 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
   onClearSequence,
   onSelectStep,
   onAiReviewSteps,
+  onImportSequence,
 }) => {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [isAiRepeatEnabled, setIsAiRepeatEnabled] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<"steps" | "live_stream">("steps");
   const [draggedStepId, setDraggedStepId] = useState<string | null>(null);
 
@@ -123,29 +125,14 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
         coords: { x: latest.x, y: latest.y },
         payload: latest.text || latest.keyPayload,
         timestamp: new Date().toLocaleTimeString(),
-        aiMirrored: isAiRepeatEnabled,
+        aiMirrored: false,
       };
 
       setActivityEvents((prev) => [newEvent, ...prev.slice(0, 30)]);
 
-      // If AI Repeat is enabled during recording, dispatch physical execution immediately
-      if (isAiRepeatEnabled && isRecordMode) {
-        fetch("/api/execute-task", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            task: {
-              id: `ai_mimic_${latest.id}`,
-              name: `AI Repeat: ${latest.name}`,
-              action: latest.action,
-              targetPosition: { x: latest.x, y: latest.y },
-              textPayload: latest.text || "",
-            },
-          }),
-        }).catch(() => {});
-      }
+
     }
-  }, [sequence.length, isAiRepeatEnabled, isRecordMode]);
+  }, [sequence.length]);
 
   const totalDurationMs = sequence.reduce((sum, s) => sum + s.delayMs, 0);
 
@@ -172,38 +159,12 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
         try {
           const parsed = JSON.parse(event.target?.result as string);
           if (Array.isArray(parsed)) {
-            // Clear existing and import as new sequence - use onAddStep via direct DOM workaround: create temporary sequence via multiple onUpdateStep calls is broken,
-            // so we store to localStorage and reload
-            const normalized = parsed
-              .slice(0, 50)
-              .map((step: any, idx: number) => ({
-                id: step.id || `step_${Date.now()}_${idx}`,
-                stepNumber: idx + 1,
-                name: step.name || `Step ${idx + 1}`,
-                action: step.action || "click",
-                x: Number(step.x) || 960,
-                y: Number(step.y) || 540,
-                delayMs: Number(step.delayMs) || 500,
-                text: step.text || step.textPayload || "",
-                keyPayload: step.keyPayload || "enter",
-                status: "pending" as const,
-              }));
-            // Directly replace via localStorage then reload - fallback: iteratively add via onAddStep + update
-            // Use parent-provided clear + add pattern: first clear
-            onClearSequence();
-            setTimeout(() => {
-              normalized.forEach((s: SequenceStep) => {
-                // Use the exposed global add via custom event: we directly push via onUpdateStep with new id after clear, then update
-                // Simpler: use fetch to store and force parent to reload from localStorage
-                try {
-                  localStorage.setItem(
-                    "unified_sequence",
-                    JSON.stringify(normalized),
-                  );
-                  window.location.reload();
-                } catch {}
-              });
-            }, 100);
+            if (!onImportSequence) throw new Error("Sequence import is unavailable");
+            const normalized = parsed.slice(0, 100).map((step, idx) => ({
+              ...replayStepSchema.parse({ ...step, id: crypto.randomUUID(), name: step.name || `Step ${idx + 1}`, text: step.text ?? step.textPayload }),
+              stepNumber: idx + 1, status: "pending" as const,
+            }));
+            onImportSequence(normalized as SequenceStep[]);
           } else if (parsed.frames || parsed.slides) {
             alert(
               "This looks like a Pack/Layer file, not a sequence. Use Pack Builder import.",
@@ -249,25 +210,7 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* AI Repeat Toggle */}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-purple-800/60 text-xs">
-              <Bot
-                className={`w-3.5 h-3.5 ${isAiRepeatEnabled ? "text-purple-400 animate-pulse" : "text-slate-400"}`}
-              />
-              <span className="text-[11px] text-slate-300 font-bold">
-                AI Repeat During Record:
-              </span>
-              <button
-                onClick={() => setIsAiRepeatEnabled(!isAiRepeatEnabled)}
-                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                  isAiRepeatEnabled
-                    ? "bg-purple-600 text-white"
-                    : "bg-slate-800 text-slate-300"
-                }`}
-              >
-                {isAiRepeatEnabled ? "ON" : "OFF"}
-              </button>
-            </div>
+            <span className="text-xs text-slate-400">Recording saves actions. Use Run for verified replay.</span>
 
             {/* Record Clicks Button */}
             <Button
@@ -639,75 +582,15 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                           </Button>
                         </div>
 
-                        {/* Conditional Branching & Error Recovery Rules */}
-                        <div className="w-full mt-2 pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] bg-slate-950/60 p-2 rounded-lg">
-                          <div className="flex items-center gap-2">
-                            <span className="text-amber-400 font-bold flex items-center gap-1">
-                              <span>🔷 CONDITIONAL BRANCH:</span>
-                            </span>
-                            <select
-                              value={(step as any).conditionType || "always"}
-                              onChange={(e) =>
-                                onUpdateStep(step.id, {
-                                  conditionType: e.target.value,
-                                } as any)
-                              }
-                              className="h-6 text-[10px] font-mono bg-slate-900 border border-slate-700 rounded px-1.5 text-cyan-300"
-                            >
-                              <option value="always">Always Proceed</option>
-                              <option value="ocr_contains">
-                                If OCR Contains Text
-                              </option>
-                              <option value="ocr_error">
-                                If Error Dialog Detected
-                              </option>
-                              <option value="pixel_diff">
-                                If State Changed
-                              </option>
-                            </select>
-
-                            {(step as any).conditionType &&
-                              (step as any).conditionType !== "always" && (
-                                <input
-                                  value={(step as any).conditionValue || ""}
-                                  onChange={(e) =>
-                                    onUpdateStep(step.id, {
-                                      conditionValue: e.target.value,
-                                    } as any)
-                                  }
-                                  placeholder="e.g. 'Invalid Token'..."
-                                  className="h-6 text-[10px] font-mono bg-slate-900 border border-slate-700 rounded px-2 text-amber-200 w-32"
-                                />
-                              )}
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-400 text-[10px]">
-                              Then:
-                            </span>
-                            <select
-                              value={
-                                (step as any).thenBranchAction || "continue"
-                              }
-                              onChange={(e) =>
-                                onUpdateStep(step.id, {
-                                  thenBranchAction: e.target.value,
-                                } as any)
-                              }
-                              className="h-6 text-[10px] font-mono bg-slate-900 border border-slate-700 rounded px-1.5 text-emerald-300"
-                            >
-                              <option value="continue">
-                                Continue Next Step
-                              </option>
-                              <option value="jump_to_step">
-                                Jump to Step #N
-                              </option>
-                              <option value="retry_3x">Auto-Retry 3x</option>
-                              <option value="workaround_escape">
-                                Trigger Escape Workaround
-                              </option>
-                            </select>
-                          </div>
+                        <div className="w-full grid gap-2 mt-2 text-xs">
+                          <label>Target label
+                            <Input value={step.targetOcrLabel || ""} onChange={e => onUpdateStep(step.id, { targetOcrLabel: e.target.value })} placeholder="Visible label of the intended control" />
+                          </label>
+                          <label>Expected visible outcome
+                            <Input value={step.expectedOutcome || ""} onChange={e => onUpdateStep(step.id, { expectedOutcome: e.target.value })} placeholder="For example: Settings page heading is visible" />
+                          </label>
+                          {(step as any).conditionType && (step as any).conditionType !== "always" && <button className="text-amber-300" onClick={() => onUpdateStep(step.id, { conditionType: "always" } as any)}>Remove unsupported legacy branch rule before replay</button>}
+                          <span className="text-slate-400">The AI retries target detection twice. Unconfirmed outcomes stop for review.</span>
                         </div>
 
                         {/* Order Change Buttons: UP (↑), DOWN (↓), DELETE */}

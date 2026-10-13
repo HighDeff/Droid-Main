@@ -1,3 +1,5 @@
+import type { ReplayStep } from "@shared/replay";
+import PhoneDevicePanel from "./phone-device-panel";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { generateDefaultMobileFrame } from "@/lib/mobile-screen-generator";
 import { InteractivePhoneVirtualOS } from "@/components/interactive-phone-virtual-os";
@@ -213,6 +215,7 @@ export interface MobileFrameSnapshot {
 }
 
 interface UniversalDeviceBridgeHubProps {
+  replaySteps?: ReplayStep[];
   onSelectDeviceFrame?: (imageData: string) => void;
   selectedAdbDevice?: string;
   onDeviceSelected?: (id: string) => void;
@@ -224,6 +227,7 @@ interface UniversalDeviceBridgeHubProps {
 }
 
 export function UniversalDeviceBridgeHub({
+  replaySteps,
   onSelectDeviceFrame,
   selectedAdbDevice,
   onDeviceSelected,
@@ -1924,6 +1928,8 @@ export function UniversalDeviceBridgeHub({
       {/* ---------------------------------------------------- */}
       {activeTab === "qr-link" && (
         <div className="space-y-3">
+          <PhoneDevicePanel replaySteps={replaySteps} />
+          <h3 className="text-sm text-slate-400">Browser-only sharing and virtual phone tools</h3>
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
             {/* Left Column: QR Code + Connection info */}
             <div className="lg:col-span-4 space-y-3">
@@ -1938,10 +1944,10 @@ export function UniversalDeviceBridgeHub({
                 </div>
                 <div className="space-y-1">
                   <span className="text-[11px] font-bold text-emerald-400 flex items-center justify-center gap-1">
-                    <Smartphone className="w-3.5 h-3.5" /> Scan to Beam Screen & Control
+                    <Smartphone className="w-3.5 h-3.5" /> Browser sharing / virtual phone
                   </span>
                   <p className="text-[10px] text-slate-400">
-                    Open on your phone to stream live screen & receive AI automations.
+                    Browser camera or virtual UI only. For actual Android control and recording, use the paired device panel above.
                   </p>
                 </div>
 

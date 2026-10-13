@@ -349,7 +349,7 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
           text: textToSend,
           deviceMode: activeDevice === "android" ? "android_adb" : "desktop_mirror",
         }),
-      });
+      }).catch(() => {});
 
       // Forward to Mobile Stream Queue for connected phone
       fetch("/api/mobile-stream/action", {
@@ -412,7 +412,7 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
           key,
           deviceMode: activeDevice === "android" ? "android_adb" : "desktop_mirror",
         }),
-      });
+      }).catch(() => {});
 
       // Forward to Mobile Stream Queue for connected phone
       fetch("/api/mobile-stream/action", {

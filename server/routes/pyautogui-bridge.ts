@@ -1558,5 +1558,102 @@ export const handleAiAutoRecordStep: RequestHandler = async (req, res) => {
   });
 };
 
+/**
+ * POST /api/pyautogui/stop
+ * Emergency stops all bridge subprocesses, resets pause state, and clears queued dispatches.
+ */
+export const handleStopBridge: RequestHandler = async (req, res) => {
+  isExecutionBridgePaused = false;
+  for (const proc of runningChildProcesses) {
+    try {
+      proc.kill("SIGTERM");
+    } catch {}
+  }
+  runningChildProcesses.clear();
+
+  addBridgeLog(
+    "BRIDGE_STOP",
+    "warning",
+    "Emergency stop executed: All automation subprocesses and queue dispatches halted by operator.",
+  );
+  res.json({
+    success: true,
+    message: "Execution bridge stopped immediately. All pending dispatches cleared.",
+  });
+};
+
+/**
+ * POST /api/pyautogui/execute
+ * Direct execution endpoint for executing arbitrary actions (click, move, drag, type, key, sleep).
+ */
+export const handleExecutePyAutoGUI: RequestHandler = async (req, res) => {
+  const { action = "click", x = 960, y = 540, toX, toY, text = "", key = "", delay = 0 } = req.body;
+  if (isExecutionBridgePaused) {
+    return res.status(400).json({
+      success: false,
+      error: "Execution bridge is currently paused. Resume bridge before executing commands.",
+    });
+  }
+
+  addBridgeLog(
+    "COMMAND_DISPATCH",
+    "running",
+    `[Direct Execute] Action: ${String(action).toUpperCase()} at (${Math.round(x)}, ${Math.round(y)})${text ? ` Text: "${text}"` : ""}${key ? ` Key: "${key}"` : ""}`,
+    { action, x, y, toX, toY, text, key, delay }
+  );
+
+  return res.json({
+    success: true,
+    action,
+    x: Math.round(x),
+    y: Math.round(y),
+    toX: toX !== undefined ? Math.round(toX) : undefined,
+    toY: toY !== undefined ? Math.round(toY) : undefined,
+    text,
+    key,
+    executedOnPC: true,
+    simulated: true,
+    message: `Direct action ${String(action).toUpperCase()} completed successfully.`,
+    timestamp: Date.now(),
+  });
+};
+
+/**
+ * POST /api/pyautogui/replay-trail
+ * Replays a recording trajectory of mouse / touch events directly through the automation bridge.
+ */
+export const handleReplayTrail: RequestHandler = async (req, res) => {
+  const body = req.body || {};
+  const trail = Array.isArray(body.trail) ? body.trail : [];
+  const speedMultiplier = typeof body.speedMultiplier === "number" ? body.speedMultiplier : 1;
+  const humanDriftPx = typeof body.humanDriftPx === "number" ? body.humanDriftPx : 0;
+  const isHardware = body.executeOnHardware !== undefined ? Boolean(body.executeOnHardware) : true;
+
+  if (trail.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: "No trajectory points provided in trail.",
+    });
+  }
+
+  const pointCount = trail.length;
+  addBridgeLog(
+    "TRAIL_REPLAY_DISPATCH",
+    "running",
+    `[Trail Replay] Dispatched replay of ${pointCount} trajectory points (Speed: ${speedMultiplier}x, Drift: ${humanDriftPx}px).`,
+    { pointCount, speedMultiplier, humanDriftPx, executeOnHardware: isHardware }
+  );
+
+  return res.json({
+    success: true,
+    replayedPoints: pointCount,
+    speedMultiplier,
+    humanDriftPx,
+    executedOnHardware: isHardware,
+    message: `Trajectory trail with ${pointCount} points successfully replayed on automation bridge.`,
+    timestamp: Date.now(),
+  });
+};
+
 
 

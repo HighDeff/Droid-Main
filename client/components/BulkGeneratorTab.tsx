@@ -27,7 +27,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { WordConstraintMode, CONSTRAINT_PRESETS } from "./DescriptionRefiner";
+import { WordConstraintMode, CONSTRAINT_PRESETS } from "@/lib/description-constraint-presets";
 import { bulkSaveAppBriefs, saveAppBrief } from "@/lib/app-brief-history-store";
 
 export interface BulkItemResult {

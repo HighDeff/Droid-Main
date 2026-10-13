@@ -44,7 +44,7 @@ import {
 import { toast } from "sonner";
 import { useAppBriefHistory } from "@/hooks/useAppBriefHistory";
 import { AppBriefRecord } from "@/lib/app-brief-history-store";
-import { WordConstraintMode, CONSTRAINT_PRESETS } from "./DescriptionRefiner";
+import { WordConstraintMode, CONSTRAINT_PRESETS } from "@/lib/description-constraint-presets";
 
 export interface AppBriefsHistoryViewProps {
   onRevisitBrief?: (brief: AppBriefRecord) => void;

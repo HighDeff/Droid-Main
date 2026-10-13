@@ -1078,7 +1078,7 @@ export default function MobileRemote() {
         })
       );
     }
-    setTriggerFrameProcess((prev) => prev + 1);
+    triggerFrameProcess();
   };
 
   // Frame Capture & Sync to PC Engine
@@ -2653,7 +2653,7 @@ export default function MobileRemote() {
                     if (state.notesList && state.notesList.length > 0) {
                       setVirtualOsNotes(state.notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"));
                     }
-                    setTriggerFrameProcess((prev) => prev + 1);
+                    triggerFrameProcess();
                   }}
                   onActionLogged={(action, details) => {
                     setStatus(`Action: ${action} - ${details}`);
@@ -3956,7 +3956,7 @@ export default function MobileRemote() {
                     <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden flex gap-0.5">
                       {sw.steps.map((step, idx) => (
                         <div
-                          key={step.id}
+                          key={`mob_step_${step.id || "step"}_${idx}`}
                           className={`flex-1 h-full rounded-full transition-all ${
                             idx < sw.currentStepIndex
                               ? "bg-emerald-400"
@@ -4560,7 +4560,7 @@ export default function MobileRemote() {
                 <div className="space-y-1.5 max-h-40 overflow-y-auto">
                   {schedFormSteps.map((step, idx) => (
                     <div
-                      key={step.id}
+                      key={`sched_step_${step.id || "step"}_${idx}`}
                       className="p-2 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs text-slate-300"
                     >
                       <div className="flex items-center justify-between">
@@ -4727,7 +4727,7 @@ export default function MobileRemote() {
                 <div className="space-y-1.5 max-h-40 overflow-y-auto">
                   {schedFormSteps.map((step, idx) => (
                     <div
-                      key={step.id}
+                      key={`sched_step_edit_${step.id || "step"}_${idx}`}
                       className="p-2 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs text-slate-300"
                     >
                       <div className="flex items-center justify-between">

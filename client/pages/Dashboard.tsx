@@ -72,6 +72,7 @@ import {
   AIThinkingState,
 } from "@/components/live-screen-hud";
 import { ClickSequenceRegister } from "@/components/click-sequence-register";
+import { AIWorkflowReviewModal, AIReviewResult } from "@/components/ai-workflow-review-modal";
 import { AiMonitorPanel } from "@/components/ai-monitor-panel";
 import {
   DualAICopilotPanel,
@@ -205,41 +206,7 @@ export default function Dashboard({
   ]);
   const [collabInput, setCollabInput] = useState("");
   const [popoutOpen, setPopoutOpen] = useState(false);
-  const [sequence, setSequence] = useState<SequenceStep[]>([
-    {
-      id: "step_init_1",
-      stepNumber: 1,
-      name: "Focus Main Target",
-      action: "click",
-      x: 960,
-      y: 540,
-      delayMs: 600,
-      status: "pending",
-      confidence: 0.98,
-    },
-    {
-      id: "step_init_2",
-      stepNumber: 2,
-      name: "Navigate Action Center",
-      action: "click",
-      x: 1120,
-      y: 420,
-      delayMs: 800,
-      status: "pending",
-      confidence: 0.95,
-    },
-    {
-      id: "step_init_3",
-      stepNumber: 3,
-      name: "Verify Visual State",
-      action: "click",
-      x: 780,
-      y: 680,
-      delayMs: 500,
-      status: "pending",
-      confidence: 0.97,
-    },
-  ]);
+  const [sequence, setSequence] = useState<SequenceStep[]>([]);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
   const [isRecordMode, setIsRecordMode] = useState(false);
   const [isSequenceRunning, setIsSequenceRunning] = useState(false);
@@ -274,6 +241,44 @@ export default function Dashboard({
   const [isAutonomousRunning, setIsAutonomousRunning] = useState(false);
   const [isPerceiving, setIsPerceiving] = useState(false);
   const [autonomousModalOpen, setAutonomousModalOpen] = useState(false);
+  const [isDashboardAiReviewOpen, setIsDashboardAiReviewOpen] = useState(false);
+  const [dashboardAiReviewResult, setDashboardAiReviewResult] = useState<AIReviewResult | null>(null);
+  const [isDashboardAiReviewLoading, setIsDashboardAiReviewLoading] = useState(false);
+
+  const handleTriggerDashboardAiReview = async () => {
+    if (sequence.length === 0) {
+      toast.info("No workflow steps to review. Record or add steps first.");
+      return;
+    }
+    setIsDashboardAiReviewOpen(true);
+    setIsDashboardAiReviewLoading(true);
+    setDashboardAiReviewResult(null);
+
+    try {
+      const snap = aiLiveUrl || screenshotUrl;
+      const res = await fetch("/api/ai/review-steps", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          steps: sequence,
+          screenshotUrl: snap,
+          userObjective: userObjective || "Execute automated desktop task",
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDashboardAiReviewResult(data);
+        toast.success(`🧠 AI Review: Score ${data.overallScore}%`);
+      } else {
+        toast.error(`Review failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (err: any) {
+      toast.error(`Review error: ${err.message}`);
+    } finally {
+      setIsDashboardAiReviewLoading(false);
+    }
+  };
+
   const [currentTab, setCurrentTab] = useState(initialTab || "screen");
   const [executionHistory, setExecutionHistory] = useState<any[]>([]);
   const [plannerDecision, setPlannerDecision] =
@@ -620,16 +625,79 @@ export default function Dashboard({
       }
     } catch {}
     let newStep: SequenceStep;
+    const generateUniqueId = (base: string) => {
+      const salt = Math.random().toString(36).substring(2, 8);
+      const candidate = `${base}_${salt}`;
+      return sequence.some((s) => s.id === candidate) ? `${candidate}_${Date.now()}` : candidate;
+    };
+
+    let targetX = typeof stepData === "number" ? stepData : (stepData.x ?? 960);
+    let targetY = typeof stepData === "number" ? (maybeY ?? 540) : (stepData.y ?? 540);
+
+    // If default center was passed and we have recent cursor movement or previous step, advance logically
+    if (typeof stepData !== "number" && stepData.x === undefined && stepData.y === undefined) {
+      if (liveMouseTrail.length > 0) {
+        const lastMouse = liveMouseTrail[liveMouseTrail.length - 1];
+        targetX = Math.round(lastMouse.x);
+        targetY = Math.round(lastMouse.y);
+      } else if (sequence.length > 0) {
+        const last = sequence[sequence.length - 1];
+        targetX = (last.x + 55 > 1820) ? 140 : last.x + 55;
+        targetY = (last.y + 40 > 980) ? 160 : last.y + 40;
+      }
+    }
+
+    // Prevent steps from stacking in the exact same position or overlapping (<24px) with ANY existing step
+    const isCoordinateOccupied = (x: number, y: number) =>
+      sequence.some((s) => Math.hypot(s.x - x, s.y - y) < 22);
+
+    if (isCoordinateOccupied(targetX, targetY)) {
+      let candX = targetX;
+      let candY = targetY;
+      let resolved = false;
+
+      // Try linear flow trajectory from last step first
+      if (sequence.length > 0) {
+        const last = sequence[sequence.length - 1];
+        const stepOffset = 50;
+        const testX = (last.x + stepOffset > 1820) ? 140 : last.x + stepOffset;
+        const testY = (last.y + 35 > 980) ? 160 : last.y + 35;
+        if (!isCoordinateOccupied(testX, testY)) {
+          candX = testX;
+          candY = testY;
+          resolved = true;
+        }
+      }
+
+      if (!resolved) {
+        for (let attempt = 1; attempt <= 28; attempt++) {
+          const angle = (attempt * 45 * Math.PI) / 180;
+          const radius = 35 + Math.floor(attempt / 4) * 20;
+          const testX = Math.round(targetX + Math.cos(angle) * radius);
+          const testY = Math.round(targetY + Math.sin(angle) * radius);
+          if (testX >= 80 && testX <= 1840 && testY >= 80 && testY <= 1000) {
+            if (!isCoordinateOccupied(testX, testY)) {
+              candX = testX;
+              candY = testY;
+              break;
+            }
+          }
+        }
+      }
+      targetX = candX;
+      targetY = candY;
+    }
+
     if (typeof stepData === "number") {
       newStep = {
-        id: `step_${Date.now()}_${stepNum}`,
+        id: generateUniqueId(`step_${Date.now()}_${stepNum}`),
         stepNumber: stepNum,
         name: pendingRightClick
           ? `Step ${stepNum} (Right Click)`
           : `Step ${stepNum}`,
         action: pendingRightClick ? "right_click" : "click",
-        x: stepData,
-        y: maybeY ?? 540,
+        x: targetX,
+        y: targetY,
         delayMs: 500,
         status: "pending",
         referenceScreenshotUrl: saveScreenshotWithStep
@@ -639,15 +707,22 @@ export default function Dashboard({
     } else {
       const isRight =
         pendingRightClick || (stepData as any).action === "right_click";
+      const existingId = stepData.id;
+      // If provided id already exists in sequence, make it uniquely salted
+      const finalId =
+        existingId && !sequence.some((s) => s.id === existingId)
+          ? existingId
+          : generateUniqueId(existingId || `step_${Date.now()}_${stepNum}`);
+
       newStep = {
-        id: stepData.id || `step_${Date.now()}_${stepNum}`,
+        id: finalId,
         stepNumber: stepNum,
         name:
           stepData.name ||
           (isRight ? `Step ${stepNum} (Right Click)` : `Step ${stepNum}`),
         action: (stepData.action as any) || (isRight ? "right_click" : "click"),
-        x: stepData.x,
-        y: stepData.y,
+        x: targetX,
+        y: targetY,
         delayMs: stepData.delayMs || 500,
         text: stepData.text,
         keyPayload: stepData.keyPayload,
@@ -926,10 +1001,18 @@ export default function Dashboard({
     setIsSequenceRunning(false);
     sequenceRunningRef.current = false;
   };
-  const handleStopSequence = () => {
+  const handleStopSequence = async () => {
     sequenceRunningRef.current = false;
     setIsSequenceRunning(false);
+    setIsRecordMode(false);
+    setIsAutonomousRunning(false);
     setActiveStepId(null);
+    setAiThinking(null);
+    setGlobalCursorState(null);
+    try {
+      await fetch("/api/pyautogui/stop", { method: "POST" });
+    } catch {}
+    toast.error("⏹ STOPPED: Sequence execution, bridge subprocess & recording halted.");
   };
   const captureScreen = async () => {
     try {
@@ -2088,7 +2171,7 @@ export default function Dashboard({
                 ...sequence
                   .filter((s) => (s as any).referenceScreenshotUrl)
                   .map((s, idx) => ({
-                    id: `step_${s.id}`,
+                    id: s.id.startsWith("step_") ? `${s.id}_snap_${idx}` : `step_${s.id}_snap_${idx}`,
                     name: `Step #${s.stepNumber || idx + 1}: ${s.name}`,
                     url: (s as any).referenceScreenshotUrl,
                     stepNumber: s.stepNumber || idx + 1,
@@ -2223,6 +2306,9 @@ export default function Dashboard({
                   sequence={sequence}
                   activeStepId={activeStepId}
                   isRecordMode={isRecordMode}
+                  onToggleRecordMode={() => setIsRecordMode(!isRecordMode)}
+                  onStopSequence={handleStopSequence}
+                  onRunSequence={handleRunSequence}
                   onAddStep={handleAddSequenceStep}
                   onRepositionStep={handleRepositionStep}
                   onSelectStep={setActiveStepId}
@@ -2338,19 +2424,23 @@ export default function Dashboard({
                       prev.map((s) => ({ ...s, status: "pending" })),
                     )
                   }
-                  onAddStep={() =>
+                  onAddStep={() => {
+                    const lastStep = sequence[sequence.length - 1];
+                    const nextX = lastStep ? (lastStep.x + 60 > 1800 ? 150 : lastStep.x + 60) : 960;
+                    const nextY = lastStep ? (lastStep.y + 60 > 960 ? 150 : lastStep.y + 60) : 540;
                     handleAddSequenceStep({
-                      x: 960,
-                      y: 540,
+                      x: nextX,
+                      y: nextY,
                       action: "click",
                       name: `Step ${sequence.length + 1}`,
-                    })
-                  }
+                    });
+                  }}
                   onUpdateStep={handleUpdateStep}
                   onDeleteStep={handleDeleteStep}
                   onMoveStep={handleMoveStep}
                   onClearSequence={() => setSequence([])}
                   onSelectStep={setActiveStepId}
+                  onAiReviewSteps={handleTriggerDashboardAiReview}
                 />
 
                 <MainScreenLoopVerificationHub
@@ -3474,6 +3564,24 @@ export default function Dashboard({
           isOpen={autonomousModalOpen}
           onClose={() => setAutonomousModalOpen(false)}
           currentScreenTitle={targetDevice === "android" ? "Android Device" : "Windows Desktop"}
+        />
+
+        {/* AI Conscious Operator Workflow & Screen Auditor Modal */}
+        <AIWorkflowReviewModal
+          isOpen={isDashboardAiReviewOpen}
+          onClose={() => setIsDashboardAiReviewOpen(false)}
+          reviewResult={dashboardAiReviewResult}
+          isLoading={isDashboardAiReviewLoading}
+          currentSteps={sequence}
+          screenshotUrl={aiLiveUrl || screenshotUrl}
+          onApplyOptimizations={(optimizedSteps) => {
+            setSequence(optimizedSteps);
+            toast.success("Applied AI recommendations to workflow sequence!");
+          }}
+          onExecuteWithAI={() => {
+            toast.info("Executing sequence with AI supervision...");
+            handleRunSequence();
+          }}
         />
 
         {/* Main AI Omni-Executive Controller (Full Tab Navigation, Settings Tuning, Screen Analysis, Workflow Healer & Click/Type Dispatcher) */}

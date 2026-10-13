@@ -27,6 +27,8 @@ import {
   ListOrdered,
   Bot,
   GripVertical,
+  Square,
+  Brain,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -76,6 +78,7 @@ interface ClickSequenceRegisterProps {
   onMoveStep: (id: string, direction: "up" | "down") => void;
   onClearSequence: () => void;
   onSelectStep: (id: string) => void;
+  onAiReviewSteps?: () => void;
 }
 
 export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
@@ -94,6 +97,7 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
   onMoveStep,
   onClearSequence,
   onSelectStep,
+  onAiReviewSteps,
 }) => {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -102,32 +106,7 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
   const [draggedStepId, setDraggedStepId] = useState<string | null>(null);
 
   // Live Activity Events Ledger (Logs Navigation, Clicks, and Typing as they happen)
-  const [activityEvents, setActivityEvents] = useState<LiveActivityEvent[]>([
-    {
-      id: "act_1",
-      type: "navigation",
-      description: "Mouse Navigated to Portal Center",
-      coords: { x: 960, y: 320 },
-      timestamp: "Just now",
-      aiMirrored: true,
-    },
-    {
-      id: "act_2",
-      type: "click",
-      description: "Left Click Registered on Focus Target",
-      coords: { x: 480, y: 320 },
-      timestamp: "Just now",
-      aiMirrored: true,
-    },
-    {
-      id: "act_3",
-      type: "typing",
-      description: "Typed String 'secure_user_01'",
-      payload: "secure_user_01",
-      timestamp: "Just now",
-      aiMirrored: true,
-    },
-  ]);
+  const [activityEvents, setActivityEvents] = useState<LiveActivityEvent[]>([]);
 
   // When sequence updates or is recorded, log to activity stream and auto-repeat via AI if enabled
   useEffect(() => {
@@ -307,6 +286,30 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                 : "Record Actions on Screen"}
             </Button>
 
+            {/* Emergency STOP Button */}
+            <Button
+              size="sm"
+              onClick={onStopSequence}
+              className="gap-1.5 text-xs font-bold bg-red-600 hover:bg-red-500 text-white border border-red-400 shadow-md shadow-red-950"
+              title="Emergency Stop: Abort all sequence execution, bridge commands, and recording"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              STOP
+            </Button>
+
+            {/* AI Review Steps */}
+            {onAiReviewSteps && (
+              <Button
+                size="sm"
+                onClick={onAiReviewSteps}
+                className="gap-1.5 text-xs font-bold bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-500 text-white border border-purple-400/50 shadow-md shadow-purple-950"
+                title="AI Conscious Review: Audits workflow steps against screen image and learns navigation patterns"
+              >
+                <Brain className="w-3.5 h-3.5 text-purple-200" />
+                AI Review ({sequence.length})
+              </Button>
+            )}
+
             {/* Run / Stop Sequence */}
             {isRunning ? (
               <Button
@@ -316,13 +319,14 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                 className="gap-1.5 text-xs font-semibold"
               >
                 <Pause className="w-3.5 h-3.5" />
-                Stop Execution
+                Pause Execution
               </Button>
             ) : (
               <Button
                 size="sm"
                 onClick={onRunSequence}
-                className="gap-1.5 text-xs font-semibold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg shadow-cyan-900/30"
+                disabled={sequence.length === 0}
+                className="gap-1.5 text-xs font-semibold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg shadow-cyan-900/30 disabled:opacity-40"
               >
                 <Play className="w-3.5 h-3.5" />
                 Run Sequence
@@ -485,7 +489,7 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                     const isMultiSelected = selectedIds.has(step.id);
                     return (
                       <div
-                        key={step.id}
+                        key={`seq_row_${step.id || "step"}_${idx}`}
                         data-step-row
                         data-step-id={step.id}
                         onClick={() => {

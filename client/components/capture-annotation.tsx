@@ -611,7 +611,7 @@ export function CaptureAnnotationWorkspace({
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-64 overflow-y-auto pr-1 scrollbar-thin">
                   {actionableSteps.map((step, idx) => (
                     <div
-                      key={step.id}
+                      key={`ann_step_${step.id || "step"}_${idx}`}
                       className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-cyan-800 flex items-center justify-between gap-2 transition-all"
                     >
                       <div className="space-y-0.5 truncate">

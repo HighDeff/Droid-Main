@@ -49,7 +49,10 @@ import {
   SkipForward,
   Shield,
   Check,
+  Square,
+  StopCircle,
 } from "lucide-react";
+import { AIWorkflowReviewModal, AIReviewResult } from "./ai-workflow-review-modal";
 import { AutoCorrectionLog, AutoCorrectionEntry, DEFAULT_DRIFT_LOGS } from "./AutoCorrectionLog";
 import { OverseerAIPanel } from "./OverseerAIPanel";
 import { WorkflowFlowchartView } from "./WorkflowFlowchartView";
@@ -230,6 +233,10 @@ interface LiveScreenHUDProps {
   onDeleteStep?: (id: string) => void;
   onMoveStep?: (id: string, direction: "up" | "down") => void;
   onReorderSteps?: (reordered: SequenceStep[]) => void;
+  onToggleRecordMode?: () => void;
+  onStopSequence?: () => void;
+  onRunSequence?: () => void;
+  onReviewStepsWithAI?: () => void;
 }
 
 export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
@@ -262,6 +269,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   onDeleteStep,
   onMoveStep,
   onReorderSteps,
+  onToggleRecordMode,
+  onStopSequence,
+  onRunSequence,
+  onReviewStepsWithAI,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -620,6 +631,73 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   const [isWorkflowFlowchartOpen, setIsWorkflowFlowchartOpen] = useState<boolean>(false);
   const [isDetectGoalModalOpen, setIsDetectGoalModalOpen] = useState<boolean>(false);
 
+  // AI Conscious Workflow Auditor, Emergency Stop & Auto-Recording State
+  const [isAiReviewModalOpen, setIsAiReviewModalOpen] = useState<boolean>(false);
+  const [aiReviewResult, setAiReviewResult] = useState<AIReviewResult | null>(null);
+  const [isAiReviewLoading, setIsAiReviewLoading] = useState<boolean>(false);
+  const [autoRecordClicksDirectly, setAutoRecordClicksDirectly] = useState<boolean>(true);
+  const stopExecutionRef = useRef<boolean>(false);
+
+  const handleStopAllExecution = async () => {
+    stopExecutionRef.current = true;
+    setIsExecutingStepByStep(false);
+    setIsAutoPlayingWorkflow(false);
+    setIsExecutingTrailOnPC(false);
+    setIsReplayingMovement(false);
+    setIsRecordingMouseTrail(false);
+    setExecutingStepProgress(null);
+    setAiCheckStatus({
+      status: "idle",
+      message: "⏹ STOPPED: All execution, auto-play, and active recording halted.",
+    });
+
+    try {
+      await fetch("/api/pyautogui/stop", { method: "POST" });
+    } catch {}
+
+    onStopSequence?.();
+    if (isRecordMode) {
+      onToggleRecordMode?.();
+    }
+    toast.error("⏹ STOPPED: All execution, sequence playback, and active recording halted immediately.");
+  };
+
+  const handleTriggerAiReviewSteps = async () => {
+    if (!sequence || sequence.length === 0) {
+      toast.info("No workflow steps to review yet. Click the screen or toggle [● Record] to record steps first.");
+      return;
+    }
+
+    setIsAiReviewModalOpen(true);
+    setIsAiReviewLoading(true);
+    setAiReviewResult(null);
+
+    try {
+      const snap = handleCaptureFreshFrame() || screenshotUrl || frozenSnapshotUrl;
+      const res = await fetch("/api/ai/review-steps", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          steps: sequence,
+          screenshotUrl: snap,
+          userObjective: "Automate task with conscious operator reasoning and visual coordinate verification",
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setAiReviewResult(data);
+        toast.success(`🧠 AI Review: ${data.overallScore}% Viability Score (${data.overallStatus.toUpperCase()})`);
+      } else {
+        toast.error(`Review failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (err: any) {
+      toast.error(`AI Review error: ${err.message}`);
+    } finally {
+      setIsAiReviewLoading(false);
+    }
+  };
+
   // Continuous 1-Second Screen Recording with AI Vision Streaming
   const [isContinuousScreenRecording, setIsContinuousScreenRecording] = useState<boolean>(false);
   const [screenRecordDurationSec, setScreenRecordDurationSec] = useState<number>(0);
@@ -693,7 +771,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           key: extra?.key,
           deviceMode: "android_studio_mirror",
         }),
-      }).catch((e) => console.error("Hardware bridge dispatch error:", e));
+      }).catch(() => {});
 
       // Also dispatch to Mobile Stream & ADB bridge
       const normX = x > 1 ? Math.min(1, x / 1920) : x;
@@ -859,6 +937,210 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   const [isAutoPlayingWorkflow, setIsAutoPlayingWorkflow] = useState<boolean>(false);
   const [showTestModeModal, setShowTestModeModal] = useState<boolean>(false);
   const [activeWorkflowName, setActiveWorkflowName] = useState<string>("Smart Vision Automation Flow");
+  
+  // Flow Replay Packs & Recent Steps Playback State
+  const [flowReplayPacks, setFlowReplayPacks] = useState<
+    Array<{ id: string; name: string; steps: SequenceStep[]; createdAt: number }>
+  >(() => {
+    try {
+      const saved = localStorage.getItem("flow_replay_packs");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [replayScope, setReplayScope] = useState<"all" | "recent3" | "recent5" | "recent10" | "pack">("recent5");
+  const [activePackId, setActivePackId] = useState<string | null>(null);
+
+  const getScopedFlowSteps = (): SequenceStep[] => {
+    if (!sequence || sequence.length === 0) return [];
+    if (replayScope === "pack" && activePackId) {
+      const found = flowReplayPacks.find((p) => p.id === activePackId);
+      if (found && found.steps.length > 0) return found.steps;
+    }
+    if (replayScope === "recent3") return sequence.slice(-3);
+    if (replayScope === "recent5") return sequence.slice(-5);
+    if (replayScope === "recent10") return sequence.slice(-10);
+    return sequence;
+  };
+
+  // Active Qwen Error Checking Sentinel & Step Orchestration
+  const [qwenDetectedErrors, setQwenDetectedErrors] = useState<Array<{
+    type: "duplicate_coords" | "empty_text" | "high_travel" | "edge_clamped" | "uncalibrated";
+    message: string;
+    stepIndex: number;
+    stepId: string;
+  }>>([]);
+  const [isQwenOrchestrating, setIsQwenOrchestrating] = useState<boolean>(false);
+
+  // Live monitor sequence for error detection & orchestration advice
+  useEffect(() => {
+    if (!sequence || sequence.length === 0) {
+      setQwenDetectedErrors([]);
+      if (qwenGuideEnabled) {
+        setQwenLiveThought("Qwen Agent Guide: Ready for step recording. No actions loaded.");
+      }
+      return;
+    }
+
+    const issues: Array<{
+      type: "duplicate_coords" | "empty_text" | "high_travel" | "edge_clamped" | "uncalibrated";
+      message: string;
+      stepIndex: number;
+      stepId: string;
+    }> = [];
+
+    const seenCoords = new Map<string, number>();
+
+    sequence.forEach((step, idx) => {
+      const coordKey = `${step.x},${step.y}`;
+      if (seenCoords.has(coordKey)) {
+        const prevIdx = seenCoords.get(coordKey)!;
+        issues.push({
+          type: "duplicate_coords",
+          message: `Step #${idx + 1} and Step #${prevIdx + 1} stacked at (${step.x}, ${step.y})`,
+          stepIndex: idx + 1,
+          stepId: step.id,
+        });
+      } else {
+        seenCoords.set(coordKey, idx);
+      }
+
+      // Check empty typing payload
+      if (step.action?.includes("type") && (!step.text || step.text.trim().length === 0)) {
+        issues.push({
+          type: "empty_text",
+          message: `Step #${idx + 1} (${step.name}) is a typing action with empty payload`,
+          stepIndex: idx + 1,
+          stepId: step.id,
+        });
+      }
+
+      // Check edge clamped coordinates
+      if (step.x < 50 || step.x > 1870 || step.y < 50 || step.y > 1030) {
+        issues.push({
+          type: "edge_clamped",
+          message: `Step #${idx + 1} is near screen perimeter (${step.x}, ${step.y})`,
+          stepIndex: idx + 1,
+          stepId: step.id,
+        });
+      }
+
+      // Check large jump distance without adequate buffer
+      if (idx > 0) {
+        const prev = sequence[idx - 1];
+        const dist = Math.hypot(step.x - prev.x, step.y - prev.y);
+        if (dist > 750 && (step.delayMs || 400) < 450) {
+          issues.push({
+            type: "high_travel",
+            message: `Step #${idx + 1} has ${Math.round(dist)}px jump but only ${step.delayMs || 400}ms delay`,
+            stepIndex: idx + 1,
+            stepId: step.id,
+          });
+        }
+      }
+    });
+
+    setQwenDetectedErrors(issues);
+
+    if (qwenGuideEnabled) {
+      if (issues.length > 0) {
+        setQwenLiveThought(
+          `⚠️ Qwen Sentinel: Detected ${issues.length} workflow issue(s) (${issues[0].message}). Click [⚡ Qwen Fix & Orchestrate] to calibrate.`
+        );
+      } else {
+        setQwenLiveThought(
+          `✓ Qwen Sentinel: All ${sequence.length} steps verified • Trajectories aligned & ready for playback.`
+        );
+      }
+    }
+  }, [sequence, qwenGuideEnabled]);
+
+  const handleQwenAutoFixAndOrchestrate = async () => {
+    if (sequence.length === 0) {
+      toast.info("No steps to orchestrate. Record or add steps first.");
+      return;
+    }
+    setIsQwenOrchestrating(true);
+    setQwenThinkingStatus("🤖 Qwen Orchestrator: Analyzing step geometry, smoothing paths, and resolving overlaps...");
+    try {
+      const res = await fetch("/api/ai/apply-suggestions-with-qwen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          steps: sequence,
+          userObjective: activeWorkflowName || "Calibrate smooth desktop sequence",
+        }),
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.optimizedSteps)) {
+        if (onReorderSteps) {
+          onReorderSteps(data.optimizedSteps);
+        }
+        setQwenThinkingStatus(`✓ Qwen Orchestrated: Applied ${data.adjustmentsMade || 0} adjustments.`);
+        toast.success(`⚡ Qwen Orchestrator: Calibrated ${data.optimizedSteps.length} Steps!`, {
+          description: `${data.adjustmentsMade || 0} adjustments applied: ${data.qwenExplanation || "Smooth curves and timings calibrated."}`,
+        });
+
+        // Visibly render the orchestrated trajectory trail on screen!
+        if (data.optimizedSteps.length > 1) {
+          const trailPoints: Array<{ x: number; y: number; time: number; isClick?: boolean }> = [];
+          for (let i = 0; i < data.optimizedSteps.length - 1; i++) {
+            const p1 = data.optimizedSteps[i];
+            const p2 = data.optimizedSteps[i + 1];
+            for (let t = 0; t <= 1; t += 0.2) {
+              const curX = Math.round(p1.x + (p2.x - p1.x) * t);
+              const curY = Math.round(p1.y + (p2.y - p1.y) * t);
+              trailPoints.push({ x: curX, y: curY, time: Date.now() + i * 100, isClick: t === 1 });
+            }
+          }
+          setLiveMouseTrail(trailPoints);
+          setSplineMotionTrail(trailPoints.map((p) => ({ x: p.x, y: p.y })));
+          const lastPt = data.optimizedSteps[0];
+          setReplayingCursorPos({ x: lastPt.x, y: lastPt.y });
+          setMousePos({ x: lastPt.x, y: lastPt.y });
+        }
+      } else {
+        toast.error("Qwen orchestration returned unexpected format");
+      }
+    } catch (e: any) {
+      toast.error(`Qwen orchestration error: ${e.message}`);
+    } finally {
+      setIsQwenOrchestrating(false);
+      setTimeout(() => setQwenThinkingStatus(null), 3500);
+    }
+  };
+
+  const handleCreateFlowPack = (customName?: string) => {
+    if (sequence.length === 0) {
+      toast.error("No steps in current flow to create a pack");
+      return;
+    }
+    const scoped = getScopedFlowSteps();
+    const stepsToPack = scoped.length > 0 ? scoped : sequence;
+    const count = flowReplayPacks.length + 1;
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const defaultName = customName || `Flow_Pack_${count} (${stepsToPack.length} steps @ ${timeStr})`;
+
+    const newPack = {
+      id: `pack_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: defaultName,
+      steps: stepsToPack.map((s, idx) => ({ ...s, stepNumber: idx + 1 })),
+      createdAt: Date.now(),
+    };
+    const updated = [newPack, ...flowReplayPacks.slice(0, 19)];
+    setFlowReplayPacks(updated);
+    try {
+      localStorage.setItem("flow_replay_packs", JSON.stringify(updated));
+    } catch {}
+    setActivePackId(newPack.id);
+    setReplayScope("pack");
+
+    toast.success(`📦 Created Flow Pack "${defaultName}"!`, {
+      description: `Saved ${stepsToPack.length} recent step(s) as dedicated pack. You can now replay just these steps with [Play Flow].`,
+    });
+  };
+
   const [cotReasoningLogs, setCotReasoningLogs] = useState<Array<{
     id: string;
     stepIndex: number;
@@ -876,13 +1158,45 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       toast.info("No sequence steps loaded to forward");
       return;
     }
-    const currentIdx = sequence.findIndex((s) => s.id === activeStepId);
-    const nextIdx = currentIdx < 0 ? 0 : (currentIdx + 1) % sequence.length;
-    const targetStep = sequence[nextIdx];
+    const currentPool = getScopedFlowSteps();
+    const activeSteps = currentPool.length > 0 ? currentPool : sequence;
+    const currentIdx = activeSteps.findIndex((s) => s.id === activeStepId);
+    const nextIdx = currentIdx < 0 ? 0 : (currentIdx + 1) % activeSteps.length;
+    const targetStep = activeSteps[nextIdx];
 
     onSelectStep?.(targetStep.id);
     setForwardStepTriggerCount((prev) => prev + 1);
     playClickPip();
+
+    // Visibly animate mouse cursor and glowing motion trail to targetStep
+    const fromX = replayingCursorPos?.x ?? mousePos?.x ?? (sequence[0]?.x ?? 960);
+    const fromY = replayingCursorPos?.y ?? mousePos?.y ?? (sequence[0]?.y ?? 540);
+    const toX = targetStep.x;
+    const toY = targetStep.y;
+
+    const interpolatedTrail: Array<{ x: number; y: number; time: number; isClick?: boolean }> = [];
+    const waypointsCount = 10;
+    for (let i = 1; i <= waypointsCount; i++) {
+      const frac = i / waypointsCount;
+      const arcOffset = Math.sin(frac * Math.PI) * 18;
+      interpolatedTrail.push({
+        x: Math.round(fromX + (toX - fromX) * frac + arcOffset),
+        y: Math.round(fromY + (toY - fromY) * frac - arcOffset * 0.4),
+        time: Date.now() + i * 20,
+        isClick: i === waypointsCount,
+      });
+    }
+
+    setReplayingCursorPos({ x: toX, y: toY });
+    setMousePos({ x: toX, y: toY });
+    setLiveMouseTrail((prev) => [...prev.slice(-35), ...interpolatedTrail]);
+    setSplineMotionTrail((prev) => [...prev.slice(-30), ...interpolatedTrail.map((p) => ({ x: p.x, y: p.y }))]);
+
+    // Visual ripple effect
+    setClickRipples((prev) => [
+      ...prev.slice(-8),
+      { id: `play_rip_${Date.now()}`, x: toX, y: toY, time: Date.now() },
+    ]);
 
     // Trigger visual hardware action
     dispatchInteractiveHardwareAction(
@@ -902,7 +1216,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         stepName: targetStep.name || `Step #${nextIdx + 1}`,
         action: targetStep.action,
         precondition: nextIdx === 0 ? "Initial clean baseline" : `Step #${nextIdx} completed`,
-        thought: `Advancing to Step #${nextIdx + 1}: Target (${targetStep.x}, ${targetStep.y}) -> Execute ${targetStep.action.toUpperCase()}`,
+        thought: `Advancing to Step #${nextIdx + 1} (${replayScope === "pack" ? "Pack Step" : "Flow Step"}): Target (${targetStep.x}, ${targetStep.y}) -> Execute ${targetStep.action.toUpperCase()}`,
         expectedState: `Mutate virtual template state for ${targetStep.name || targetStep.action}`,
         verification: "VERIFIED",
         timestamp: now,
@@ -910,19 +1224,25 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     ]);
 
     toast.success(`⏩ Step #${nextIdx + 1}: ${targetStep.name || targetStep.action.toUpperCase()} Forwarded!`, {
-      description: `Target (${targetStep.x}, ${targetStep.y}) applied to active template`,
+      description: `Target (${targetStep.x}, ${targetStep.y}) applied to active template [${replayScope.toUpperCase()}]`,
       duration: 1800,
     });
   };
 
   const handleStepBack = () => {
     if (!sequence || sequence.length === 0) return;
-    const currentIdx = sequence.findIndex((s) => s.id === activeStepId);
-    const prevIdx = currentIdx <= 0 ? sequence.length - 1 : currentIdx - 1;
-    const targetStep = sequence[prevIdx];
+    const currentPool = getScopedFlowSteps();
+    const activeSteps = currentPool.length > 0 ? currentPool : sequence;
+    const currentIdx = activeSteps.findIndex((s) => s.id === activeStepId);
+    const prevIdx = currentIdx <= 0 ? activeSteps.length - 1 : currentIdx - 1;
+    const targetStep = activeSteps[prevIdx];
     onSelectStep?.(targetStep.id);
     setForwardStepTriggerCount((prev) => prev + 1);
     playClickPip();
+
+    setReplayingCursorPos({ x: targetStep.x, y: targetStep.y });
+    setMousePos({ x: targetStep.x, y: targetStep.y });
+
     toast.info(`⏪ Step #${prevIdx + 1}: ${targetStep.name || targetStep.action.toUpperCase()}`);
   };
 
@@ -935,8 +1255,40 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         toast.error("No steps to play");
         return;
       }
+
+      // Automatically create a new pack with the current flow to allow users to easily replay recent steps
+      const packCount = flowReplayPacks.length + 1;
+      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const newPackName = `Flow_Pack_${packCount} (${sequence.length} steps @ ${timeStr})`;
+      const newPack = {
+        id: `pack_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        name: newPackName,
+        steps: sequence.map((s, idx) => ({ ...s, stepNumber: idx + 1 })),
+        createdAt: Date.now(),
+      };
+      const updatedPacks = [newPack, ...flowReplayPacks.slice(0, 19)];
+      setFlowReplayPacks(updatedPacks);
+      try {
+        localStorage.setItem("flow_replay_packs", JSON.stringify(updatedPacks));
+      } catch {}
+      setActivePackId(newPack.id);
+
+      const pool = getScopedFlowSteps();
+      if (pool.length > 0) {
+        onSelectStep?.(pool[0].id);
+        setReplayingCursorPos({ x: pool[0].x, y: pool[0].y });
+        setMousePos({ x: pool[0].x, y: pool[0].y });
+      }
       setIsAutoPlayingWorkflow(true);
-      toast.success("▶️ Auto-Playing Step Workflow Sequence");
+
+      const activePack = updatedPacks.find((p) => p.id === newPack.id);
+      const scopeLabel =
+        replayScope === "pack" && activePack
+          ? `Pack "${activePack.name}" (${pool.length} steps)`
+          : replayScope === "all"
+          ? `All Steps (${sequence.length})`
+          : `Recent Steps (${pool.length} of ${sequence.length})`;
+      toast.success(`▶️ Created Pack & Auto-Playing: ${scopeLabel}`);
     }
   };
 
@@ -952,7 +1304,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       handleStepForward();
     }, 2200);
     return () => clearInterval(timer);
-  }, [isAutoPlayingWorkflow, sequence, activeStepId]);
+  }, [isAutoPlayingWorkflow, sequence, activeStepId, replayScope, activePackId]);
 
   const handleSaveWorkflowToLibrary = async (customName?: string) => {
     try {
@@ -1860,6 +2212,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
               },
             ];
 
+    stopExecutionRef.current = false;
     setIsExecutingStepByStep(true);
     setExecutingStepIndex(0);
     setDriftNotificationAlert(null);
@@ -1870,6 +2223,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     });
 
     for (let i = 0; i < stepsToRun.length; i++) {
+      if (stopExecutionRef.current) {
+        break;
+      }
       const step: any = stepsToRun[i];
       setExecutingStepIndex(i);
 
@@ -2131,6 +2487,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
       // Pause between steps for UI settling
       await new Promise((r) => setTimeout(r, step.dwellDurationMs || 350));
+      if (stopExecutionRef.current) {
+        break;
+      }
 
       // AI Accuracy Check After Action
       if (autoCheckAfterAction) {
@@ -2359,6 +2718,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const coords = getNativeCoordinates(e);
     setMousePos({ x: coords.x, y: coords.y });
+    setSplineMotionTrail((prev) => [
+      ...prev.slice(-25),
+      { x: coords.x, y: coords.y },
+    ]);
+    setLiveMouseTrail((prev) => [
+      ...prev.slice(-40),
+      { x: coords.x, y: coords.y, time: Date.now(), isClick: false },
+    ]);
     recordMovementPoint(coords.x, coords.y);
     // Reset dwell start if moved significantly (>20px)
     if (
@@ -2425,12 +2792,45 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
     if (isRecordMode) {
       const stepNumber = sequence.length + 1;
-      // Left click default
-      setPopoverName(`Step ${stepNumber}`);
-      setPopoverAction("click");
-      setPopoverText("");
-      setPopoverDelay(500);
-      setRecordingClickPos(coords);
+      const snap = handleCaptureFreshFrame() || screenshotUrl || frozenSnapshotUrl || undefined;
+
+      if (autoRecordClicksDirectly) {
+        onAddStep({
+          stepNumber,
+          name: `Step #${stepNumber} (Click)`,
+          action: "click",
+          x: Math.round(coords.x),
+          y: Math.round(coords.y),
+          delayMs: 450,
+          status: "pending",
+          referenceScreenshotUrl: snap,
+        });
+
+        // Register with backend PyAutoGUI AI Record Step logger
+        try {
+          fetch("/api/pyautogui/ai-record-step", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "click",
+              x: coords.x,
+              y: coords.y,
+              stepNumber,
+              name: `Step #${stepNumber} (Click)`,
+              screenshotUrl: snap,
+            }),
+          }).catch(() => {});
+        } catch {}
+
+        toast.success(`● Recorded Step #${stepNumber} at (${Math.round(coords.x)}, ${Math.round(coords.y)})`);
+      } else {
+        // Popover configuration mode
+        setPopoverName(`Step ${stepNumber}`);
+        setPopoverAction("click");
+        setPopoverText("");
+        setPopoverDelay(500);
+        setRecordingClickPos(coords);
+      }
     }
   };
 
@@ -2546,20 +2946,11 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           : "w-full min-h-[560px] md:min-h-[640px] lg:min-h-[720px]"
       } ${
         deviceBridgeMode
-          ? "border-cyan-400 shadow-[0_0_25px_rgba(6,182,212,0.4)] cursor-crosshair"
+          ? "border-cyan-400 shadow-[0_0_25px_rgba(6,182,212,0.4)]"
           : isRecordMode
-          ? "border-amber-500 shadow-[0_0_25px_rgba(245,158,11,0.3)] cursor-none"
-          : "border-slate-800 shadow-xl cursor-default"
+          ? "border-amber-500 shadow-[0_0_25px_rgba(245,158,11,0.3)]"
+          : "border-slate-800 shadow-xl"
       }`}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={() => {
-        setMousePos(null);
-        setDraggingStepId(null);
-      }}
-      onClick={handleContainerClick}
-      onDoubleClick={handleContainerDoubleClick}
-      onContextMenu={handleContainerContextMenu}
       onKeyDown={(e) => {
         if (e.key === "Escape" && hudSizeMode === "fullscreen") {
           setHudSizeMode("large");
@@ -2569,7 +2960,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     >
       {/* Fullscreen Floating Controls */}
       {hudSizeMode === "fullscreen" && (
-        <div className="absolute top-4 right-4 z-50 flex items-center gap-2 bg-slate-950/90 border border-slate-700 px-3 py-1.5 rounded-xl shadow-2xl backdrop-blur-md">
+        <div onClick={(e) => e.stopPropagation()} className="absolute top-4 right-4 z-50 flex items-center gap-2 bg-slate-950/90 border border-slate-700 px-3 py-1.5 rounded-xl shadow-2xl backdrop-blur-md">
           <span className="text-xs font-mono text-cyan-300 font-bold">FULLSCREEN HUD</span>
           <button
             onClick={() => setHudSizeMode("large")}
@@ -2581,272 +2972,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         </div>
       )}
 
-      <div ref={viewportRef} className="absolute inset-0">
-        {/* Native WebRTC Live Real Screen Video Stream (only when active srcObject exists) */}
-        {isLiveStreamActive && antiTunnelMode === "live_stream" && (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className={`w-full h-full pointer-events-none absolute inset-0 z-0 ${
-              hudFitMode === "fill" ? "object-cover" : "object-contain"
-            }`}
-          />
-        )}
-
-        {/* Anti-Tunnel Freeze Frame Snapshot (Prevents Infinite Visual Loop) */}
-        {isLiveStreamActive && antiTunnelMode === "anti_tunnel_snapshot" && (
-          <div className="absolute inset-0 z-0 flex flex-col items-center justify-center bg-black">
-            {frozenSnapshotUrl ? (
-              <img
-                src={frozenSnapshotUrl}
-                alt="Anti-Tunnel Snapshot"
-                className={`w-full h-full pointer-events-none ${
-                  hudFitMode === "fill" ? "object-cover" : "object-contain"
-                }`}
-              />
-            ) : (
-              <div className="text-center p-4">
-                <span className="text-xs font-mono text-cyan-300 animate-pulse">
-                  🛡️ Anti-Tunnel Snapshot Active (Zero Visual Feedback Loop)
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Primary Screen / Phone Stream Frame */}
-        {(screenshotUrl || frozenSnapshotUrl) &&
-        (!isLiveStreamActive || (isLiveStreamActive && !videoRef.current?.srcObject)) ? (
-          <div className="w-full h-full flex items-center justify-center relative z-0 bg-slate-950">
-            {isMobileMode ? (
-              <div className="relative h-full max-h-full aspect-[9/16] max-w-full mx-auto flex items-center justify-center bg-black rounded-2xl overflow-hidden border-2 border-slate-700 shadow-2xl">
-                <div className="w-full h-full relative flex-1 flex flex-col overflow-hidden">
-                  <InteractivePhoneVirtualOS
-                    onContextMenu={handleContainerContextMenu}
-                    currentStepAction={activeStep ? {
-                      id: activeStep.id,
-                      action: activeStep.action,
-                      x: activeStep.x,
-                      y: activeStep.y,
-                      text: activeStep.text,
-                      name: activeStep.name,
-                    } : null}
-                    forwardTrigger={forwardStepTriggerCount}
-                    onActionLogged={(action, details) => {
-                      // Virtual OS user action logged - do not dispatch unwanted repeated hardware click
-                    }}
-                  />
-                </div>
-                <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[9px] font-mono font-bold flex items-center gap-1 shadow-lg pointer-events-none z-10 backdrop-blur-sm">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  <span>📱 INTERACTIVE PHONE OS • 1080x1920</span>
-                </div>
-              </div>
-            ) : (
-              <div className="w-full h-full relative flex-1 flex flex-col overflow-hidden">
-                <InteractiveDesktopVirtualOS
-                  onContextMenu={handleContainerContextMenu}
-                  currentStepAction={activeStep ? {
-                    id: activeStep.id,
-                    action: activeStep.action,
-                    x: activeStep.x,
-                    y: activeStep.y,
-                    text: activeStep.text,
-                    name: activeStep.name,
-                  } : null}
-                  forwardTrigger={forwardStepTriggerCount}
-                  onActionLogged={(action, details) => {
-                    // Virtual OS user action logged - do not dispatch unwanted repeated hardware click
-                  }}
-                />
-              </div>
-            )}
-            {/* Phone Stream Badge when viewing Mobile outside frame */}
-            {!isMobileMode && (selectedCanvasTitle?.toLowerCase().includes("mobile") ||
-              selectedCanvasTitle?.toLowerCase().includes("phone") ||
-              selectedTabName === "mobile") && (
-              <div className="absolute top-3 left-3 px-2 py-1 rounded-lg bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[10px] font-mono font-bold flex items-center gap-1.5 shadow-lg pointer-events-none z-10 backdrop-blur-sm">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>📱 LIVE PHONE STREAM • 1080x1920 NATIVE</span>
-              </div>
-            )}
-
-            {/* Floating Live Step Forwarding, Progression & Template Mutation HUD Bar */}
-            <div className="absolute bottom-4 inset-x-4 mx-auto max-w-2xl bg-slate-950/90 backdrop-blur-md border border-cyan-500/60 rounded-2xl p-2.5 shadow-2xl z-30 flex items-center justify-between gap-3 text-xs font-mono">
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="w-7 h-7 rounded-xl bg-cyan-600/30 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shrink-0 font-bold">
-                  {sequence.findIndex((s) => s.id === activeStepId) >= 0 ? sequence.findIndex((s) => s.id === activeStepId) + 1 : 1}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-cyan-300 font-bold truncate">
-                    <span>{activeStep?.name || (sequence.length > 0 ? `Step #1 (${sequence[0].action.toUpperCase()})` : "Standard Baseline")}</span>
-                    {activeStep?.text && <span className="text-[10px] text-amber-300 font-normal">"{activeStep.text}"</span>}
-                  </div>
-                  <div className="text-[10px] text-slate-400 flex items-center gap-2">
-                    <span>Target: ({activeStep?.x || 960}, {activeStep?.y || 540})</span>
-                    <span>•</span>
-                    <span className="text-emerald-400 font-bold">Live Template Linked</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 shrink-0">
-                <Button
-                  size="sm"
-                  onClick={handleStepBack}
-                  variant="outline"
-                  className="h-7 px-2 text-[11px] bg-slate-900 border-slate-700 hover:bg-slate-800 text-slate-300 gap-1"
-                  title="Step Backward (Previous Action)"
-                >
-                  <SkipBack className="w-3 h-3" />
-                  Prev
-                </Button>
-
-                <Button
-                  size="sm"
-                  onClick={handleToggleAutoPlayWorkflow}
-                  className={`h-7 px-2.5 text-[11px] font-bold border transition-all ${
-                    isAutoPlayingWorkflow
-                      ? "bg-amber-600 hover:bg-amber-500 text-white border-amber-400 animate-pulse"
-                      : "bg-cyan-700 hover:bg-cyan-600 text-white border-cyan-500"
-                  }`}
-                  title="Auto-play sequence steps every 2s with template mutation"
-                >
-                  {isAutoPlayingWorkflow ? <Pause className="w-3 h-3 mr-1" /> : <Play className="w-3 h-3 mr-1 fill-white" />}
-                  {isAutoPlayingWorkflow ? "Pause" : "Play Flow"}
-                </Button>
-
-                <Button
-                  size="sm"
-                  onClick={handleStepForward}
-                  className="h-7 px-3 text-[11px] font-bold bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white border border-emerald-400/50 shadow-md gap-1"
-                  title="Forward to Next Step: Visibly executes action and mutates template!"
-                >
-                  <SkipForward className="w-3.5 h-3.5" />
-                  Step Forward
-                </Button>
-
-                <Button
-                  size="sm"
-                  onClick={() => setShowTestModeModal(true)}
-                  className="h-7 px-2.5 text-[11px] font-bold bg-purple-700 hover:bg-purple-600 text-purple-100 border border-purple-400/50 gap-1"
-                  title="Open Test Mode: Reset app baseline, verify AI CoT reasoning, and save reproducible workflows"
-                >
-                  <Sparkles className="w-3 h-3 text-purple-300" />
-                  🧪 Test & Save
-                </Button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          !isLiveStreamActive && (
-            <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 text-center group z-10 select-none">
-              {screenShareError ? (
-                <div className="max-w-md w-full bg-slate-950/95 border-2 border-amber-500/80 rounded-xl p-5 shadow-2xl space-y-3">
-                  <div className="flex items-center justify-center gap-2 text-amber-400 font-mono font-bold text-sm">
-                    <Sparkles className="w-5 h-5 text-amber-400 animate-spin" />
-                    <span>{screenShareError.title}</span>
-                  </div>
-                  <p className="text-xs font-mono text-slate-300 leading-relaxed">
-                    {screenShareError.message}
-                  </p>
-                  <div className="flex flex-col gap-2 pt-2">
-                    <Button
-                      onClick={handleStartSimulatedScreenStream}
-                      className="w-full h-9 text-xs font-mono font-bold bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white shadow-lg shadow-emerald-950 border border-emerald-400/40 gap-2"
-                    >
-                      <Play className="w-4 h-4 text-emerald-300 fill-emerald-300" />
-                      ACTIVATE DESKTOP MIRROR (Instant 60FPS Fallback)
-                    </Button>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => window.open(window.location.href, "_blank")}
-                        className="flex-1 h-8 text-[11px] font-mono bg-slate-900 border-slate-700 hover:bg-slate-800 text-cyan-300 gap-1.5"
-                      >
-                        <Monitor className="w-3.5 h-3.5 text-cyan-400" />
-                        Open in New Tab (Direct OS Capture)
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={handleToggleRealScreenStream}
-                        className="flex-1 h-8 text-[11px] font-mono bg-slate-900 border-slate-700 hover:bg-slate-800 text-amber-300 gap-1.5"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
-                        Retry Share
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div
-                  onClick={handleToggleRealScreenStream}
-                  className="cursor-pointer flex flex-col items-center justify-center"
-                >
-                  <div className="w-20 h-20 rounded-full bg-cyan-950/80 border-2 border-cyan-400/80 flex items-center justify-center mb-4 group-hover:scale-110 group-hover:border-cyan-300 transition-all shadow-[0_0_30px_rgba(6,182,212,0.4)] animate-pulse">
-                    <Monitor className="w-10 h-10 text-cyan-300" />
-                  </div>
-
-                  <h3 className="text-lg font-bold font-mono text-slate-100 mb-1 group-hover:text-cyan-300 transition-colors">
-                    CLICK TO START LIVE SCREEN STREAM 📺
-                  </h3>
-                  <p className="text-xs font-mono text-slate-300 max-w-md mb-4">
-                    Direct 60 FPS zero-latency hardware desktop mirror for AI mouse
-                    navigation, OCR text scanning, and physical PyAutoGUI
-                    automation.
-                  </p>
-
-                  <div className="flex items-center gap-2.5 flex-wrap justify-center">
-                    <Button
-                      size="lg"
-                      disabled={isRequestingScreenShare}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleToggleRealScreenStream();
-                      }}
-                      className="h-10 px-5 text-xs font-mono font-bold bg-gradient-to-r from-cyan-600 via-blue-600 to-cyan-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-xl shadow-cyan-950 border border-cyan-400/40 gap-2"
-                    >
-                      <Play className="w-4 h-4 text-yellow-300 fill-yellow-300" />
-                      {isRequestingScreenShare ? "CONNECTING..." : "START REAL DESKTOP STREAM (60 FPS)"}
-                    </Button>
-
-                    <Button
-                      size="lg"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleStartSimulatedScreenStream();
-                      }}
-                      className="h-10 px-4 text-xs font-mono font-bold bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-emerald-500/50 shadow-lg gap-2"
-                    >
-                      <Sparkles className="w-4 h-4 text-emerald-400" />
-                      DESKTOP MIRROR FALLBACK
-                    </Button>
-
-                    <Button
-                      size="lg"
-                      variant="outline"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        window.open(window.location.href, "_blank");
-                      }}
-                      className="h-10 px-3 text-xs font-mono bg-slate-900/80 border-slate-700 hover:bg-slate-800 text-cyan-300 gap-1.5"
-                      title="Open in new browser tab for direct OS display capture"
-                    >
-                      <Monitor className="w-4 h-4" />
-                      NEW TAB ↗
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )
-        )}
-      </div>
-
       {/* Top Banner: Anti-Tunnel Shield & AI Automation Status */}
-      <div className="p-2 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 font-mono text-xs z-30 relative shadow-md">
+      <div onClick={(e) => e.stopPropagation()} className="p-2 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 font-mono text-xs z-30 relative shadow-md">
         <div className="flex items-center gap-2 flex-wrap">
           {/* Anti-Loop Shield Indicator */}
           <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-900 border border-slate-700">
@@ -3991,6 +4118,49 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             QWEN AGENT GUIDE ({qwenGuideEnabled ? "ON" : "OFF"})
           </Button>
 
+          {/* High-Visibility Emergency STOP Button */}
+          <Button
+            size="sm"
+            onClick={handleStopAllExecution}
+            className="h-8 px-3 text-xs font-mono font-bold bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 text-white border border-red-400/80 shadow-lg shadow-red-950 gap-1.5 ring-1 ring-red-400"
+            title="Emergency Stop: Instantly aborts any active sequence, auto-play, subprocess execution, and turns off recording"
+          >
+            <Square className="w-3.5 h-3.5 fill-current" />
+            STOP ALL
+          </Button>
+
+          {/* Record Actions on Screen Viewport */}
+          <Button
+            size="sm"
+            onClick={() => {
+              if (onToggleRecordMode) {
+                onToggleRecordMode();
+              }
+              toast.info(!isRecordMode ? "● Record Mode Activated: Click anywhere on viewport to add sequence step" : "Record Mode Deactivated");
+            }}
+            className={`h-8 px-3 text-xs font-mono font-bold transition-all border gap-1.5 ${
+              isRecordMode
+                ? "bg-amber-600 hover:bg-amber-500 text-white border-amber-300 ring-2 ring-amber-400 animate-pulse shadow-lg shadow-amber-950"
+                : "bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-700/60"
+            }`}
+            title="Toggle Record Mode: Directly click on screen viewport to record steps with coordinates and screenshots"
+          >
+            <Crosshair className={`w-3.5 h-3.5 ${isRecordMode ? "text-yellow-200 animate-spin" : "text-amber-400"}`} />
+            {isRecordMode ? "● RECORDING ON" : "● RECORD WORKFLOW"}
+          </Button>
+
+          {/* AI Conscious Review Steps & Navigation Learning */}
+          <Button
+            size="sm"
+            onClick={handleTriggerAiReviewSteps}
+            disabled={isAiReviewLoading}
+            className="h-8 px-3 text-xs font-mono font-bold bg-gradient-to-r from-purple-700 via-indigo-600 to-purple-700 hover:from-purple-600 hover:to-indigo-500 text-white border border-purple-400/50 shadow-lg shadow-purple-950 gap-1.5"
+            title="AI Conscious Review: Audits workflow steps, coordinates against screenshot, validates execution logic, and teaches navigation AI"
+          >
+            <Brain className={`w-3.5 h-3.5 ${isAiReviewLoading ? "animate-spin text-purple-200" : "text-purple-300"}`} />
+            🧠 AI REVIEW STEPS ({sequence.length})
+          </Button>
+
           {/* Automation HUD Pause / Resume Execution Subprocess Button */}
           <Button
             size="sm"
@@ -4052,6 +4222,215 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           </Button>
         </div>
       </div>
+
+      {/* Dedicated Unobscured Screen & Automation Viewport */}
+      <div
+        ref={viewportRef}
+        className="relative flex-1 w-full min-h-[440px] bg-slate-950 flex items-center justify-center overflow-hidden cursor-crosshair select-none"
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => {
+          setMousePos(null);
+          setDraggingStepId(null);
+        }}
+        onClick={handleContainerClick}
+        onDoubleClick={handleContainerDoubleClick}
+        onContextMenu={handleContainerContextMenu}
+      >
+        {/* Native WebRTC Live Real Screen Video Stream (only when active srcObject exists) */}
+        {isLiveStreamActive && antiTunnelMode === "live_stream" && (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className={`w-full h-full pointer-events-none absolute inset-0 z-0 ${
+              hudFitMode === "fill" ? "object-cover" : "object-contain"
+            }`}
+          />
+        )}
+
+        {/* Anti-Tunnel Freeze Frame Snapshot (Prevents Infinite Visual Loop) */}
+        {isLiveStreamActive && antiTunnelMode === "anti_tunnel_snapshot" && (
+          <div className="absolute inset-0 z-0 flex flex-col items-center justify-center bg-black">
+            {frozenSnapshotUrl ? (
+              <img
+                src={frozenSnapshotUrl}
+                alt="Anti-Tunnel Snapshot"
+                className={`w-full h-full pointer-events-none ${
+                  hudFitMode === "fill" ? "object-cover" : "object-contain"
+                }`}
+              />
+            ) : (
+              <div className="text-center p-4">
+                <span className="text-xs font-mono text-cyan-300 animate-pulse">
+                  🛡️ Anti-Tunnel Snapshot Active (Zero Visual Feedback Loop)
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Primary Screen / Phone Stream Frame */}
+        {(screenshotUrl || frozenSnapshotUrl) &&
+        (!isLiveStreamActive || (isLiveStreamActive && !videoRef.current?.srcObject)) ? (
+          <div className="w-full h-full flex items-center justify-center relative z-0 bg-slate-950">
+            {isMobileMode ? (
+              <div className="relative h-full max-h-full aspect-[9/16] max-w-full mx-auto flex items-center justify-center bg-black rounded-2xl overflow-hidden border-2 border-slate-700 shadow-2xl">
+                <div className="w-full h-full relative flex-1 flex flex-col overflow-hidden">
+                  <InteractivePhoneVirtualOS
+                    onContextMenu={handleContainerContextMenu}
+                    currentStepAction={activeStep ? {
+                      id: activeStep.id,
+                      action: activeStep.action,
+                      x: activeStep.x,
+                      y: activeStep.y,
+                      text: activeStep.text,
+                      name: activeStep.name,
+                    } : null}
+                    forwardTrigger={forwardStepTriggerCount}
+                    onActionLogged={(action, details) => {
+                      // Virtual OS user action logged
+                    }}
+                  />
+                </div>
+                <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[9px] font-mono font-bold flex items-center gap-1 shadow-lg pointer-events-none z-10 backdrop-blur-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  <span>📱 INTERACTIVE PHONE OS • 1080x1920</span>
+                </div>
+              </div>
+            ) : (
+              <div className="w-full h-full relative flex-1 flex flex-col overflow-hidden">
+                <InteractiveDesktopVirtualOS
+                  onContextMenu={handleContainerContextMenu}
+                  currentStepAction={activeStep ? {
+                    id: activeStep.id,
+                    action: activeStep.action,
+                    x: activeStep.x,
+                    y: activeStep.y,
+                    text: activeStep.text,
+                    name: activeStep.name,
+                  } : null}
+                  forwardTrigger={forwardStepTriggerCount}
+                  onActionLogged={(action, details) => {
+                    // Virtual OS user action logged
+                  }}
+                />
+              </div>
+            )}
+            {/* Phone Stream Badge when viewing Mobile outside frame */}
+            {!isMobileMode && (selectedCanvasTitle?.toLowerCase().includes("mobile") ||
+              selectedCanvasTitle?.toLowerCase().includes("phone") ||
+              selectedTabName === "mobile") && (
+              <div className="absolute top-3 left-3 px-2 py-1 rounded-lg bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[10px] font-mono font-bold flex items-center gap-1.5 shadow-lg pointer-events-none z-10 backdrop-blur-sm">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                <span>📱 LIVE PHONE STREAM • 1080x1920 NATIVE</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          !isLiveStreamActive && (
+            <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-6 text-center group z-10 select-none">
+              {screenShareError ? (
+                <div className="max-w-md w-full bg-slate-950/95 border-2 border-amber-500/80 rounded-xl p-5 shadow-2xl space-y-3">
+                  <div className="flex items-center justify-center gap-2 text-amber-400 font-mono font-bold text-sm">
+                    <Sparkles className="w-5 h-5 text-amber-400 animate-spin" />
+                    <span>{screenShareError.title}</span>
+                  </div>
+                  <p className="text-xs font-mono text-slate-300 leading-relaxed">
+                    {screenShareError.message}
+                  </p>
+                  <div className="flex flex-col gap-2 pt-2">
+                    <Button
+                      onClick={handleStartSimulatedScreenStream}
+                      className="w-full h-9 text-xs font-mono font-bold bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white shadow-lg shadow-emerald-950 border border-emerald-400/40 gap-2"
+                    >
+                      <Play className="w-4 h-4 text-emerald-300 fill-emerald-300" />
+                      ACTIVATE DESKTOP MIRROR (Instant 60FPS Fallback)
+                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => window.open(window.location.href, "_blank")}
+                        className="flex-1 h-8 text-[11px] font-mono bg-slate-900 border-slate-700 hover:bg-slate-800 text-cyan-300 gap-1.5"
+                      >
+                        <Monitor className="w-3.5 h-3.5 text-cyan-400" />
+                        Open in New Tab (Direct OS Capture)
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={handleToggleRealScreenStream}
+                        className="flex-1 h-8 text-[11px] font-mono bg-slate-900 border-slate-700 hover:bg-slate-800 text-amber-300 gap-1.5"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+                        Retry Share
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  onClick={handleToggleRealScreenStream}
+                  className="cursor-pointer flex flex-col items-center justify-center"
+                >
+                  <div className="w-20 h-20 rounded-full bg-cyan-950/80 border-2 border-cyan-400/80 flex items-center justify-center mb-4 group-hover:scale-110 group-hover:border-cyan-300 transition-all shadow-[0_0_30px_rgba(6,182,212,0.4)] animate-pulse">
+                    <Monitor className="w-10 h-10 text-cyan-300" />
+                  </div>
+
+                  <h3 className="text-lg font-bold font-mono text-slate-100 mb-1 group-hover:text-cyan-300 transition-colors">
+                    CLICK TO START LIVE SCREEN STREAM 📺
+                  </h3>
+                  <p className="text-xs font-mono text-slate-300 max-w-md mb-4">
+                    Direct 60 FPS zero-latency hardware desktop mirror for AI mouse
+                    navigation, OCR text scanning, and physical PyAutoGUI
+                    automation.
+                  </p>
+
+                  <div className="flex items-center gap-2.5 flex-wrap justify-center">
+                    <Button
+                      size="lg"
+                      disabled={isRequestingScreenShare}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleRealScreenStream();
+                      }}
+                      className="h-10 px-5 text-xs font-mono font-bold bg-gradient-to-r from-cyan-600 via-blue-600 to-cyan-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-xl shadow-cyan-950 border border-cyan-400/40 gap-2"
+                    >
+                      <Play className="w-4 h-4 text-yellow-300 fill-yellow-300" />
+                      {isRequestingScreenShare ? "CONNECTING..." : "START REAL DESKTOP STREAM (60 FPS)"}
+                    </Button>
+
+                    <Button
+                      size="lg"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleStartSimulatedScreenStream();
+                      }}
+                      className="h-10 px-4 text-xs font-mono font-bold bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-emerald-500/50 shadow-lg gap-2"
+                    >
+                      <Sparkles className="w-4 h-4 text-emerald-400" />
+                      DESKTOP MIRROR FALLBACK
+                    </Button>
+
+                    <Button
+                      size="lg"
+                      variant="outline"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        window.open(window.location.href, "_blank");
+                      }}
+                      className="h-10 px-3 text-xs font-mono bg-slate-900/80 border-slate-700 hover:bg-slate-800 text-cyan-300 gap-1.5"
+                      title="Open in new browser tab for direct OS display capture"
+                    >
+                      <Monitor className="w-4 h-4" />
+                      NEW TAB ↗
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        )}
 
       {/* Cyberpunk HUD Grid Overlay */}
       <div className="absolute inset-0 pointer-events-none">
@@ -4327,8 +4706,41 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
       {/* 1. Realistic Human Mouse Cursor & Glowing Spline Trail Overlay */}
       {/* Motion Spline Trail */}
-      {(splineMotionTrail.length > 0 || (mousePos && isRecordMode)) && (
-        <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
+      {splineMotionTrail.length > 0 && (
+        <svg className="absolute inset-0 w-full h-full pointer-events-none z-30 overflow-visible">
+          <defs>
+            <linearGradient id="cursorSplineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.1" />
+              <stop offset="50%" stopColor="#38bdf8" stopOpacity="0.6" />
+              <stop offset="100%" stopColor="#22d3ee" stopOpacity="0.95" />
+            </linearGradient>
+            <filter id="cursorGlow" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="3.5" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          {splineMotionTrail.length > 1 && (
+            <polyline
+              points={splineMotionTrail
+                .map((pt) => {
+                  const pct = framePointAsPercent(pt.x, pt.y, {
+                    width: NATIVE_WIDTH,
+                    height: NATIVE_HEIGHT,
+                  });
+                  return `${parseFloat(pct.left)}%,${parseFloat(pct.top)}%`;
+                })
+                .join(" ")}
+              fill="none"
+              stroke="url(#cursorSplineGrad)"
+              strokeWidth="3.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              filter="url(#cursorGlow)"
+            />
+          )}
           {splineMotionTrail.map((pt, idx) => (
             <circle
               key={idx}
@@ -4344,9 +4756,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                   height: NATIVE_HEIGHT,
                 }).top
               }
-              r={2 + (idx / splineMotionTrail.length) * 3}
-              fill="#06b6d4"
-              opacity={(idx / splineMotionTrail.length) * 0.8}
+              r={1.5 + (idx / Math.max(1, splineMotionTrail.length)) * 3.5}
+              fill="#22d3ee"
+              opacity={(idx / Math.max(1, splineMotionTrail.length)) * 0.9}
             />
           ))}
         </svg>
@@ -4406,25 +4818,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         </div>
       )}
 
-      {/* Live Mouse Coordinates Badge */}
-      {mousePos && (
-        <div className="absolute bottom-3 left-3 bg-slate-950/90 backdrop-blur-md border border-cyan-500/50 px-3 py-1.5 rounded-lg text-xs font-mono text-cyan-300 flex items-center gap-2 shadow-2xl pointer-events-none z-30">
-          <Crosshair className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-          <span>
-            X: <strong className="text-white">{mousePos.x}</strong> Y:{" "}
-            <strong className="text-white">{mousePos.y}</strong>
-          </span>
-          {isRecordMode && (
-            <span className="ml-2 px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/50 rounded text-[10px] font-bold animate-pulse">
-              RECORDING: Left-click = click • Right-click = right_click rect
-            </span>
-          )}
-        </div>
-      )}
-
       {/* Dynamic Recalibration Banner */}
       {recalibrationNotice && (
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-amber-950/95 border-2 border-amber-400 px-4 py-2 rounded-xl text-xs font-mono text-amber-200 shadow-2xl flex items-center gap-2.5 z-40 animate-bounce">
+        <div className="absolute bottom-16 left-1/2 transform -translate-x-1/2 bg-amber-950/95 border-2 border-amber-400 px-4 py-2 rounded-xl text-xs font-mono text-amber-200 shadow-2xl flex items-center gap-2.5 z-40 animate-bounce">
           <Zap className="w-4 h-4 text-amber-400 animate-pulse" />
           <span>
             <strong>
@@ -4436,40 +4832,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           </span>
         </div>
       )}
-
-      {/* Frame Status Badge */}
-      <div className="absolute bottom-3 right-3 flex items-center gap-2 z-30 pointer-events-none">
-        {verificationBadge && (
-          <div
-            className={`px-2.5 py-1 rounded text-xs font-mono flex items-center gap-1.5 backdrop-blur-md shadow-lg border ${
-              verificationBadge.status === "verified"
-                ? "bg-emerald-950/90 border-emerald-500 text-emerald-300"
-                : verificationBadge.status === "verifying"
-                  ? "bg-amber-950/90 border-amber-500 text-amber-300 animate-pulse"
-                  : "bg-red-950/90 border-red-500 text-red-300"
-            }`}
-          >
-            {verificationBadge.status === "verified" ? (
-              <ShieldCheck className="w-3.5 h-3.5" />
-            ) : (
-              <Sparkles className="w-3.5 h-3.5 animate-spin" />
-            )}
-            <span>
-              {verificationBadge.message ||
-                verificationBadge.status.toUpperCase()}
-            </span>
-          </div>
-        )}
-
-        <div className="bg-slate-950/80 backdrop-blur-md border border-slate-700 px-2.5 py-1 rounded text-xs font-mono text-slate-300 flex items-center gap-2">
-          <span
-            className={`w-2 h-2 rounded-full ${
-              isCapturing ? "bg-green-500 animate-ping" : "bg-slate-500"
-            }`}
-          />
-          <span>{isCapturing ? "LIVE 1920x1080" : "IDLE"}</span>
-        </div>
-      </div>
 
       {/* SVG Connecting Flow Lines for Click Sequence */}
       {sequence.length > 1 && (
@@ -4577,11 +4939,11 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       )}
 
       {/* AI #1 Qwen Vision Detected UI Element Bounding Boxes */}
-      {uiElements.map((el) => {
+      {uiElements.map((el, elIdx) => {
         const boxStyle = toBoxPercent(el.boundingBox);
         return (
           <div
-            key={el.id}
+            key={`hud_el_${el.id || "el"}_${elIdx}`}
             style={boxStyle}
             className="absolute border border-cyan-400/60 bg-cyan-500/5 hover:bg-cyan-500/20 hover:border-cyan-300 transition-all rounded pointer-events-none z-10 group"
           >
@@ -4640,14 +5002,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       )}
 
       {/* Click Sequence Step Nodes (Interactive & Draggable) */}
-      {sequence.map((step) => {
+      {sequence.map((step, idx) => {
         const pos = toPercent(step.x, step.y);
         const isActive = activeStepId === step.id;
         const isDragging = draggingStepId === step.id;
 
         return (
           <div
-            key={step.id}
+            key={`hud_step_${step.id || "step"}_${idx}`}
             style={{ left: pos.left, top: pos.top }}
             onMouseDown={(e) => {
               e.stopPropagation();
@@ -5220,6 +5582,245 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         }}
       />
 
+        {/* Floating Live Step Forwarding, Progression & Template Mutation HUD Bar */}
+        <div className="absolute bottom-3 inset-x-4 mx-auto max-w-2xl bg-slate-950/90 backdrop-blur-md border border-cyan-500/60 rounded-xl p-2 shadow-2xl z-30 flex items-center justify-between gap-2 text-xs font-mono">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-6 h-6 rounded-lg bg-cyan-600/30 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shrink-0 font-bold text-[11px]">
+              {sequence.length === 0 ? "0" : (sequence.findIndex((s) => s.id === activeStepId) >= 0 ? sequence.findIndex((s) => s.id === activeStepId) + 1 : 1)}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-cyan-300 font-bold truncate text-[11px]">
+                <span>
+                  {sequence.length === 0
+                    ? (isRecordMode ? "● Record Mode: Click screen to add actions" : "0 Steps • Click screen to record")
+                    : (activeStep?.name || `Step #${activeStep?.stepNumber || 1} (${activeStep?.action?.toUpperCase() || "CLICK"})`)}
+                </span>
+                {activeStep?.text && <span className="text-[10px] text-amber-300 font-normal">"{activeStep.text}"</span>}
+              </div>
+              <div className="text-[9px] text-slate-400 flex items-center gap-1.5">
+                <span>{activeStep ? `Target: (${activeStep.x}, ${activeStep.y})` : "Standby • Ready"}</span>
+                <span>•</span>
+                <span className={sequence.length > 0 ? "text-emerald-400 font-bold" : "text-slate-500"}>
+                  {sequence.length > 0 ? "Template Linked" : "Awaiting Actions"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0 flex-wrap">
+            <Button
+              size="sm"
+              onClick={handleStepBack}
+              disabled={sequence.length === 0}
+              variant="outline"
+              className="h-6 px-1.5 text-[10px] bg-slate-900 border-slate-700 hover:bg-slate-800 text-slate-300 gap-0.5 disabled:opacity-40"
+              title="Step Backward (Previous Action)"
+            >
+              <SkipBack className="w-3 h-3" />
+              Prev
+            </Button>
+
+            <Button
+              size="sm"
+              onClick={handleToggleAutoPlayWorkflow}
+              disabled={sequence.length === 0}
+              className={`h-6 px-2 text-[10px] font-bold border transition-all disabled:opacity-40 ${
+                isAutoPlayingWorkflow
+                  ? "bg-amber-600 hover:bg-amber-500 text-white border-amber-400 animate-pulse"
+                  : "bg-cyan-700 hover:bg-cyan-600 text-white border-cyan-500"
+              }`}
+              title="Auto-play sequence steps with template mutation. Auto-creates a new pack on start!"
+            >
+              {isAutoPlayingWorkflow ? <Pause className="w-2.5 h-2.5 mr-1" /> : <Play className="w-2.5 h-2.5 mr-1 fill-white" />}
+              {isAutoPlayingWorkflow ? "Pause" : "Play Flow"}
+            </Button>
+
+            {/* Scope Replay Selector: Replay recent steps instead of all steps */}
+            <div className="flex items-center rounded border border-slate-700 bg-slate-900/90 p-0.5 text-[9px]">
+              <button
+                type="button"
+                onClick={() => {
+                  setReplayScope("recent5");
+                  toast.info("🎯 Replay Scope: Recent 5 steps");
+                }}
+                className={`px-1.5 py-0.5 rounded transition-all font-bold ${
+                  replayScope === "recent5"
+                    ? "bg-cyan-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+                title="Replay only recent 5 steps"
+              >
+                Recent (5)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setReplayScope("recent3");
+                  toast.info("🎯 Replay Scope: Recent 3 steps");
+                }}
+                className={`px-1 py-0.5 rounded transition-all font-bold ${
+                  replayScope === "recent3"
+                    ? "bg-cyan-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+                title="Replay only recent 3 steps"
+              >
+                (3)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setReplayScope("pack");
+                  toast.info(`🎯 Replay Scope: Active Flow Pack`);
+                }}
+                className={`px-1.5 py-0.5 rounded transition-all font-bold ${
+                  replayScope === "pack"
+                    ? "bg-purple-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+                title="Replay active flow pack snapshot"
+              >
+                Pack ({flowReplayPacks.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setReplayScope("all");
+                  toast.info("🎯 Replay Scope: All steps");
+                }}
+                className={`px-1.5 py-0.5 rounded transition-all font-bold ${
+                  replayScope === "all"
+                    ? "bg-slate-700 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+                title="Replay all sequence steps"
+              >
+                All
+              </button>
+            </div>
+
+            <Button
+              size="sm"
+              onClick={handleStepForward}
+              disabled={sequence.length === 0}
+              className="h-6 px-2 text-[10px] font-bold bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white border border-emerald-400/50 shadow-md gap-0.5 disabled:opacity-40"
+              title="Forward to Next Step: Visibly executes action and mutates template!"
+            >
+              <SkipForward className="w-3 h-3" />
+              Step Forward
+            </Button>
+
+            {/* Qwen Error Check & Movement Orchestrator Button */}
+            <Button
+              size="sm"
+              onClick={handleQwenAutoFixAndOrchestrate}
+              disabled={isQwenOrchestrating || sequence.length === 0}
+              className={`h-6 px-2 text-[10px] font-bold border gap-0.5 transition-all ${
+                qwenDetectedErrors.length > 0
+                  ? "bg-amber-600 hover:bg-amber-500 text-white border-amber-400 animate-pulse"
+                  : "bg-indigo-700 hover:bg-indigo-600 text-white border-indigo-400/60"
+              }`}
+              title="Qwen AI: Checks sequence for errors, overlaps, and orchestrates smooth movements & delays"
+            >
+              <Sparkles className="w-2.5 h-2.5 text-yellow-300" />
+              {isQwenOrchestrating
+                ? "Orchestrating..."
+                : qwenDetectedErrors.length > 0
+                ? `⚡ Qwen Fix (${qwenDetectedErrors.length})`
+                : "⚡ Qwen Orchestrate"}
+            </Button>
+
+            {/* Emergency STOP Button */}
+            <Button
+              size="sm"
+              onClick={handleStopAllExecution}
+              className="h-6 px-2 text-[10px] font-bold bg-red-600 hover:bg-red-500 text-white border border-red-400 shadow-md gap-0.5"
+              title="Emergency Stop: Immediately halt all sequence replay, auto-play, subprocesses, and recording"
+            >
+              <Square className="w-2.5 h-2.5 fill-current" />
+              STOP
+            </Button>
+
+            {/* Record Toggle */}
+            <Button
+              size="sm"
+              onClick={() => {
+                if (onToggleRecordMode) onToggleRecordMode();
+                toast.info(!isRecordMode ? "● Record Mode Activated" : "Record Mode Deactivated");
+              }}
+              className={`h-6 px-2 text-[10px] font-bold border transition-all ${
+                isRecordMode
+                  ? "bg-amber-600 hover:bg-amber-500 text-white border-amber-300 ring-1 ring-amber-400 animate-pulse"
+                  : "bg-slate-900 hover:bg-slate-800 text-amber-300 border-amber-700/60"
+              }`}
+              title="Toggle Record Mode"
+            >
+              <Crosshair className="w-2.5 h-2.5 mr-0.5" />
+              {isRecordMode ? "Rec ON" : "Record"}
+            </Button>
+
+            {/* AI Review Steps */}
+            <Button
+              size="sm"
+              onClick={handleTriggerAiReviewSteps}
+              disabled={isAiReviewLoading}
+              className="h-6 px-2 text-[10px] font-bold bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-500 text-white border border-purple-400/50 gap-0.5 shadow-sm"
+              title="AI Review: Audits workflow steps and coordinates using Qwen / AI logic"
+            >
+              <Brain className="w-2.5 h-2.5 text-purple-200" />
+              AI Review
+            </Button>
+
+            {/* Manual Pack Creator */}
+            <Button
+              size="sm"
+              onClick={() => handleCreateFlowPack()}
+              disabled={sequence.length === 0}
+              variant="outline"
+              className="h-6 px-1.5 text-[9px] bg-slate-900 border-purple-800 hover:bg-purple-950 text-purple-300 gap-0.5"
+              title="Create a new pack snapshot from current flow steps"
+            >
+              <Layers className="w-2.5 h-2.5 text-purple-400" />
+              Pack Flow
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom Docked Status & Coordinate Bar */}
+      <div className="h-7 px-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-[11px] font-mono z-30 select-none">
+        <div className="flex items-center gap-2 text-slate-400">
+          <Crosshair className="w-3 h-3 text-cyan-400" />
+          <span>
+            X: <strong className="text-cyan-300">{mousePos ? mousePos.x : 960}</strong> Y:{" "}
+            <strong className="text-cyan-300">{mousePos ? mousePos.y : 540}</strong>
+          </span>
+          {isRecordMode && (
+            <span className="px-1.5 py-0.2 bg-amber-500/20 text-amber-300 border border-amber-500/50 rounded text-[9px] font-bold animate-pulse">
+              RECORDING ACTIVE
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {verificationBadge && (
+            <div className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border ${
+              verificationBadge.status === "verified"
+                ? "bg-emerald-950/90 border-emerald-500 text-emerald-300"
+                : "bg-amber-950/90 border-amber-500 text-amber-300"
+            }`}>
+              <ShieldCheck className="w-3 h-3" />
+              <span>{verificationBadge.message || "VERIFIED"}</span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1.5 text-slate-400 text-[10px]">
+            <span className={`w-1.5 h-1.5 rounded-full ${isCapturing ? "bg-green-500 animate-ping" : "bg-slate-500"}`} />
+            <span>{isCapturing ? "1920x1080 Native (60 FPS)" : "Standby"}</span>
+          </div>
+        </div>
+      </div>
+
       {/* Workflow History Scrubber, Live Execution Console, and Action Execution Log Drawer Area */}
       {(showWorkflowScrubber || showLiveExecutionConsole || isActionLogOpen) && (
         <div className="mt-2 space-y-2 z-30 relative">
@@ -5549,6 +6150,24 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             }));
             setLiveMouseTrail(formatted);
           }
+        }}
+      />
+
+      {/* AI Conscious Operator Workflow & Screen Auditor Modal */}
+      <AIWorkflowReviewModal
+        isOpen={isAiReviewModalOpen}
+        onClose={() => setIsAiReviewModalOpen(false)}
+        reviewResult={aiReviewResult}
+        isLoading={isAiReviewLoading}
+        currentSteps={sequence}
+        screenshotUrl={screenshotUrl || frozenSnapshotUrl || undefined}
+        onApplyOptimizations={(optimizedSteps) => {
+          onReorderSteps?.(optimizedSteps);
+          toast.success("Applied AI recommendations & updated sequence steps!");
+        }}
+        onExecuteWithAI={() => {
+          toast.info("Launching execution with AI Conscious Supervision...");
+          handleExecuteAllOnActualPC();
         }}
       />
 
@@ -6087,7 +6706,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                     const isChecked = selectedStepIds.has(step.id);
                     return (
                       <div
-                        key={step.id}
+                        key={`hud_drawer_step_${step.id || "step"}_${idx}`}
                         onClick={() => {
                           onSelectStep?.(step.id);
                           setForwardStepTriggerCount((prev) => prev + 1);

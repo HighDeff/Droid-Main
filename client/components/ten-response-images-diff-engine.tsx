@@ -382,7 +382,7 @@ export function TenResponseImagesDiffEngine({
 
               return (
                 <div
-                  key={step.id}
+                  key={`diff_step_${step.id || "step"}_${slotIdx}`}
                   onClick={() => {
                     setSelectedSlotIndex(slotIdx);
                     onSelectStep(step.id);

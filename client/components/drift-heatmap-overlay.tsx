@@ -114,7 +114,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
         </defs>
 
         {/* Render Heat Clusters */}
-        {driftPoints.map((point) => {
+        {driftPoints.map((point, pIdx) => {
           const radiusScale =
             point.status === "critical"
               ? Math.max(50, point.driftPx * 4)
@@ -130,7 +130,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
               : "url(#grad-drift-stable)";
 
           return (
-            <g key={point.id} className="transition-all duration-300">
+            <g key={`${point.id || "pt"}_${pIdx}`} className="transition-all duration-300">
               {/* Outer soft heat halo */}
               <circle
                 cx={point.x}
@@ -169,7 +169,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
 
       {/* Interactive Problematic Automation Selector Markers (Pointer-events auto) */}
       <div className="absolute inset-0 pointer-events-none">
-        {driftPoints.map((point) => {
+        {driftPoints.map((point, pIdx) => {
           const leftPercent = (point.x / nativeWidth) * 100;
           const topPercent = (point.y / nativeHeight) * 100;
 
@@ -178,7 +178,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
 
           return (
             <div
-              key={`marker_${point.id}`}
+              key={`marker_${point.id || "pt"}_${pIdx}`}
               style={{
                 left: `${leftPercent}%`,
                 top: `${topPercent}%`,

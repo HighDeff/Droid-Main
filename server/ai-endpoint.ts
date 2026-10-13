@@ -160,7 +160,7 @@ export async function sendQwenChatRequest(
 ): Promise<{ success: boolean; content: string; raw?: any; error?: string }> {
   const targetUrl = resolveAiEndpoint(options?.endpoint);
   const targetModel = resolveAiModel(options?.model);
-  const timeoutMs = options?.timeoutMs || 25000;
+  const timeoutMs = options?.timeoutMs || 3500;
 
   const payload: Record<string, any> = {
     model: targetModel,

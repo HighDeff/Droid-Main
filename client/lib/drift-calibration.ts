@@ -204,7 +204,7 @@ export function computePixelDriftHeatmap(
     const curY = (step.originalY ?? step.y) + (step.offsetY ?? 0);
 
     points.push({
-      id: `pt_step_${step.id || idx}`,
+      id: `pt_step_${step.id || "step"}_${idx}`,
       x: curX,
       y: curY,
       radius: isProblematic ? 48 : 32,
@@ -229,7 +229,7 @@ export function computePixelDriftHeatmap(
     );
     if (!hasClosePoint) {
       points.push({
-        id: `pt_el_${el.id || idx}`,
+        id: `pt_el_${el.id || "el"}_${idx}`,
         x: center.x,
         y: center.y,
         radius: 24,

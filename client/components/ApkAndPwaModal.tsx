@@ -81,7 +81,7 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
                   </Badge>
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-400">
-                  Solutions for browser restrictions, native WebAPK installation, and Android APK downloads.
+                  Browser installation and experimental WebView source. For full phone capture and control, use the paired ADB device panel.
                 </DialogDescription>
               </div>
             </div>
@@ -92,7 +92,7 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <span className="font-semibold text-amber-200">Why was screen share restricted? </span>
-              Standard mobile web browsers (Android Chrome / iOS Safari) restrict web tabs from capturing the whole OS screen for privacy. Choose a native APK or live streaming alternative below:
+              Standard mobile web browsers (Android Chrome / iOS Safari) restrict web tabs from capturing the whole OS screen for privacy. Installing the PWA does not remove this restriction. Use the native Android companion or paired ADB device panel for full phone capture.
             </div>
           </div>
 
@@ -206,7 +206,7 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
                     Download Standalone Android APK Source (.zip)
                   </h4>
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Full native Android Studio & Gradle project bundle including <code>MainActivity.java</code>, <code>AndroidManifest.xml</code>, and Foreground MediaProjection service.
+                    Native Android 11+ companion source with QR pairing, accessibility mirroring and control, and full display recording through a foreground MediaProjection service. Video stays on the phone and continues across apps. Build with Android Studio or Gradle 8.9.
                   </p>
                 </div>
               </div>
@@ -309,16 +309,16 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
                 Gradle / Android Studio Build
               </h4>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Extract the downloaded ZIP and compile with the Gradle wrapper:
+                Extract the downloaded ZIP and build in Android Studio or use the included Gradle 8.9 wrapper:
               </p>
               <div className="relative group">
                 <pre className="p-3 rounded-lg bg-slate-900 border border-slate-800 text-indigo-300 font-mono text-xs overflow-x-auto">
-                  {`unzip sightline-mobile-apk-project.zip\ncd sightline-mobile-apk-project\n./gradlew assembleDebug\nadb install -r app/build/outputs/apk/debug/app-debug.apk`}
+                  {`unzip sightline-mobile-apk-project.zip -d sightline-mobile-apk-project\ncd sightline-mobile-apk-project\n./gradlew assembleDebug\nadb install -r app/build/outputs/apk/debug/app-debug.apk`}
                 </pre>
                 <button
                   onClick={() =>
                     copyToClipboard(
-                      `unzip sightline-mobile-apk-project.zip\ncd sightline-mobile-apk-project\n./gradlew assembleDebug\nadb install -r app/build/outputs/apk/debug/app-debug.apk`,
+                      `unzip sightline-mobile-apk-project.zip -d sightline-mobile-apk-project\ncd sightline-mobile-apk-project\n./gradlew assembleDebug\nadb install -r app/build/outputs/apk/debug/app-debug.apk`,
                       "gradle"
                     )
                   }
@@ -353,7 +353,7 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
                   <li>Open Chrome on your phone and browse to this page.</li>
                   <li>Tap the <strong>three dots (⋮)</strong> menu in the upper right.</li>
                   <li>Tap <strong>"Install app"</strong> or <strong>"Add to Home screen"</strong>.</li>
-                  <li>Confirm installation. The app will launch as a standalone Android app with native performance!</li>
+                  <li>Confirm installation. The web app opens in a standalone window with the same browser permissions.</li>
                 </ol>
               </div>
 
@@ -377,7 +377,7 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
         <div className="p-4 bg-slate-900 border-t border-slate-800/80 flex items-center justify-between">
           <div className="flex items-center gap-2 text-[11px] text-slate-400">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            Zero external cloud dependencies • Local LAN & P2P sync
+            Pair with your Sightline server • Native recording saved on phone
           </div>
           <Button
             variant="ghost"

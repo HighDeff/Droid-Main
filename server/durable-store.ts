@@ -14,7 +14,7 @@ export class DurableStore {
 
   constructor(options: StorageOptions = {}) {
     this.inMemory = options.inMemory ?? (options.mode === "memory");
-    this.storageDir = options.storageDir ?? path.join(process.cwd(), ".data");
+    this.storageDir = options.storageDir ?? process.env.ASSISTANT_STORAGE_PATH ?? path.join(process.cwd(), ".data");
     if (!this.inMemory && !fs.existsSync(this.storageDir)) {
       try {
         fs.mkdirSync(this.storageDir, { recursive: true });

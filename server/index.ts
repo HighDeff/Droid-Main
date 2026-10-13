@@ -35,6 +35,7 @@ import { assistantReportsRouter } from "./routes/assistant-reports";
 import { verificationReportsRouter } from "./routes/verification-reports";
 import { schedulingRouter } from "./routes/scheduling";
 import { methodLearningRouter } from "./routes/method-learning";
+import { createPhoneRouter } from "./routes/phone";
 import { mobileStreamRouter, getLatestMobileFrameSnapshot } from "./routes/mobile-stream";
 import { workflowRuntime } from "./workflow-runtime";
 import { redactSensitive } from "./security";
@@ -1049,6 +1050,7 @@ except Exception as e:
     res.json({ success: true });
   });
 
+  app.use("/api/phone", createPhoneRouter());
   app.use(mobileStreamRouter);
 
   workflowRuntime.start();

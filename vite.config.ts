@@ -76,6 +76,7 @@ export default defineConfig(() => {
         },
       },
     ],
+    build: { outDir: "dist/spa" },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './client'),

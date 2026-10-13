@@ -18,6 +18,7 @@ const Accomplishments = lazy(() => import("./pages/Accomplishments"));
 const Recordings = lazy(() => import("./pages/Recordings"));
 const Workflows = lazy(() => import("./pages/Workflows"));
 const DriveWorkspace = lazy(() => import("../src/App"));
+import PhoneDevicePanel from "./components/phone-device-panel";
 const MobileRemote = lazy(() => import("./pages/MobileRemote"));
 
 const queryClient = new QueryClient();
@@ -34,6 +35,7 @@ const App = () => (
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/screen" element={<Dashboard initialTab="screen" />} />
                 <Route
                   path="/dual-ai"
                   element={<Dashboard initialTab="dual-ai" />}
@@ -49,6 +51,7 @@ const App = () => (
                 <Route path="/recordings" element={<Recordings />} />
                 <Route path="/workflows" element={<Workflows />} />
                 <Route path="/drive" element={<DriveWorkspace />} />
+                <Route path="/phone-control" element={<PhoneDevicePanel pairedOnly />} />
                 <Route path="/mobile-remote" element={<MobileRemote />} />
                 <Route path="/mobile-link" element={<MobileRemote />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

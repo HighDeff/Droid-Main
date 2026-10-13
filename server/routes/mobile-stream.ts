@@ -1,3 +1,4 @@
+import { runAdb } from "../phone-bridge";
 import { Router } from "express";
 import net from "net";
 import { spawn } from "child_process";
@@ -1920,67 +1921,17 @@ mobileStreamRouter.post("/api/adb/ping-test", async (req, res) => {
 // ADB DIRECT HARDWARE COMMAND EXECUTION ENGINE
 // ----------------------------------------------------
 
-export function executeAdbCommand(
+export async function executeAdbCommand(
   args: string[],
   timeoutMs = 4000
 ): Promise<{ success: boolean; output: string; simulated?: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const safeResolve = (val: { success: boolean; output: string; simulated?: boolean; error?: string }) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(val);
-    };
-
-    try {
-      const adb = spawn("adb", args, {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      adb.stdout.on("data", (d) => (stdout += d.toString()));
-      adb.stderr.on("data", (d) => (stderr += d.toString()));
-
-      const timer = setTimeout(() => {
-        try {
-          adb.kill();
-        } catch {}
-        safeResolve({
-          success: true,
-          simulated: true,
-          output: stdout || `Executed adb ${args.join(" ")} (simulated timeout guard)`,
-        });
-      }, timeoutMs);
-
-      adb.on("error", (err: any) => {
-        clearTimeout(timer);
-        // If adb binary is not installed on container, return designed simulated fallback
-        safeResolve({
-          success: true,
-          simulated: true,
-          output: `Simulated ADB command: adb ${args.join(" ")} (${err.message})`,
-        });
-      });
-
-      adb.on("close", (code) => {
-        clearTimeout(timer);
-        safeResolve({
-          success: code === 0 || !stderr.includes("error"),
-          output: stdout || stderr || `adb ${args.join(" ")} completed (exit ${code})`,
-          simulated: code !== 0 && stderr.includes("not found"),
-          error: code !== 0 ? stderr : undefined,
-        });
-      });
-    } catch (e: any) {
-      safeResolve({
-        success: true,
-        simulated: true,
-        output: `Simulated ADB fallback: adb ${args.join(" ")} (${e.message})`,
-      });
-    }
-  });
+  try {
+    const output = (await runAdb(args, timeoutMs)).toString();
+    return { success: true, output, simulated: false };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, output: message, error: message, simulated: false };
+  }
 }
 
 // POST Connect Wireless ADB
@@ -3497,7 +3448,7 @@ setInterval(() => {
   } catch (e) {
     console.error("10s Workflow Completion Check error:", e);
   }
-}, 10000);
+}, 10000).unref();
 
 // GET Scheduled Workflows for Connected Device
 mobileStreamRouter.get("/api/mobile-stream/scheduled-workflows", (_req, res) => {
@@ -3913,12 +3864,12 @@ mobileStreamRouter.get("/api/mobile/apk-info", (req, res) => {
         {
           id: "webapk",
           title: "Install WebAPK / PWA (Instant 0-Step)",
-          description: "Install directly from your mobile browser (Tap 'Add to Home screen' or 'Install App'). Runs in standalone window without browser restrictions.",
+          description: "Install directly from your mobile browser (Tap 'Add to Home screen' or 'Install App'). Runs in a standalone window with browser capture restrictions still in effect.",
         },
         {
           id: "camera_hud",
           title: "High-Res Live Camera Mode",
-          description: "Point your phone camera (rear/document) at any screen or workspace. Stream at up to 60 FPS with zero permission blockers.",
+          description: "Point your phone camera (rear/document) at any screen or workspace. Camera permission and browser support are required.",
         },
         {
           id: "photo_sync",
@@ -3928,7 +3879,7 @@ mobileStreamRouter.get("/api/mobile/apk-info", (req, res) => {
         {
           id: "native_apk",
           title: "Download Android APK Source & Build Package",
-          description: "Download the complete Android Studio / Gradle project with MediaProjection foreground service and WebView hardware acceleration.",
+          description: "Experimental WebView wrapper source. The capture service is a placeholder; use the paired ADB device panel for full-phone recording.",
         },
       ],
     },
@@ -3936,416 +3887,14 @@ mobileStreamRouter.get("/api/mobile/apk-info", (req, res) => {
 });
 
 // GET Download Complete Standalone Android APK Project Bundle (.zip)
-mobileStreamRouter.get("/api/mobile/download-apk-bundle", async (req, res) => {
+mobileStreamRouter.get("/api/mobile/download-apk-bundle", async (_req, res) => {
   try {
-    const JSZip = (await import("jszip")).default;
-    const zip = new JSZip();
-
-    const host = req.get("host") || "localhost:3000";
-    const protocol = req.protocol || "https";
-    const targetUrl = `${protocol}://${host}/mobile-remote`;
-
-    // 1. AndroidManifest.xml
-    const manifestXml = `<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.drive.workspace.remote"
-    android:versionCode="24"
-    android:versionName="2.4.0">
-
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-    <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
-
-    <application
-        android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.SightlineRemote"
-        android:usesCleartextTraffic="true"
-        android:hardwareAccelerated="true">
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
-            android:launchMode="singleTask"
-            android:theme="@style/Theme.SightlineRemote.NoActionBar"
-            android:windowSoftInputMode="adjustResize">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-        <service
-            android:name=".ScreenCaptureService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
-
-    </application>
-</manifest>`;
-
-    // 2. MainActivity.java
-    const mainActivityJava = `package com.drive.workspace.remote;
-
-import android.annotation.SuppressLint;
-import android.app.Activity;
-import android.content.Intent;
-import android.media.projection.MediaProjectionManager;
-import android.net.Uri;
-import android.os.Build;
-import android.os.Bundle;
-import android.view.View;
-import android.view.WindowManager;
-import android.webkit.ConsoleMessage;
-import android.webkit.PermissionRequest;
-import android.webkit.ValueCallback;
-import android.webkit.WebChromeClient;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
-import android.widget.Toast;
-import androidx.appcompat.app.AppCompatActivity;
-
-public class MainActivity extends AppCompatActivity {
-
-    private WebView webView;
-    private ValueCallback<Uri[]> filePathCallback;
-    private static final int FILE_CHOOSER_REQUEST_CODE = 1001;
-    private static final int SCREEN_CAPTURE_REQUEST_CODE = 1002;
-    private PermissionRequest currentPermissionRequest;
-
-    public static final String TARGET_URL = "${targetUrl}";
-
-    @Override
-    @SuppressLint("SetJavaScriptEnabled")
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        
-        // Keep screen awake for real-time mobile automation
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-
-        webView = new WebView(this);
-        setContentView(webView);
-
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setDatabaseEnabled(true);
-        settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setAllowFileAccess(true);
-        settings.setAllowContentAccess(true);
-        settings.setUseWideViewPort(true);
-        settings.setLoadWithOverviewMode(true);
-        settings.setSupportZoom(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("intent:")) {
-                    try {
-                        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                        startActivity(intent);
-                        return true;
-                    } catch (Exception ignored) {}
-                }
-                view.loadUrl(url);
-                return true;
-            }
-        });
-
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onPermissionRequest(final PermissionRequest request) {
-                MainActivity.this.runOnUiThread(() -> {
-                    // Auto-grant Camera, Mic, and Screen Recording permissions to the internal WebView
-                    request.grant(request.getResources());
-                });
-            }
-
-            @Override
-            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
-                if (MainActivity.this.filePathCallback != null) {
-                    MainActivity.this.filePathCallback.onReceiveValue(null);
-                }
-                MainActivity.this.filePathCallback = filePathCallback;
-
-                Intent intent = fileChooserParams.createIntent();
-                try {
-                    startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
-                } catch (Exception e) {
-                    MainActivity.this.filePathCallback = null;
-                    return false;
-                }
-                return true;
-            }
-
-            @Override
-            public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
-                return super.onConsoleMessage(consoleMessage);
-            }
-        });
-
-        webView.loadUrl(TARGET_URL);
-        Toast.makeText(this, "Sightline Mobile Automation Connected", Toast.LENGTH_SHORT).show();
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
-            if (filePathCallback != null) {
-                Uri[] results = null;
-                if (resultCode == Activity.RESULT_OK && data != null) {
-                    String dataString = data.getDataString();
-                    if (dataString != null) {
-                        results = new Uri[]{Uri.parse(dataString)};
-                    }
-                }
-                filePathCallback.onReceiveValue(results);
-                filePathCallback = null;
-            }
-        }
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
-        }
-    }
-}`;
-
-    // 3. ScreenCaptureService.java
-    const screenCaptureServiceJava = `package com.drive.workspace.remote;
-
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.Service;
-import android.content.Intent;
-import android.os.Build;
-import android.os.IBinder;
-import androidx.core.app.NotificationCompat;
-
-public class ScreenCaptureService extends Service {
-    private static final String CHANNEL_ID = "SightlineScreenCaptureChannel";
-
-    @Override
-    public void onCreate() {
-        super.onCreate();
-        createNotificationChannel();
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Sightline Mobile HUD Active")
-                .setContentText("Autonomous Screen & Vision Bridge Running")
-                .setSmallIcon(android.R.drawable.ic_menu_camera)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .build();
-        startForeground(101, notification);
-    }
-
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel serviceChannel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "Sightline Capture Service Channel",
-                    NotificationManager.IMPORTANCE_DEFAULT
-            );
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.createNotificationChannel(serviceChannel);
-            }
-        }
-    }
-
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
-}`;
-
-    // 4. strings.xml
-    const stringsXml = `<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Sightline Remote</string>
-</resources>`;
-
-    // 5. styles.xml
-    const stylesXml = `<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="Theme.SightlineRemote" parent="Theme.AppCompat.DayNight.DarkActionBar">
-        <item name="colorPrimary">#0284c7</item>
-        <item name="colorPrimaryDark">#030712</item>
-        <item name="colorAccent">#38bdf8</item>
-    </style>
-    <style name="Theme.SightlineRemote.NoActionBar" parent="Theme.SightlineRemote">
-        <item name="windowActionBar">false</item>
-        <item name="windowNoTitle">true</item>
-    </style>
-</resources>`;
-
-    // 6. Root build.gradle
-    const rootBuildGradle = `buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath "com.android.tools.build:gradle:8.2.2"
-    }
-}
-
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-
-task clean(type: Delete) {
-    delete rootProject.buildDir
-}`;
-
-    // 7. App build.gradle
-    const appBuildGradle = `apply plugin: 'com.android.application'
-
-android {
-    namespace 'com.drive.workspace.remote'
-    compileSdk 34
-
-    defaultConfig {
-        applicationId "com.drive.workspace.remote"
-        minSdk 24
-        targetSdk 34
-        versionCode 24
-        versionName "2.4.0"
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-    }
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
-}
-
-dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.11.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-}`;
-
-    // 8. settings.gradle
-    const settingsGradle = `include ':app'
-rootProject.name = "SightlineRemote"`;
-
-    // 9. capacitor.config.json
-    const capacitorConfig = `{
-  "appId": "com.drive.workspace.remote",
-  "appName": "Sightline Remote",
-  "webDir": "dist/spa",
-  "server": {
-    "url": "${targetUrl}",
-    "cleartext": true
-  },
-  "android": {
-    "allowMixedContent": true,
-    "captureInput": true
-  }
-}`;
-
-    // 10. Comprehensive README & Build Instructions
-    const readmeMd = `# 📱 Sightline Mobile Automation — Android APK & WebAPK Package
-
-This package allows you to run **Sightline Mobile Automation & Remote Vision HUD** as a native Android application with full OS permissions, bypassing web browser screen share restrictions!
-
----
-
-## 🚀 3 Easy Ways to Install / Build:
-
-### Method 1: Instant WebAPK / PWA (Recommended — 0 Second Setup)
-1. Open Chrome on your Android Phone.
-2. Navigate to: \`${targetUrl}\`
-3. Tap the **3 dots menu (⋮)** in Chrome -> Tap **"Install App"** (or **"Add to Home screen"**).
-4. Chrome creates a verified **WebAPK** package directly on your phone with native performance and standalone window execution!
-
----
-
-### Method 2: 1-Command APK Build via Bubblewrap / PWA2APK
-If you have Node.js installed:
-\`\`\`bash
-npx @bubblewrap/cli init --manifest="${protocol}://${host}/manifest.webmanifest"
-npx @bubblewrap/cli build
-\`\`\`
-This outputs a signed \`app-release-signed.apk\` directly in seconds!
-
----
-
-### Method 3: Compile with Android Studio or Gradle
-1. Open this unzipped folder in **Android Studio**.
-2. Connect your Android device with USB debugging enabled.
-3. Click **Run ▶** or in terminal run:
-   \`\`\`bash
-   ./gradlew assembleDebug
-   \`\`\`
-4. The generated APK will be at: \`app/build/outputs/apk/debug/app-debug.apk\`.
-5. Install to device via ADB:
-   \`\`\`bash
-   adb install -r app/build/outputs/apk/debug/app-debug.apk
-   \`\`\`
-
----
-
-## ✨ Native APK Advantages:
-- **Full OS Hardware Acceleration**: 60 FPS visual streaming and differential snapshot recording.
-- **Auto-Granted Permissions**: Automatically grants Camera and Media Stream permissions.
-- **Always-Awake Mode**: Prevents mobile device screen from dimming during long automated task replays.
-- **Direct PC Vision HUD Sync**: Bidirectional touch execution, gesture dispatch, and differential recording.
-`;
-
-    // Add all files to the ZIP archive
-    zip.file("README.md", readmeMd);
-    zip.file("build.gradle", rootBuildGradle);
-    zip.file("settings.gradle", settingsGradle);
-    zip.file("capacitor.config.json", capacitorConfig);
-    zip.file("app/build.gradle", appBuildGradle);
-    zip.file("app/src/main/AndroidManifest.xml", manifestXml);
-    zip.file("app/src/main/java/com/drive/workspace/remote/MainActivity.java", mainActivityJava);
-    zip.file("app/src/main/java/com/drive/workspace/remote/ScreenCaptureService.java", screenCaptureServiceJava);
-    zip.file("app/src/main/res/values/strings.xml", stringsXml);
-    zip.file("app/src/main/res/values/styles.xml", stylesXml);
-
-    const zipBuffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
-
+    const { createAndroidBundle } = await import("../android-bundle");
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", 'attachment; filename="sightline-mobile-apk-project.zip"');
-    res.send(zipBuffer);
-  } catch (err) {
-    console.error("Failed to generate APK bundle:", err);
-    res.status(500).json({ success: false, error: "Failed to generate APK project bundle" });
+    res.send(await createAndroidBundle());
+  } catch (error) {
+    console.error("Failed to package Android companion:", error);
+    res.status(500).json({ error: "Android sources are missing. Deploy the android directory alongside the server." });
   }
 });
-
-

@@ -33,9 +33,8 @@ const defaultExecutor: SafeActionExecutor = async (action) => {
   }
   return {
     actionType: action.type,
-    success: true,
-    message: `${action.type} accepted by the safe execution adapter`,
-    data: action.type === "screenshot" ? { captured: false } : undefined,
+    success: action.type === "wait",
+    message: action.type === "wait" ? "Wait completed" : "No device adapter is configured for this assistant plan. Use Screen Hub replay.",
   };
 };
 

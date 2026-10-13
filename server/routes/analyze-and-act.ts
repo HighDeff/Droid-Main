@@ -5,15 +5,7 @@
  */
 
 import { RequestHandler } from "express";
-import { GoogleGenAI } from "@google/genai";
-
-let genAIClient: GoogleGenAI | null = null;
-function getGenAI(): GoogleGenAI | null {
-  if (!genAIClient && process.env.GEMINI_API_KEY) {
-    genAIClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  }
-  return genAIClient;
-}
+import { getGenAIClient, setGeminiCooldown } from "../ai-gemini-service";
 
 export interface AnalyzeAndActResponse {
   success: boolean;
@@ -77,7 +69,7 @@ export const handleAnalyzeAndAct: RequestHandler = async (req, res) => {
     const activeImage = liveScreenUrl || screenStreamUrl;
 
     // Check if real Gemini is available
-    const ai = getGenAI();
+    const ai = getGenAIClient();
     let geminiSummary = "";
 
     if (ai && activeImage && activeImage.startsWith("data:image/")) {
@@ -108,8 +100,9 @@ Give a 2-sentence visual summary of the active viewport, any visible drift or in
           ],
         });
         geminiSummary = response.text || "";
-      } catch (geminiErr) {
-        console.warn("Gemini vision analysis fallback triggered:", geminiErr);
+      } catch (geminiErr: any) {
+        setGeminiCooldown(20);
+        console.warn("[Analyze & Act] Gemini vision analysis fallback triggered:", geminiErr?.message || geminiErr);
       }
     }
 

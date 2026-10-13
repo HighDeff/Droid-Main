@@ -97,7 +97,7 @@ export const ReplayOverlayLayer: React.FC<ReplayOverlayLayerProps> = ({
 
         return (
           <div
-            key={step.id || `replay_step_${idx}`}
+            key={`replay_step_${step.id || "step"}_${idx}`}
             style={{
               left: `${leftPercent}%`,
               top: `${topPercent}%`,

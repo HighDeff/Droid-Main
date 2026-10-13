@@ -175,13 +175,13 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
       this.lastDescription = report.screenDescription;
       return report;
     } catch (err) {
-      console.warn(
-        "Qwen Vision perception failed, providing structured fallback:",
-        err,
-      );
-      return this.generateFallbackReport(
-        err instanceof Error ? err.message : String(err),
-      );
+      try {
+        return await this.analyzeWithLocalProvider(imageData, browserContext);
+      } catch {
+        return this.generateFallbackReport(
+          err instanceof Error ? err.message : String(err),
+        );
+      }
     }
   }
 

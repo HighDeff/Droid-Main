@@ -212,18 +212,8 @@ export const handleAutoActorTrigger: RequestHandler = async (req, res) => {
       `Auto-Actor triggered via mode transition: "${modeTransition}". Auto-Act enabled: ${autoActEnabled}`
     );
 
-    let matchResult: ScreenMatchResult = {
-      matched: true,
-      similarityScore: 0.9,
-      reason: "Visual state verified.",
-      identifiedElements: ["Screen Interface"],
-      suggestedNextStep: step || {
-        action: "click",
-        x: 960,
-        y: 540,
-        name: "Auto-Act Next Step",
-      },
-    };
+    if (!currentScreen || !expectedScreen) return res.status(400).json({ success: false, error: "Both actual and reference screenshots are required" });
+    let matchResult: ScreenMatchResult;
 
     if (currentScreen && expectedScreen) {
       matchResult = await compareScreensForMatch({
@@ -234,32 +224,14 @@ export const handleAutoActorTrigger: RequestHandler = async (req, res) => {
       });
     }
 
-    let executionResult: any = null;
-    if (autoActEnabled && matchResult.matched) {
-      const targetStep = step || matchResult.suggestedNextStep;
-      centralLogHub.addLog(
-        "AI-AutoActor",
-        "SUCCESS",
-        `Screen matched (${((matchResult.similarityScore || 0) * 100).toFixed(1)}%) -> Auto-executing step: "${targetStep.name || targetStep.action}"`
-      );
-
-      executionResult = await dispatchActionToPython({
-        title: `Auto-Act: ${targetStep.name || targetStep.action}`,
-        action: targetStep.action || "click",
-        x: targetStep.x || 960,
-        y: targetStep.y || 540,
-        textPayload: targetStep.text,
-        keyPayload: targetStep.keyPayload,
-        delayMs: targetStep.delayMs || 400,
-      });
-    }
-
+    // Comparison is advisory. The UI's explicit execution callback uses verified replay.
+    const executionResult = null;
     res.json({
       success: true,
       matched: matchResult.matched,
       similarityScore: matchResult.similarityScore,
       reason: matchResult.reason,
-      autoActExecuted: Boolean(autoActEnabled && matchResult.matched && executionResult),
+      autoActExecuted: false,
       executionResult,
     });
   } catch (err) {

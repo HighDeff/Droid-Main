@@ -246,7 +246,7 @@ export const BridgeHealthMonitorFooter: React.FC<{ className?: string }> = ({ cl
               Coordinate Sync & Latency
             </div>
             <div className="text-slate-200 font-semibold flex items-center justify-between">
-              <span>Bridge &lt;&gt; Canvas Lag:</span>
+              <span>Bridge ↔ Canvas Lag:</span>
               <span className="text-cyan-300 font-bold">{health.coordSync?.latencyMs ?? 8}ms</span>
             </div>
             <div className="text-slate-400 flex items-center justify-between text-[11px]">

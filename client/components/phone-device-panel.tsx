@@ -1,10 +1,13 @@
+import { ReplayMonitor } from "./replay-monitor";
+import type { ReplayStep, ReplayRun } from "@shared/replay";
 import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import type { PhoneAction, PhoneFrame, PhoneRecording } from "@shared/phone";
 
 const button = "rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm disabled:opacity-40";
 const input = "rounded border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-white min-w-0";
-export default function PhoneDevicePanel({ pairedOnly = false }: { pairedOnly?: boolean }) {
+export default function PhoneDevicePanel({ pairedOnly = false, replaySteps = [] }: { pairedOnly?: boolean; replaySteps?: ReplayStep[] }) {
+  const [replayRun, setReplayRun] = useState<ReplayRun | null>(null);
   const [token, setToken] = useState(() => {
     if (!pairedOnly) return sessionStorage.getItem("phone-admin-session") || "";
     const fragment = new URLSearchParams(location.hash.slice(1));
@@ -64,6 +67,18 @@ export default function PhoneDevicePanel({ pairedOnly = false }: { pairedOnly?: 
     if (!response.ok) throw new Error(data.error || `Phone request failed (${response.status})`);
     return data;
   }
+  useEffect(() => {
+    if (!token || !replayRun || !["running", "paused"].includes(replayRun.status)) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try { const data = await api(`/replay/${replayRun.id}`); if (!disposed) setReplayRun(data.run); }
+      catch (err) { if (!disposed) setError(err instanceof Error ? err.message : "Replay monitor disconnected"); }
+      if (!disposed) timer = setTimeout(poll, 1000);
+    };
+    timer = setTimeout(poll, 500);
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [token, replayRun?.id, replayRun?.status]);
   async function perform(work: () => Promise<void>) {
     if (pending.current) return;
     pending.current = true; setBusy(true); setError(""); setNotice("");
@@ -83,6 +98,7 @@ export default function PhoneDevicePanel({ pairedOnly = false }: { pairedOnly?: 
       if (!pending.current && !document.hidden) {
         try {
           const state = await api("/session");
+          if (!disposed && state.replay) setReplayRun(state.replay);
           if (disposed) return;
           setDevice(state.device); setRecords(state.recordings); setNativeStatus(state.native || null);
           if (mirror && !plan && !gesture.current && (!state.native || state.native.online)) {
@@ -162,6 +178,17 @@ export default function PhoneDevicePanel({ pairedOnly = false }: { pairedOnly?: 
     {error && <p role="alert" className="text-red-300 whitespace-pre-wrap">{error}</p>}
     {notice && <p role="status" className="text-emerald-300">{notice}</p>}
     {token && <>
+      {!pairedOnly && <div className="space-y-3">
+        <p className="text-xs text-slate-400">Replay the Screen Hub's recorded steps on this paired phone. Coordinates must refer to phone screenshots.</p>
+        <button className={button} disabled={busy || !replaySteps.length || replayRun?.status === "running" || replayRun?.status === "paused"} onClick={() => void perform(async () => {
+          const data = await api("/replay", { steps: replaySteps.map(step => ({ ...step, referenceScreenshotUrl: step.referenceScreenshotUrl || undefined })), iterations: 1, confirmation: true });
+          setReplayRun(data.run);
+        })}>Replay {replaySteps.length} Screen Hub steps on this phone</button>
+        <ReplayMonitor run={replayRun} base="/api/phone/replay" token={token} onControl={command => void perform(async () => {
+          const data = await api(`/replay/${replayRun!.id}/${command}`, {}); setReplayRun(data.run);
+        })} />
+      </div>}
+
       {nativeStatus && <p className="text-sm">{nativeStatus.name}: {nativeStatus.online ? "online" : "waiting for phone"} · Control {nativeStatus.controlEnabled ? "enabled" : "requires accessibility"}. Native recordings are saved on the phone and can be shared from its Saved recordings screen.</p>}
       <div className="flex flex-wrap gap-2 items-center"><span className="text-sm">Phone: {device || "Connecting…"}</span><label className="text-sm"><input type="checkbox" checked={mirror} onChange={e => setMirror(e.target.checked)} /> Live mirror</label><label className="text-sm"><input type="checkbox" checked={touchEnabled} onChange={e => setTouchEnabled(e.target.checked)} /> Tap / swipe to control</label><button className={button} disabled={busy} onClick={() => void perform(refresh)}>Refresh screen</button><button className={button} disabled={busy} onClick={() => void perform(async () => { await api("/session", undefined, false, "DELETE"); setToken(""); setLink(""); setFrame(null); setPlan(null); setNativeStatus(null); sessionStorage.removeItem(pairedOnly ? "phone-session" : "phone-admin-session"); })}>Disconnect & revoke QR</button></div>
       {frame && <img alt="Live Android device screen" src={frame.image} className="max-h-[65vh] max-w-full w-auto mx-auto border border-slate-700" style={{ touchAction: touchEnabled ? "none" : "auto" }} draggable={false}

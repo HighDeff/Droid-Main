@@ -243,11 +243,11 @@ export const WorkflowScheduler: React.FC<WorkflowSchedulerProps> = ({
               WORKFLOW AUTOMATION SCHEDULER
             </h2>
             <Badge className="bg-cyan-950 text-cyan-300 border-cyan-700 text-xs">
-              CRON &amp; RECURRING TRIGGERS
+              CRON & RECURRING TRIGGERS
             </Badge>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Set delayed timers or recurring cron triggers for recorded automation routines via PyAutoGUI &amp; ADB
+            Set delayed timers or recurring cron triggers for recorded automation routines via PyAutoGUI & ADB
           </p>
         </div>
 
@@ -444,7 +444,7 @@ export const WorkflowScheduler: React.FC<WorkflowSchedulerProps> = ({
                   className="h-8 text-xs bg-cyan-600 hover:bg-cyan-500 text-white font-bold"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                  Save &amp; Activate Schedule
+                  Save & Activate Schedule
                 </Button>
               </div>
             </div>
@@ -590,7 +590,7 @@ export const WorkflowScheduler: React.FC<WorkflowSchedulerProps> = ({
                 {jobs.length === 0 && (
                   <tr>
                     <td colSpan={7} className="p-6 text-center text-slate-500">
-                      No scheduled automation workflows found. Click &quot;New Scheduled Trigger&quot; to create one.
+                      No scheduled automation workflows found. Click "New Scheduled Trigger" to create one.
                     </td>
                   </tr>
                 )}

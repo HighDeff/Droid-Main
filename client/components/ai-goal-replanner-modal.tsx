@@ -146,7 +146,7 @@ export const AIGoalReplannerModal: React.FC<AIGoalReplannerModalProps> = ({
                   AI GOAL RE-PLANNER AGENT
                 </h2>
                 <Badge className="bg-red-950 text-red-300 border-red-700 text-[10px]">
-                  DRIFT: {currentDriftPx.toFixed(1)}px &gt; {driftThresholdPx}px
+                  DRIFT: {currentDriftPx.toFixed(1)}px {">"} {driftThresholdPx}px
                 </Badge>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">

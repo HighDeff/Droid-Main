@@ -1,19 +1,19 @@
+import { createReplayAdapter } from "../replay-adapter";
 import { Request, Response } from "express";
-import { spawn } from "child_process";
-import path from "path";
 import type { FrameMetadata } from "@shared/coordinates";
 
 // In-memory cache of the latest real desktop screen frame synced from the user's browser or upload
 let latestSyncedRealFrame: {
   imageData: string;
   metadata?: FrameMetadata;
+  receivedAt: number;
 } | null = null;
 
 export const setLatestSyncedRealFrame = (
   imageData: string,
   metadata?: FrameMetadata,
 ) => {
-  latestSyncedRealFrame = { imageData, metadata };
+  latestSyncedRealFrame = { imageData, metadata, receivedAt: Date.now() };
 };
 
 export const getLatestSyncedRealFrame = () => latestSyncedRealFrame;
@@ -25,77 +25,13 @@ export const captureDesktopFrame = async (): Promise<{
   metadata?: FrameMetadata;
   error?: string;
 }> => {
-  if (latestSyncedRealFrame) {
-    return {
-      success: true,
-      imageData: latestSyncedRealFrame.imageData,
-      method: "real_desktop_stream",
-      metadata: latestSyncedRealFrame.metadata,
-    };
+  if (latestSyncedRealFrame && Date.now() - latestSyncedRealFrame.receivedAt <= 5000) {
+    return { success: true, imageData: latestSyncedRealFrame.imageData, method: "real_desktop_stream", metadata: latestSyncedRealFrame.metadata };
   }
-
-  const pythonScript = path.join(__dirname, "../../python-service/capture.py");
-  const pythonCmd =
-    process.env.PYTHON_CMD ||
-    (process.platform === "win32" ? "python" : "python3");
-
-  return new Promise((resolve) => {
-    const python = spawn(pythonCmd, [pythonScript], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdoutData = "";
-    let stderrData = "";
-    let settled = false;
-    const finish = (result: {
-      success: boolean;
-      imageData?: string;
-      method?: string;
-      error?: string;
-    }) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-
-    python.stdout.on("data", (data) => {
-      stdoutData += data.toString();
-    });
-    python.stderr.on("data", (data) => {
-      stderrData += data.toString();
-    });
-    python.on("error", (error) =>
-      finish({
-        success: false,
-        error: `Failed to spawn python (${pythonCmd}): ${error.message}`,
-      }),
-    );
-    python.on("close", (code) => {
-      if (settled) return;
-      if (code === 0 && stdoutData) {
-        try {
-          finish(JSON.parse(stdoutData.trim()));
-          return;
-        } catch {
-          finish({
-            success: false,
-            error: "Failed to parse screen capture response",
-          });
-          return;
-        }
-      }
-      finish({
-        success: false,
-        error: stderrData || "Python screen capture service exited with error",
-      });
-    });
-
-    setTimeout(() => {
-      if (!settled) {
-        if (!python.killed) python.kill();
-        finish({ success: false, error: "Screen capture timeout (5s)" });
-      }
-    }, 5000);
-  });
+  try {
+    const frame = await createReplayAdapter({ targetDevice: "desktop" }).capture();
+    return { success: true, imageData: frame.image, method: "server_desktop" };
+  } catch (error) { return { success: false, error: error instanceof Error ? error.message : "Capture unavailable" }; }
 };
 
 export const handleSyncRealFrame = async (
@@ -130,7 +66,7 @@ export const handleSyncRealFrame = async (
           return;
         }
       }
-      latestSyncedRealFrame = { imageData, metadata };
+      latestSyncedRealFrame = { imageData, metadata, receivedAt: Date.now() };
       res.json({
         success: true,
         message: "Real desktop frame synced successfully.",

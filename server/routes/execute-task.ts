@@ -1,12 +1,8 @@
-import { RequestHandler } from "express";
-import { spawn } from "child_process";
-import path from "path";
-import { fileURLToPath } from "url";
-import { centralLogHub } from "../log-hub";
-import { queueMobileAction } from "./mobile-stream";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
+import { deviceLocks } from "../device-locks";
+import type { RequestHandler } from "express";
+import { replayStepSchema } from "../../shared/replay";
+import { createReplayAdapter } from "../replay-adapter";
+import { replayEngine } from "../replay-engine";
 export interface InteractionRecord {
   id: string;
   timestamp: number;
@@ -36,213 +32,66 @@ export const handleClearInteractions: RequestHandler = (_req, res) => {
   res.json({ success: true, message: "Interaction history cleared" });
 };
 
-export const handleExecuteTask: RequestHandler = async (req, res) => {
-  const startTime = Date.now();
-  const rawTask = req.body.task || req.body;
-  const targetDevice = req.body.targetDevice || rawTask.targetDevice || "desktop";
-  const action = String(rawTask.action || rawTask.actionType || "click").toLowerCase();
-  const targetPos = rawTask.targetPosition || { x: rawTask.x ?? 960, y: rawTask.y ?? 540 };
-  const routePoints = rawTask.routePoints || rawTask.points || [];
-  const textPayload = rawTask.textPayload || rawTask.text || "";
-  const keyPayload = rawTask.keyPayload || rawTask.key || "";
-
-  const logDesc = routePoints.length > 0
-    ? `Stream mouse trail (${routePoints.length} waypoints) on ${targetDevice}`
-    : `${action.toUpperCase()} at (${targetPos.x}, ${targetPos.y}) ${textPayload ? `[text: "${textPayload}"]` : ""} on ${targetDevice}`;
-
-  centralLogHub.addLog(
-    targetDevice === "android" ? "Mobile-Automation" : "PC-PyAutoGUI",
-    "INFO",
-    `Executing: ${logDesc}`,
-    { action, targetPos, pointsCount: routePoints.length, targetDevice }
-  );
-
-  // If target device is Android, also enqueue directly to live mobile stream bridge
-  if (targetDevice === "android") {
-    try {
-      const normX = typeof targetPos.x === "number" ? (targetPos.x > 1 ? targetPos.x / 1920 : targetPos.x) : 0.5;
-      const normY = typeof targetPos.y === "number" ? (targetPos.y > 1 ? targetPos.y / 1080 : targetPos.y) : 0.5;
-      queueMobileAction({
-        type: action === "type" || action === "type_text" || action === "clear_and_type" ? "type" : action === "double_click" ? "double_tap" : action === "swipe" ? "swipe" : action === "press_key" || action === "hotkey" ? "key" : "tap",
-        x: normX,
-        y: normY,
-        text: textPayload || undefined,
-        key: keyPayload || undefined,
-        description: logDesc,
-      });
-    } catch {}
-  }
-
-  let responseSent = false;
-  const sendOnce = (payload: any) => {
-    if (responseSent) return;
-    responseSent = true;
-    res.json(payload);
-  };
-
+export async function executeDeviceTask(body: any) {
+  const raw = body.task || body;
+  const targetDevice = body.targetDevice || raw.targetDevice || "desktop";
+  if (!["desktop", "android"].includes(targetDevice))
+    throw new Error("Unsupported target device");
+  const deviceId = body.deviceId || raw.deviceId;
+  if (targetDevice === "android" && !deviceId)
+    throw new Error("Select a connected Android device");
+  const target = targetDevice === "desktop" ? "desktop" : `android:${deviceId}`;
+  if (replayEngine.busy(target) || manualLocks.has(target))
+    throw new Error("Device is busy");
+  const step = replayStepSchema.parse({
+    ...raw,
+    id: raw.id || "manual",
+    name: raw.name || raw.title || "Manual action",
+    action: raw.action || raw.actionType,
+    x: raw.targetPosition?.x ?? raw.x,
+    y: raw.targetPosition?.y ?? raw.y,
+    text: raw.textPayload ?? raw.text,
+    keyPayload: raw.keyPayload ?? raw.key,
+  });
+  const adapter = createReplayAdapter({ targetDevice, deviceId });
+  manualLocks.add(target);
   try {
-    const pythonScript = path.join(
-      __dirname,
-      "../../python-service/execute-task.py",
-    );
-    const pythonCmd =
-      process.env.PYTHON_CMD ||
-      (process.platform === "win32" ? "python" : "python3");
-
-    const python = spawn(pythonCmd, [pythonScript], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    // Guard stdin stream from uncaught error events (e.g. broken pipe or EPIPE)
-    python.stdin.on("error", () => {});
-
-    // Send formatted execution payload to Python subprocess stdin exactly once
-    const inputPayload = JSON.stringify({
-      task: rawTask,
-      targetDevice,
-      action,
-      targetPosition: targetPos,
-      routePoints,
-      textPayload,
-      keyPayload,
-    });
-    try {
-      python.stdin.write(inputPayload);
-      python.stdin.end();
-    } catch {}
-
-    let outputBuffer = "";
-    let errorBuffer = "";
-
-    python.stdout.on("data", (data) => {
-      outputBuffer += data.toString();
-    });
-
-    python.stderr.on("data", (data) => {
-      errorBuffer += data.toString();
-    });
-
-    let spawnError: string | null = null;
-    python.on("error", (err) => {
-      spawnError = `Failed to spawn python (${pythonCmd}): ${err.message}`;
-      const durationMs = Date.now() - startTime;
-      centralLogHub.addLog(
-        "PC-PyAutoGUI",
-        "INFO",
-        `Simulated Fallback (${spawnError})`,
-        { durationMs, action }
-      );
-      interactionHistory.push({
-        id: `int_${Date.now()}`,
-        timestamp: Date.now(),
-        device: targetDevice,
-        action,
-        coordinates: targetPos,
-        pointsCount: routePoints.length,
-        textPayload: textPayload || undefined,
-        keyPayload: keyPayload || undefined,
-        success: true,
-        durationMs,
-        details: `Simulated execution in web container: ${logDesc}`,
-      });
-      sendOnce({
-        success: true,
-        simulated: true,
-        message: `Simulated ${action.toUpperCase()} across viewport (${waypointsDesc(routePoints, targetPos)})`,
-        durationMs,
-      });
-    });
-
-    python.on("close", (code) => {
-      if (responseSent) return;
-      const durationMs = Date.now() - startTime;
-
-      if (spawnError) {
-        return;
-      }
-
-      let parsedResult: any = null;
-      try {
-        if (outputBuffer.trim()) {
-          parsedResult = JSON.parse(outputBuffer.trim());
-        }
-      } catch (parseErr) {
-        // fallback
-      }
-
-      const isSuccess = code === 0 && (parsedResult ? parsedResult.success !== false : true);
-      const explanation = parsedResult?.explanation || outputBuffer.trim() || (isSuccess ? "Executed successfully" : errorBuffer);
-
-      centralLogHub.addLog(
-        targetDevice === "android" ? "Mobile-Automation" : "PC-PyAutoGUI",
-        isSuccess ? "SUCCESS" : "ERROR",
-        `${isSuccess ? "Completed" : "Failed"}: ${logDesc} in ${durationMs}ms`,
-        { durationMs, code, explanation, error: isSuccess ? undefined : errorBuffer }
-      );
-
-      interactionHistory.push({
-        id: `int_${Date.now()}`,
-        timestamp: Date.now(),
-        device: targetDevice,
-        action,
-        coordinates: targetPos,
-        pointsCount: routePoints.length,
-        textPayload: textPayload || undefined,
-        keyPayload: keyPayload || undefined,
-        success: isSuccess,
-        durationMs,
-        details: explanation,
-      });
-
-      if (parsedResult) {
-        return sendOnce(parsedResult);
-      }
-
-      if (isSuccess) {
-        sendOnce({
-          success: true,
-          result: "Task executed successfully",
-          details: outputBuffer,
-          durationMs,
-        });
-      } else {
-        // In headless / web preview, treat non-zero as simulated execution rather than fatal error
-        sendOnce({
-          success: true,
-          simulated: true,
-          message: `Executed in simulated web mode (code ${code})`,
-          error: errorBuffer || undefined,
-          durationMs,
-        });
-      }
-    });
-
-    setTimeout(() => {
-      if (!responseSent) {
-        try {
-          python.kill();
-        } catch {}
-        const durationMs = Date.now() - startTime;
-        centralLogHub.addLog("PC-PyAutoGUI", "INFO", `Execution simulated after ${durationMs}ms for ${logDesc}`);
-        sendOnce({
-          success: true,
-          simulated: true,
-          message: `Simulated timeout fallback for ${logDesc}`,
-          durationMs,
-        });
-      }
-    }, 15000);
-  } catch (error) {
-    sendOnce({
+    const frame = await adapter.capture();
+    if (step.x >= frame.width || step.y >= frame.height)
+      throw new Error("Coordinates outside device screen");
+    await adapter.execute(step, frame);
+    return {
       success: true,
-      simulated: true,
-      error: String(error),
+      verified: false,
+      explanation:
+        "Device acknowledged execution; visual outcome has not been verified",
+    };
+  } finally {
+    manualLocks.delete(target);
+  }
+}
+const manualLocks = deviceLocks;
+export const handleExecuteTask: RequestHandler = async (req, res) => {
+  const started = Date.now();
+  try {
+    const result = await executeDeviceTask(req.body);
+    interactionHistory.push({
+      id: `int_${started}`,
+      timestamp: started,
+      device: req.body.targetDevice || "desktop",
+      action: (req.body.task || req.body).action,
+      success: true,
+      durationMs: Date.now() - started,
+      details: result.explanation,
     });
+    if (interactionHistory.length > 150) interactionHistory.shift();
+    res.json(result);
+  } catch (error) {
+    res
+      .status(422)
+      .json({
+        success: false,
+        error: error instanceof Error ? error.message : "Execution failed",
+      });
   }
 };
-
-function waypointsDesc(pts: any[], pos: { x: number; y: number }): string {
-  if (pts && pts.length > 0) return `${pts.length} points`;
-  return `${pos.x}, ${pos.y}`;
-}
-

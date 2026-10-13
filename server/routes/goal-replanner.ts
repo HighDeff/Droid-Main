@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { GoogleGenAI } from "@google/genai";
+import { getGenAIClient, setGeminiCooldown } from "../ai-gemini-service";
 
 export interface ReplanStepItem {
   id: string;
@@ -47,13 +47,11 @@ export async function handleGoalReplan(req: Request, res: Response) {
 
     const steps = Array.isArray(currentSteps) ? currentSteps : [];
 
-    // Check if Gemini API key exists
-    let geminiApiKey = process.env.GEMINI_API_KEY;
+    const ai = getGenAIClient();
     let geminiAnalysis: string | null = null;
 
-    if (geminiApiKey && geminiApiKey.length > 5 && screenshotUrl && screenshotUrl.startsWith("data:image")) {
+    if (ai && screenshotUrl && screenshotUrl.startsWith("data:image")) {
       try {
-        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
         const base64Data = screenshotUrl.split(",")[1] || screenshotUrl;
         const prompt = `You are an expert AI Robotic Process Automation (RPA) Goal Re-Planner.
 A workflow automation step sequence has encountered continuous coordinate drift (${currentDriftDistancePx}px > ${driftThreshold}px threshold) or step failure.
@@ -89,8 +87,9 @@ Analyze the live screen and propose an optimal healed step sequence. Return conc
           ],
         });
         geminiAnalysis = response.text || null;
-      } catch (aiErr) {
-        console.warn("[GoalReplan] Gemini vision call skipped/failed:", aiErr);
+      } catch (aiErr: any) {
+        setGeminiCooldown(20);
+        console.warn("[GoalReplan] Gemini vision call skipped/failed:", aiErr?.message || aiErr);
       }
     }
 

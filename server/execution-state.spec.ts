@@ -161,3 +161,12 @@ describe("allowlisted execution", () => {
     expect(execution.pendingApproval?.reason).toContain("unavailable");
   });
 });
+
+it("does not claim device execution when the assistant adapter is unconfigured", async () => {
+  const repository = new ExecutionStateRepository(undefined, { mode: "memory" });
+  const approved = plan({ type: "click", x: 10, y: 20 });
+  const execution = repository.create(approved);
+  await repository.start(execution, approved);
+  expect(execution.status).not.toBe("completed");
+  expect(execution.results.some(result => result.success)).toBe(false);
+});

@@ -345,7 +345,7 @@ export const ScanReboundHierarchyEngine: React.FC = () => {
                 </strong>
               </p>
               <p>
-                • Trajectory deviation under threshold (&lt;50px tolerance
+                • Trajectory deviation under threshold ({"<"}50px tolerance
                 limit)
               </p>
               <p>

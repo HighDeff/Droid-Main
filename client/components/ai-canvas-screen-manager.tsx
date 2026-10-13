@@ -495,7 +495,7 @@ export const AICanvasScreenManager: React.FC<AICanvasScreenManagerProps> = ({
               const isSelected = activeCanvasSourceId === s.id;
               return (
                 <button
-                  key={s.id || idx}
+                  key={`${s.id || "snap"}_${idx}`}
                   onClick={() => onSelectCanvasSource(s.id, s.url)}
                   className={`flex-shrink-0 w-36 rounded-lg p-2 text-left border transition-all ${
                     isSelected
@@ -599,7 +599,7 @@ export const AICanvasScreenManager: React.FC<AICanvasScreenManagerProps> = ({
           {/* Detected Elements Grid / List */}
           {filteredElements.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-60 overflow-y-auto pr-1">
-              {filteredElements.map((elem) => {
+              {filteredElements.map((elem, elemIdx) => {
                 const badgeColor =
                   elem.type === "button"
                     ? "bg-blue-950 text-blue-300 border-blue-700"
@@ -613,7 +613,7 @@ export const AICanvasScreenManager: React.FC<AICanvasScreenManagerProps> = ({
 
                 return (
                   <div
-                    key={elem.id}
+                    key={`canvas_elem_${elem.id || "el"}_${elemIdx}`}
                     className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 hover:border-cyan-700/80 transition-all flex flex-col justify-between gap-2"
                   >
                     <div className="flex items-start justify-between gap-1.5">

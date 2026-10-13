@@ -582,7 +582,7 @@ export const AutoCorrectionLog: React.FC<AutoCorrectionLogProps> = ({
                   <div className="flex items-center gap-4">
                     <span className="flex items-center gap-1.5">
                       <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />
-                      Critical Volatility (&gt;18px)
+                      Critical Volatility ({">"}18px)
                     </span>
                     <span className="flex items-center gap-1.5">
                       <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" />
@@ -590,7 +590,7 @@ export const AutoCorrectionLog: React.FC<AutoCorrectionLogProps> = ({
                     </span>
                     <span className="flex items-center gap-1.5">
                       <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" />
-                      Minor Tolerance (&lt;10px)
+                      Minor Tolerance ({"<"}10px)
                     </span>
                   </div>
                   <span className="text-slate-500">Auto-Recalibration Active</span>
@@ -829,7 +829,7 @@ export const AutoCorrectionLog: React.FC<AutoCorrectionLogProps> = ({
                       <Badge className="bg-amber-950 text-amber-300 border-amber-600/40">
                         OCR LANDMARK ANCHOR
                       </Badge>
-                      <span className="text-xs text-slate-400">Drift &gt; 15px</span>
+                      <span className="text-xs text-slate-400">Drift {">"} 15px</span>
                     </div>
                     <p className="text-xs text-slate-300">
                       Used when structural DOM shifts occur. Recognizes bounding text boxes and recalculates button center coordinates regardless of row translation.
@@ -865,7 +865,7 @@ export const AutoCorrectionLog: React.FC<AutoCorrectionLogProps> = ({
                       <Badge className="bg-emerald-950 text-emerald-300 border-emerald-600/40">
                         DWELL STABILITY SETTLE
                       </Badge>
-                      <span className="text-xs text-slate-400">Drift &lt; 5px</span>
+                      <span className="text-xs text-slate-400">Drift {"<"} 5px</span>
                     </div>
                     <p className="text-xs text-slate-300">
                       Absorbs minor font anti-aliasing or rendering noise within standard target click boundary without triggering full recalculation.

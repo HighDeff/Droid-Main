@@ -86,4 +86,20 @@ describe("paired phone API", () => {
     expect((await request("/native/poll", registered.token, { controlEnabled: true })).status).toBe(401);
   });
 
+  it("binds replay to its phone session, blocks competing controls and cancels on revocation", async () => {
+    const token = await pair();
+    const response = await request("/replay", token, { targetDevice: "desktop", deviceId: "other", confirmation: true,
+      steps: [{ id: "test", name: "Tap", action: "click", x: 0, y: 0, breakpoint: true }] });
+    expect(response.status).toBe(202);
+    const { run: replay } = await response.json();
+    expect(replay.target).toBe("android:phone");
+    const another = await pair();
+    expect((await request(`/replay/${replay.id}`, another)).status).toBe(404);
+    expect((await request(`/replay/${replay.id}/cancel`, another, {})).status).toBe(404);
+    const frame = await (await request("/frame", token)).json();
+    expect((await request("/action", token, { frameHash: frame.hash, action: { type: "tap", x: 0, y: 0 } })).status).toBe(409);
+    expect((await request("/session", token, undefined, false, "DELETE")).status).toBe(200);
+    expect((await request(`/replay/${replay.id}`, token)).status).toBe(401);
+  });
+
 });

@@ -1,3 +1,6 @@
+import { deviceLocks } from "../device-locks";
+import { replayEngine } from "../replay-engine";
+import { phoneReplayAction } from "../replay-adapter";
 import { Router, raw, type Request } from "express";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
@@ -11,6 +14,7 @@ import { sendQwenChatRequest } from "../ai-endpoint";
 
 interface Session {
   device: string; expires: number; recordings: Set<string>;
+  replayIds?: Set<string>;
   preview?: { id: string; action: PhoneAction; frame: PhoneFrame; explanation: string };
 }
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -35,7 +39,6 @@ export function createPhoneRouter(
 ) {
   const router = Router();
   const sessions = new Map<string, Session>();
-  const deviceLocks = new Set<string>();
   const native = new NativePhoneBridge();
   const capture = (device: string) => native.has(device) ? native.capture(device) : bridge.capture(device);
   const execute = async (device: string, action: PhoneAction, frame: PhoneFrame) => {
@@ -118,10 +121,11 @@ export function createPhoneRouter(
   });
   router.get("/session", async (_req, res) => {
     const s: Session = res.locals.session;
-    res.json({ device: s.device, expires: s.expires, native: native.info(s.device), recordings: native.has(s.device) ? native.recordings(s.device) : await Promise.all([...s.recordings].map(id => recorder.status(id))) });
+    res.json({ device: s.device, expires: s.expires, replay: [...(s.replayIds || [])].map(id => replayEngine.get(id)).filter(Boolean).at(-1), native: native.info(s.device), recordings: native.has(s.device) ? native.recordings(s.device) : await Promise.all([...s.recordings].map(id => recorder.status(id))) });
   });
   router.delete("/session", async (_req, res) => {
     const s: Session = res.locals.session;
+    for (const id of s.replayIds || []) replayEngine.control(id, "cancel");
     if (native.has(s.device)) {
       // Revoke network access immediately; a local recording continues until its own limit or notification Stop.
       native.revoke(s.device);
@@ -130,14 +134,49 @@ export function createPhoneRouter(
     sessions.delete(res.locals.sessionKey);
     res.json({ success: true });
   });
+  router.post("/replay", (req, res) => {
+    const session: Session = res.locals.session;
+    const sessionKey = res.locals.sessionKey;
+    const assertSession = () => {
+      if (session.expires <= Date.now() || sessions.get(sessionKey) !== session) throw new Error("Phone session expired or revoked");
+    };
+    const run = replayEngine.start({ ...req.body, targetDevice: "android", deviceId: session.device }, {
+      capture: async () => { assertSession(); return capture(session.device); },
+      execute: async (step, frame) => {
+        assertSession();
+        if (step.action === "wait") { await new Promise(resolve => setTimeout(resolve, step.delayMs)); return; }
+        await execute(session.device, phoneActionSchema.parse(phoneReplayAction(step, frame)), frame);
+      },
+    });
+    session.replayIds = new Set([...(session.replayIds || []), run.id].slice(-10));
+    res.status(202).json({ success: true, run });
+  });
+  router.use("/replay/:id", (req, res, next) => {
+    if (!res.locals.session.replayIds?.has(req.params.id)) return res.status(404).json({ error: "Replay not found for this session" });
+    next();
+  });
+  router.get("/replay/:id", (req, res) => {
+    const run = replayEngine.get(req.params.id);
+    res.status(run ? 200 : 404).json({ success: !!run, run });
+  });
+  router.get("/replay/:id/frames/:hash", (req, res) => {
+    const frame = replayEngine.frame(req.params.id, req.params.hash);
+    if (!frame) return res.status(404).json({ error: "Screenshot evidence expired" });
+    res.type("png").send(Buffer.from(frame.image.split(",")[1], "base64"));
+  });
+  router.post("/replay/:id/:command", (req, res) => {
+    const command = z.enum(["pause", "resume", "cancel"]).parse(req.params.command);
+    const run = replayEngine.control(req.params.id, command);
+    res.status(run ? 200 : 404).json({ success: !!run, run });
+  });
   router.get("/frame", async (_req, res) => { res.json(await capture(res.locals.session.device)); });
   // Hold the lock until the handler finishes, even if the client disconnects.
   const exclusive = (handler: (req: any, res: any) => Promise<any>) => async (req, res, next) => {
     const device = res.locals.session.device;
-    if (deviceLocks.has(device)) return res.status(409).json({ error: "Phone is busy; wait for the current operation" });
-    deviceLocks.add(device);
+    if (deviceLocks.has(`android:${device}`)) return res.status(409).json({ error: "Phone is busy; wait for the current operation" });
+    deviceLocks.add(`android:${device}`);
     try { await handler(req, res); } catch (error) { next(error); }
-    finally { deviceLocks.delete(device); }
+    finally { deviceLocks.delete(`android:${device}`); }
   };
   router.post("/action", exclusive(async (req, res) => {
     const s: Session = res.locals.session;

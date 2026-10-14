@@ -1,5 +1,6 @@
 import { DriveFile } from '../types/drive';
 
+/** Formats a byte count as a human-readable size string (e.g. "1.5 MB"). */
 export function formatBytes(bytes?: string | number, decimals = 1): string {
   if (!bytes) return '--';
   const num = typeof bytes === 'string' ? parseInt(bytes, 10) : bytes;
@@ -13,6 +14,7 @@ export function formatBytes(bytes?: string | number, decimals = 1): string {
   return `${parseFloat((num / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
+/** Formats an ISO date string for display, omitting the year when it matches the current year. */
 export function formatDate(dateString?: string): string {
   if (!dateString) return '--';
   try {
@@ -35,6 +37,7 @@ export function formatDate(dateString?: string): string {
   }
 }
 
+/** Returns true when `file` represents a Google Drive folder. */
 export function isFolder(file: DriveFile): boolean {
   return file.mimeType === 'application/vnd.google-apps.folder';
 }
@@ -46,6 +49,7 @@ export interface FileCategoryInfo {
   iconType: 'folder' | 'doc' | 'sheet' | 'slide' | 'pdf' | 'image' | 'video' | 'audio' | 'archive' | 'code' | 'file';
 }
 
+/** Maps a mime type to display metadata (label, colors, and icon type) for file listings. */
 export function getFileCategory(mimeType: string): FileCategoryInfo {
   if (mimeType === 'application/vnd.google-apps.folder') {
     return {

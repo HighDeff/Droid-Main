@@ -24,8 +24,12 @@ export interface FrameMetadata {
   offset: Point;
 }
 
+/** Returns true when `value` is a finite number greater than zero. */
 const finitePositive = (value: number) => Number.isFinite(value) && value > 0;
 
+/**
+ * Throws if `size` does not describe positive integer dimensions.
+ */
 export function validateSize(size: Size, name = "size"): void {
   if (
     !finitePositive(size.width) ||
@@ -37,6 +41,9 @@ export function validateSize(size: Size, name = "size"): void {
   }
 }
 
+/**
+ * Throws if `point` falls outside the bounds of `size`.
+ */
 export function validatePoint(point: Point, size: Size, name = "point"): void {
   validateSize(size);
   if (
@@ -89,6 +96,10 @@ export function displayToFrame(
   };
 }
 
+/**
+ * Converts a point expressed in source-frame pixels into viewport
+ * coordinates using the provided frame metadata (scale and offset).
+ */
 export function frameToViewport(point: Point, metadata: FrameMetadata): Point {
   validatePoint(point, metadata.pixels, "frame point");
   const x = point.x * metadata.scale.x + metadata.offset.x;

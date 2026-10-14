@@ -16,12 +16,18 @@ export interface Observation {
   analysis?: FrameAnalysis;
 }
 
+/** Returns true when two rectangular regions of interest overlap. */
 const intersects = (a: RegionOfInterest, b: RegionOfInterest) =>
   a.x < b.x + b.width &&
   a.x + a.width > b.x &&
   a.y < b.y + b.height &&
   a.y + a.height > b.y;
 
+/**
+ * Checks a completed frame analysis against a step's verification rule
+ * (confidence threshold, text/element presence, or region intersection),
+ * returning a pass/fail/uncertain verdict with a human-readable reason.
+ */
 export function verifyObservation(
   verification: StepVerification,
   observation: Observation,

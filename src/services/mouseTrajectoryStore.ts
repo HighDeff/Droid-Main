@@ -142,6 +142,11 @@ export const DEFAULT_HISTORICAL_SESSIONS: MouseRecordingSession[] = [
 
 const LOCAL_STORAGE_KEY = 'autonomous_mouse_trajectory_sessions_v1';
 
+/**
+ * Singleton store that persists recorded mouse trajectory sessions to local
+ * storage, derives speed baselines from them, and detects/alerts on
+ * mouse-movement speed anomalies relative to those baselines.
+ */
 export class MouseTrajectoryStore {
   private static instance: MouseTrajectoryStore | null = null;
   private sessions: MouseRecordingSession[] = [];
@@ -152,10 +157,12 @@ export class MouseTrajectoryStore {
   private baselineMaxSpeed = 850;
   private baselineAvgSpeed = 410;
 
+  /** Private constructor; use {@link getInstance} to obtain the singleton. */
   private constructor() {
     this.loadFromStorage();
   }
 
+  /** Returns the shared `MouseTrajectoryStore` singleton, creating it on first use. */
   public static getInstance(): MouseTrajectoryStore {
     if (!MouseTrajectoryStore.instance) {
       MouseTrajectoryStore.instance = new MouseTrajectoryStore();
@@ -163,6 +170,7 @@ export class MouseTrajectoryStore {
     return MouseTrajectoryStore.instance;
   }
 
+  /** Loads sessions from local storage, falling back to the built-in defaults. */
   private loadFromStorage(): void {
     if (typeof window === 'undefined') {
       this.sessions = [...DEFAULT_HISTORICAL_SESSIONS];
@@ -186,6 +194,7 @@ export class MouseTrajectoryStore {
     this.saveToStorage();
   }
 
+  /** Persists the current sessions list to local storage, ignoring quota errors. */
   private saveToStorage(): void {
     if (typeof window === 'undefined') return;
     try {
@@ -195,6 +204,7 @@ export class MouseTrajectoryStore {
     }
   }
 
+  /** Recomputes the baseline min/max/avg speeds from all recorded session points. */
   private recalculateBaselines(): void {
     if (this.sessions.length === 0) return;
     const allSpeeds: number[] = [];
@@ -213,18 +223,22 @@ export class MouseTrajectoryStore {
     }
   }
 
+  /** Returns a copy of all recorded sessions. */
   public getSessions(): MouseRecordingSession[] {
     return [...this.sessions];
   }
 
+  /** Returns a copy of all recorded sessions (alias of {@link getSessions}). */
   public getAllSessions(): MouseRecordingSession[] {
     return [...this.sessions];
   }
 
+  /** Finds a recorded session by its id. */
   public getSessionById(sessionId: string): MouseRecordingSession | undefined {
     return this.sessions.find((s) => s.id === sessionId);
   }
 
+  /** Subscribes to cross-tab `storage` events, returning an unsubscribe function. */
   public subscribe(callback: () => void): () => void {
     const handler = () => callback();
     window.addEventListener('storage', handler);
@@ -233,10 +247,16 @@ export class MouseTrajectoryStore {
     };
   }
 
+  /** Returns the most recently recorded session, or `null` if none exist. */
   public getLatestSession(): MouseRecordingSession | null {
     return this.sessions.length > 0 ? this.sessions[0] : null;
   }
 
+  /**
+   * Builds a full `MouseRecordingSession` from raw recorded points (deriving
+   * click count, average/max speed, detected environment, and confidence),
+   * then stores it at the front of the sessions list.
+   */
   public saveSession(sessionData: {
     name?: string;
     points: RecordedMousePoint[];
@@ -313,6 +333,7 @@ export class MouseTrajectoryStore {
     return newSession;
   }
 
+  /** Removes the session with the given id, returning whether it was found and removed. */
   public deleteSession(sessionId: string): boolean {
     const initialLen = this.sessions.length;
     this.sessions = this.sessions.filter((s) => s.id !== sessionId);
@@ -324,6 +345,7 @@ export class MouseTrajectoryStore {
     return false;
   }
 
+  /** Merges `updates` into the session matching `sessionId`, or returns `null` if not found. */
   public updateSession(sessionId: string, updates: Partial<MouseRecordingSession>): MouseRecordingSession | null {
     const idx = this.sessions.findIndex((s) => s.id === sessionId);
     if (idx === -1) return null;
@@ -332,11 +354,13 @@ export class MouseTrajectoryStore {
     return this.sessions[idx];
   }
 
+  /** Resets the store back to the built-in default historical sessions. */
   public clearAllSessions(): void {
     this.sessions = [...DEFAULT_HISTORICAL_SESSIONS];
     this.saveToStorage();
   }
 
+  /** Returns the current baseline speed statistics and session count. */
   public getBaselineStats() {
     return {
       avgSpeed: this.baselineAvgSpeed,

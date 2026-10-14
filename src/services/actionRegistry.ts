@@ -66,10 +66,16 @@ export interface ActionRegistryHandlers {
   onOpenDiffFrameTester?: (file?: DriveFile) => void;
 }
 
+/**
+ * Builds and manages the list of file-context-menu actions (click, preview,
+ * star, rename, swipe gestures, delete, etc.), wiring each action's
+ * visibility and execution to the provided handler callbacks.
+ */
 export class ActionRegistry {
   private handlers: ActionRegistryHandlers;
   private actions: ActionDefinition[];
 
+  /** Creates the registry and defines all available actions bound to `handlers`. */
   constructor(handlers: ActionRegistryHandlers) {
     this.handlers = handlers;
     this.actions = [
@@ -280,10 +286,15 @@ export class ActionRegistry {
     ];
   }
 
+  /** Replaces the handler callbacks used by registered actions. */
   public updateHandlers(handlers: ActionRegistryHandlers) {
     this.handlers = handlers;
   }
 
+  /**
+   * Returns the actions visible for `file` in the current section, with
+   * dynamic labels (e.g. star/delete) adjusted based on file state.
+   */
   public getAvailableActions(file: DriveFile): ActionDefinition[] {
     return this.actions
       .filter((action) => action.isVisible(file, this.handlers.activeSection))
@@ -305,6 +316,7 @@ export class ActionRegistry {
       });
   }
 
+  /** Runs the `execute` handler for the action matching `actionId`, if registered. */
   public async executeAction(actionId: ActionId, file: DriveFile): Promise<void> {
     const action = this.actions.find((a) => a.id === actionId);
     if (action) {

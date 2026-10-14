@@ -3,24 +3,35 @@ import cors from "cors";
 import crypto from "crypto";
 import net from "net";
 
+/** Returns true when the request originated from localhost (IPv4 or IPv6). */
 function isLoopback(req: Request): boolean {
   const address = req.ip?.replace(/^::ffff:/, "");
   return address === "127.0.0.1" || address === "::1";
 }
 
+/** Returns the configured API key from `ASSISTANT_API_KEY`, if set. */
 function configuredApiKey(): string | undefined {
   const key = process.env.ASSISTANT_API_KEY?.trim();
   return key || undefined;
 }
 
+/**
+ * Checks the request's `x-api-key` or `Authorization: Bearer` header against
+ * `expected` using a constant-time comparison.
+ */
 function hasValidApiKey(req: Request, expected: string): boolean {
   const supplied =
     req.header("x-api-key") ??
     req.header("authorization")?.replace(/^Bearer\s+/i, "");
-  if (!supplied || Buffer.byteLength(supplied) !== Buffer.byteLength(expected)) return false;
+  if (!supplied || supplied.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
 }
 
+/**
+ * Express middleware enforcing API access control: allows health-check
+ * paths, valid API keys, and (outside production, when no key is
+ * configured) loopback requests; otherwise responds with 401.
+ */
 export const requireApiAccess: RequestHandler = (req, res, next) => {
   if (res.locals?.apiAuthenticated === true) return next();
   if (req.path === "/ping" || req.path === "/demo") return next();
@@ -34,6 +45,11 @@ export const requireApiAccess: RequestHandler = (req, res, next) => {
   res.status(401).json({ success: false, error: "Authentication required" });
 };
 
+/**
+ * Builds a CORS middleware that only allows origins listed in the
+ * `CORS_ORIGINS` environment variable; disables cross-origin requests
+ * entirely when no origins are configured.
+ */
 export function createCorsMiddleware(): RequestHandler {
   const configuredOrigins = (process.env.CORS_ORIGINS ?? "")
     .split(",")
@@ -52,6 +68,11 @@ export function createCorsMiddleware(): RequestHandler {
   });
 }
 
+/**
+ * Builds a simple fixed-window, in-memory rate-limiting middleware keyed by
+ * request IP, responding with 429 and a `Retry-After` header once the
+ * window's request count exceeds `maxRequests`.
+ */
 export function createApiRateLimiter(
   windowMs = 60_000,
   maxRequests = 120,
@@ -77,6 +98,10 @@ export function createApiRateLimiter(
   };
 }
 
+/**
+ * Validates that `ip`/`port` form a usable ADB endpoint, throwing if the IP
+ * is not a valid IPv4 address or the port is out of range.
+ */
 export function validateAdbEndpoint(ip: unknown, port: unknown): string {
   if (typeof ip !== "string" || net.isIP(ip) !== 4) {
     throw new Error("A valid IPv4 address is required");
@@ -92,6 +117,11 @@ export function validateAdbEndpoint(ip: unknown, port: unknown): string {
   return `${ip}:${numericPort}`;
 }
 
+/**
+ * Recursively redacts values of keys that look sensitive (passwords,
+ * tokens, secrets, API keys, authorization headers, codes) in an object or
+ * array, leaving other values unchanged.
+ */
 export function redactSensitive(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(redactSensitive);

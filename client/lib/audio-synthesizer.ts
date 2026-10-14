@@ -1,9 +1,14 @@
 // Cyberpunk Procedural Audio Synthesizer using Web Audio API
+/**
+ * Generates short synthesized sound effects (clicks, alarms, chimes, etc.)
+ * on demand using the Web Audio API, lazily creating the `AudioContext`.
+ */
 class AudioSynthesizer {
   private ctx: AudioContext | null = null;
   public isMuted: boolean = false;
   public volume: number = 0.5;
 
+  /** Lazily creates the underlying `AudioContext` if one does not exist yet. */
   private initCtx() {
     if (!this.ctx && typeof window !== "undefined") {
       const AudioCtxClass =
@@ -15,6 +20,7 @@ class AudioSynthesizer {
   }
 
   // Mechanical Click & Tap Cue
+  /** Plays a short mechanical click tone, optionally at a custom base frequency. */
   public playClickSound(freq?: number) {
     if (this.isMuted) return;
     this.initCtx();
@@ -39,11 +45,13 @@ class AudioSynthesizer {
     osc.stop(this.ctx.currentTime + 0.04);
   }
 
+  /** Plays the sound used to signal that a task has completed. */
   public playTaskCompleteSound() {
     this.playSuccessSound();
   }
 
   // Keypress Typing Tap
+  /** Plays a short tap tone to accompany simulated keystrokes. */
   public playKeypressSound() {
     if (this.isMuted) return;
     this.initCtx();
@@ -68,6 +76,7 @@ class AudioSynthesizer {
   }
 
   // Waypoint Reach Glide
+  /** Plays an ascending glide tone used when a waypoint has been reached. */
   public playWaypointSound() {
     if (this.isMuted) return;
     this.initCtx();
@@ -92,6 +101,7 @@ class AudioSynthesizer {
   }
 
   // Warning Alarm / Error Pulse
+  /** Plays a descending sawtooth pulse used to signal a warning or error. */
   public playWarningSound() {
     if (this.isMuted) return;
     this.initCtx();
@@ -113,6 +123,7 @@ class AudioSynthesizer {
   }
 
   // Sequence Victory / Success Fanfare
+  /** Plays a short four-note ascending fanfare to signal success. */
   public playSuccessSound() {
     if (this.isMuted) return;
     this.initCtx();
@@ -137,6 +148,7 @@ class AudioSynthesizer {
   }
 
   // AI Thinking Harmonic Pulse
+  /** Plays a rising harmonic pulse used while the AI is "thinking". */
   public playThinkingSound() {
     if (this.isMuted) return;
     this.initCtx();
@@ -158,28 +170,34 @@ class AudioSynthesizer {
   }
 
   // Audio helper aliases
+  /** Alias for {@link playWaypointSound}. */
   public playLaserShot() {
     this.playWaypointSound();
   }
 
+  /** Alias for {@link playClickSound}. */
   public playActionCue() {
     this.playClickSound();
   }
 
+  /** Alias for {@link playKeypressSound}. */
   public playShutterSound() {
     this.playKeypressSound();
   }
 
+  /** Alias for {@link playWarningSound}. */
   public playAlarmSound() {
     this.playWarningSound();
   }
 
+  /** Alias for {@link playSuccessSound}. */
   public playSuccessChime() {
     this.playSuccessSound();
   }
 }
 
 export const audioSynthesizer = new AudioSynthesizer();
+/** Plays a short click pip sound, optionally at a custom frequency. */
 export const playClickPip = (freq?: number) => {
   audioSynthesizer.playClickSound(freq);
 };

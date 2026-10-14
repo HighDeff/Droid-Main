@@ -23,16 +23,28 @@ type ElementSnapshot = {
   analysis?: FrameAnalysis;
 };
 
+/**
+ * Tracks detected UI elements across successive frame analyses, maintaining
+ * position history, stability scores, and movement-pattern classification
+ * so callers can predict movement and recover from lost/drifting elements.
+ */
 class RealTimeElementTracker {
   private trackedElements: Map<string, TrackedElement> = new Map();
   private snapshots: ElementSnapshot[] = [];
   private maxSnapshots = 30;
   private trackingSessionId: string;
   
+  /** Creates a tracker scoped to the given tracking session id. */
   constructor(sessionId: string) {
     this.trackingSessionId = sessionId;
   }
   
+  /**
+   * Merges newly detected elements from a frame analysis into the tracked
+   * element set (updating history/stability/movement pattern, or creating
+   * new entries), marks elements no longer seen as "lost", and records a
+   * snapshot of the update.
+   */
   updateFromAnalysis(analysis: FrameAnalysis, screenshot?: string) {
     const snapshot: ElementSnapshot = {
       timestamp: new Date().toISOString(),
@@ -98,10 +110,12 @@ class RealTimeElementTracker {
     return snapshot;
   }
   
+  /** Finds a tracked element by its generated element id. */
   findElementById(elementId: string): TrackedElement | undefined {
     return this.trackedElements.get(elementId);
   }
   
+  /** Finds tracked elements whose most recent detection matches `type`. */
   findElementsByType(type: string): TrackedElement[] {
     return Array.from(this.trackedElements.values()).filter(element => {
       const analysis = this.snapshots[this.snapshots.length - 1]?.analysis;
@@ -112,6 +126,7 @@ class RealTimeElementTracker {
     });
   }
   
+  /** Finds tracked elements whose most recent detected label contains `label` (case-insensitive). */
   findElementsByLabel(label: string): TrackedElement[] {
     return Array.from(this.trackedElements.values()).filter(element => {
       const analysis = this.snapshots[this.snapshots.length - 1]?.analysis;
@@ -122,6 +137,7 @@ class RealTimeElementTracker {
     });
   }
   
+  /** Finds a tracked element whose region is within `tolerance` pixels of `region`. */
   findElementNearRegion(region: RegionOfInterest, tolerance: number = 50): TrackedElement | undefined {
     return Array.from(this.trackedElements.values()).find(element => {
       const dx = Math.abs(element.region.x - region.x);
@@ -130,21 +146,28 @@ class RealTimeElementTracker {
     });
   }
   
+  /** Returns tracked elements with stability at or above `threshold`, most stable first. */
   getMostStableElements(threshold: number = 0.8): TrackedElement[] {
     return Array.from(this.trackedElements.values())
       .filter(element => element.stability >= threshold)
       .sort((a, b) => b.stability - a.stability);
   }
   
+  /** Returns tracked elements currently classified as dynamic or drifting. */
   getDynamicElements(): TrackedElement[] {
     return Array.from(this.trackedElements.values())
       .filter(element => element.movementPattern === "dynamic" || element.movementPattern === "drifting");
   }
   
+  /** Returns the recorded position history for a tracked element. */
   getElementHistory(elementId: string): TrackedElement["history"] | undefined {
     return this.trackedElements.get(elementId)?.history;
   }
   
+  /**
+   * Linearly extrapolates an element's next region from its two most
+   * recent recorded positions; returns `null` if there isn't enough history.
+   */
   predictNextPosition(elementId: string): RegionOfInterest | null {
     const element = this.trackedElements.get(elementId);
     if (!element || element.history.length < 3) return null;
@@ -169,6 +192,11 @@ class RealTimeElementTracker {
     };
   }
   
+  /**
+   * For lost or unstable elements, suggests an expanded search region
+   * around their last known position; returns `null` otherwise or when no
+   * history exists.
+   */
   suggestAdaptiveRegion(elementId: string, currentScreenshot: string): RegionOfInterest | null {
     const element = this.trackedElements.get(elementId);
     if (!element) return null;
@@ -192,6 +220,7 @@ class RealTimeElementTracker {
     return null;
   }
   
+  /** Returns aggregate counts (stable/dynamic/lost elements, snapshots, average stability). */
   getTrackingSummary() {
     return {
       totalTracked: this.trackedElements.size,
@@ -203,15 +232,18 @@ class RealTimeElementTracker {
     };
   }
   
+  /** Clears all tracked elements and snapshots. */
   reset() {
     this.trackedElements.clear();
     this.snapshots = [];
   }
   
+  /** Derives a stable identifier for a detected element from its type, label, and position. */
   private generateElementId(detected: DetectedUIElement): string {
     return `${detected.type}_${detected.label || "unnamed"}_${detected.region.x}_${detected.region.y}`;
   }
   
+  /** Computes a 0-1 stability score from the average pixel movement across an element's history. */
   private calculateStability(history: TrackedElement["history"]): number {
     if (history.length < 2) return 1.0;
     
@@ -229,6 +261,7 @@ class RealTimeElementTracker {
     return stability;
   }
   
+  /** Classifies recent movement as static, drifting, dynamic, or lost based on average displacement. */
   private detectMovementPattern(history: TrackedElement["history"]): TrackedElement["movementPattern"] {
     if (history.length < 3) return "static";
     
@@ -251,6 +284,7 @@ class RealTimeElementTracker {
     return "lost";
   }
   
+  /** Computes the average stability score across all currently tracked elements. */
   private calculateAverageStability(): number {
     const stabilities = Array.from(this.trackedElements.values()).map(e => e.stability);
     if (stabilities.length === 0) return 0;

@@ -129,40 +129,52 @@ export const INITIAL_OVERSEER_NOTES: OverseerLearnedNote[] = [
   },
 ];
 
+/**
+ * Decides when to auto-deploy corrective workflow steps (tab switches,
+ * overlay dismissal, emergency recovery) based on configured settings and
+ * custom rules, and assists with AI-driven discovery of follow-up steps.
+ */
 export class AutoDeployEngine {
   private settings: AutoDeploySettings;
   private learnedNotes: OverseerLearnedNote[] = [];
 
+  /** Creates the engine with the given settings (or defaults) and seeds learned notes. */
   constructor(initialSettings?: AutoDeploySettings) {
     this.settings = initialSettings || DEFAULT_AUTO_DEPLOY_SETTINGS;
     this.learnedNotes = [...INITIAL_OVERSEER_NOTES];
     this.syncObserverSettings();
   }
 
+  /** Propagates relevant settings to the shared background UI observer instance. */
   private syncObserverSettings(): void {
     const observer = BackgroundUIObserver.getInstance();
     observer.setEnabled(this.settings.enableBackgroundUiObserver);
     observer.setDefaultTimeoutMs(this.settings.expectedElementTimeoutMs);
   }
 
+  /** Returns a copy of the current auto-deploy settings. */
   public getSettings(): AutoDeploySettings {
     return { ...this.settings };
   }
 
+  /** Merges `newSettings` into the current settings and resyncs the observer. */
   public updateSettings(newSettings: Partial<AutoDeploySettings>): AutoDeploySettings {
     this.settings = { ...this.settings, ...newSettings };
     this.syncObserverSettings();
     return this.settings;
   }
 
+  /** Returns the shared `BackgroundUIObserver` singleton. */
   public getObserver(): BackgroundUIObserver {
     return BackgroundUIObserver.getInstance();
   }
 
+  /** Returns a copy of the overseer's learned notes, most recent first. */
   public getLearnedNotes(): OverseerLearnedNote[] {
     return [...this.learnedNotes];
   }
 
+  /** Records a new overseer learned note, generating its id and timestamp. */
   public addLearnedNote(note: Omit<OverseerLearnedNote, 'id' | 'timestamp'>): OverseerLearnedNote {
     const fullNote: OverseerLearnedNote = {
       id: `note-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,

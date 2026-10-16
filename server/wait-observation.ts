@@ -14,9 +14,11 @@ type StabilityState = {
 
 const stability = new Map<string, StabilityState>();
 
+/** Computes a stable SHA-256 fingerprint of raw image data for change detection. */
 const fingerprint = (imageData: string) =>
   createHash("sha256").update(imageData).digest("hex");
 
+/** Infers close/next UI controls from OCR text blocks based on common button phrasing. */
 function controlsFromText(text: OCRTextBlock[]) {
   return text.flatMap((block) => {
     const value = block.text.trim();
@@ -43,14 +45,21 @@ function controlsFromText(text: OCRTextBlock[]) {
   });
 }
 
+/** Error raised when a fresh wait observation (capture or OCR) cannot be obtained. */
 export class WaitObservationError extends Error {
+  /** Creates the error with the given message. */
   constructor(message: string) {
     super(message);
     this.name = "WaitObservationError";
   }
 }
 
+/** Tracks page-load stability across observations so conditions can detect when the screen stops changing. */
 export class WaitObservationTracker {
+  /**
+   * Builds a `WaitConditionObservation` from the latest OCR text, updating
+   * the page-load stability tracker for `page_load_stable` conditions.
+   */
   observe(
     condition: WaitCondition,
     imageData: string,
@@ -80,6 +89,7 @@ export class WaitObservationTracker {
     return observation;
   }
 
+  /** Clears stability tracking state for `conditionId`, or for all conditions if omitted. */
   reset(conditionId?: string) {
     if (conditionId) stability.delete(conditionId);
     else stability.clear();
@@ -88,6 +98,11 @@ export class WaitObservationTracker {
 
 export const waitObservationTracker = new WaitObservationTracker();
 
+/**
+ * Captures a fresh desktop frame, runs OCR on it, and builds the resulting
+ * wait-condition observation, throwing a `WaitObservationError` if the
+ * capture or OCR step fails.
+ */
 export async function captureWaitObservation(
   condition: WaitCondition,
   startedAt: number,

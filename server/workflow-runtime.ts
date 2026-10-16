@@ -25,6 +25,7 @@ const runtime = new Map<string, RuntimeState>();
 const MAX_ITERATIONS = 10000; // Support "run 500 times" scenarios
 const intervalMs = 5_000;
 
+/** Returns (creating if needed) the in-memory runtime state for a workflow. */
 const stateFor = (workflowId: string) => {
   const current = runtime.get(workflowId) ?? { 
     iteration: 0, 
@@ -36,6 +37,7 @@ const stateFor = (workflowId: string) => {
   return current;
 };
 
+/** Computes a randomized, iteration-scaled delay (ms) to avoid detection and handle variable load times. */
 const adaptiveDelay = (iteration: number, baseDelay: number = 1000) => {
   // Add adaptive delays to avoid detection and handle varying load times
   const variance = Math.random() * 0.5 + 0.75; // 0.75x to 1.25x
@@ -43,6 +45,11 @@ const adaptiveDelay = (iteration: number, baseDelay: number = 1000) => {
   return Math.floor(baseDelay * variance * iterationFactor);
 };
 
+/**
+ * Runs a single iteration of a scheduled workflow: executes its primary
+ * plan, tracks success/failure counts and the best learned method, retries
+ * on failure (up to 3 times), and schedules the next run.
+ */
 const runWorkflow = async (workflowId: string, sessionId: string) => {
   const workflow = assistantStateRepository.getWorkflow(workflowId, sessionId);
   if (!workflow || workflow.status !== "active" || !workflow.schedule.enabled)
@@ -173,6 +180,7 @@ const runWorkflow = async (workflowId: string, sessionId: string) => {
 };
 
 export const workflowRuntime = {
+  /** Starts the background interval that triggers due scheduled workflows. */
   start() {
     const timer = setInterval(() => {
       for (const session of assistantStateRepository.listSessions()) {
@@ -188,13 +196,16 @@ export const workflowRuntime = {
     timer.unref?.();
     return timer;
   },
+  /** Returns the current runtime state for a workflow. */
   status(workflowId: string) {
     return stateFor(workflowId);
   },
+  /** Immediately triggers a workflow run outside its normal schedule. */
   runNow(workflowId: string, sessionId: string) {
     runWorkflow(workflowId, sessionId);
     return stateFor(workflowId);
   },
+  /** Marks a workflow's runtime state as manually stopped. */
   stop(workflowId: string) {
     const state = stateFor(workflowId);
     state.running = false;
@@ -202,9 +213,11 @@ export const workflowRuntime = {
     runtime.set(workflowId, state);
     return state;
   },
+  /** Returns the best learned method recorded for a workflow, if any. */
   getBestMethod(workflowId: string) {
     return stateFor(workflowId).bestMethod;
   },
+  /** Resets a workflow's iteration/success/failure counters (e.g. after changing its repeat count). */
   setRepeatCount(workflowId: string, count: number) {
     const state = stateFor(workflowId);
     state.iteration = 0; // Reset iteration when changing repeat count

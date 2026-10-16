@@ -15,6 +15,7 @@ export interface WaitConditionEvaluation {
   confidence?: number;
 }
 
+/** Clamps a wait condition's timeout, poll interval, and confidence threshold to their allowed ranges. */
 export function normalizeWaitCondition(
   condition: WaitCondition,
 ): WaitCondition {
@@ -32,6 +33,11 @@ export function normalizeWaitCondition(
   };
 }
 
+/**
+ * Evaluates whether a (normalized) wait condition is satisfied by the given
+ * observation, returning "met", "timed_out", "pending", or "blocked"
+ * (when the condition lacks approval) along with a status message.
+ */
 export function evaluateWaitCondition(
   condition: WaitCondition,
   observation: WaitConditionObservation,

@@ -32,11 +32,17 @@ interface GameState {
   lastUpdated: number;
 }
 
+/**
+ * Centralized, history-tracking store for the current game automation
+ * state (entities, goals, player position/health) used to detect changes
+ * and drive automation decisions.
+ */
 class GameStateManager {
   private state: GameState;
   private stateHistory: GameState[] = [];
   private maxHistorySize = 50;
 
+  /** Initializes the manager with a default, empty game state. */
   constructor() {
     this.state = {
       gamePhase: "unknown",
@@ -50,6 +56,10 @@ class GameStateManager {
     };
   }
 
+  /**
+   * Snapshots the current state into history, applies `updates`, and
+   * refreshes derived fields (entities map, player position/health).
+   */
   updateState(updates: Partial<GameState>): void {
     // Save current state to history
     this.stateHistory.push({ ...this.state });
@@ -79,14 +89,17 @@ class GameStateManager {
     }
   }
 
+  /** Returns a shallow copy of the current game state. */
   getState(): GameState {
     return { ...this.state };
   }
 
+  /** Returns a copy of the recorded state history. */
   getStateHistory(): GameState[] {
     return [...this.stateHistory];
   }
 
+  /** Adds a new goal, generating its id and creation timestamp. */
   addGoal(goal: Omit<GameGoal, "id" | "createdAt">): string {
     const id = `goal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const newGoal: GameGoal = {
@@ -98,6 +111,7 @@ class GameStateManager {
     return id;
   }
 
+  /** Merges `updates` into the goal matching `id`; returns false if not found. */
   updateGoal(id: string, updates: Partial<GameGoal>): boolean {
     const goal = this.state.goals.get(id);
     if (goal) {
@@ -107,16 +121,19 @@ class GameStateManager {
     return false;
   }
 
+  /** Removes the goal matching `id`; returns false if it did not exist. */
   removeGoal(id: string): boolean {
     return this.state.goals.delete(id);
   }
 
+  /** Returns all tracked entities of the given type. */
   getEntitiesByType(type: GameEntity["type"]): GameEntity[] {
     return Array.from(this.state.entities.values()).filter(
       (e) => e.type === type,
     );
   }
 
+  /** Returns entities within `radius` pixels of `position`. */
   getNearbyEntities(
     position: { x: number; y: number },
     radius: number,
@@ -128,6 +145,10 @@ class GameStateManager {
     });
   }
 
+  /**
+   * Returns true if the state appears to have meaningfully changed since
+   * the last recorded snapshot (entity count, game phase, or pattern count).
+   */
   hasStateChanged(threshold: number = 0.1): boolean {
     if (this.stateHistory.length === 0) return true;
 
@@ -142,6 +163,7 @@ class GameStateManager {
     return false;
   }
 
+  /** Resets the game state and history back to their initial empty values. */
   reset(): void {
     this.state = {
       gamePhase: "unknown",

@@ -16,6 +16,11 @@ const MENU_WIDTH = 220;
 const MENU_HEIGHT = 340;
 const PADDING = 12;
 
+/**
+ * React hook managing a custom right-click context menu's open/position
+ * state, clamping its position within the viewport, and closing it on
+ * outside clicks, scroll, or Escape.
+ */
 export function useContextMenu() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     isOpen: false,
@@ -26,10 +31,15 @@ export function useContextMenu() {
   const [pulsingFileId, setPulsingFileId] = useState<string | null>(null);
   const pulseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  /** Closes the context menu, clearing the selected file. */
   const closeContextMenu = useCallback(() => {
     setContextMenu((prev) => (prev.isOpen ? { ...prev, isOpen: false, file: null } : prev));
   }, []);
 
+  /**
+   * Opens the context menu for `file` at the click position (clamped to
+   * stay within the viewport) and triggers a brief pulse highlight on it.
+   */
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, file: DriveFile) => {
       // 1. Prevent default browser context menu

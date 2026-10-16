@@ -20,6 +20,11 @@ export interface ElementExpectation {
 
 export type ObserverAlertCallback = (nudge: OverseerNudge, note: OverseerLearnedNote) => void;
 
+/**
+ * Singleton that watches the DOM via `MutationObserver` for expected
+ * elements, resolving registered expectations when found or raising an
+ * Overseer alert (with diagnostic recovery suggestions) when they time out.
+ */
 export class BackgroundUIObserver {
   private static instance: BackgroundUIObserver | null = null;
   private mutationObserver: MutationObserver | null = null;
@@ -31,10 +36,12 @@ export class BackgroundUIObserver {
   private isEnabled: boolean = true;
   private audioContext: AudioContext | null = null;
 
+  /** Creates the observer and starts watching the DOM for mutations. */
   constructor() {
     this.initObserver();
   }
 
+  /** Returns the shared `BackgroundUIObserver` singleton, creating it on first use. */
   public static getInstance(): BackgroundUIObserver {
     if (!BackgroundUIObserver.instance) {
       BackgroundUIObserver.instance = new BackgroundUIObserver();
@@ -42,6 +49,7 @@ export class BackgroundUIObserver {
     return BackgroundUIObserver.instance;
   }
 
+  /** Enables or disables the observer, clearing pending expectations when disabled. */
   public setEnabled(enabled: boolean): void {
     this.isEnabled = enabled;
     if (!enabled) {
@@ -49,26 +57,31 @@ export class BackgroundUIObserver {
     }
   }
 
+  /** Returns true when the observer is actively watching the DOM and enabled. */
   public isObserverActive(): boolean {
     return this.isObserving && this.isEnabled;
   }
 
+  /** Sets the default expectation timeout in milliseconds (minimum 500ms). */
   public setDefaultTimeoutMs(timeoutMs: number): void {
     if (timeoutMs >= 500) {
       this.defaultTimeoutMs = timeoutMs;
     }
   }
 
+  /** Returns the current default expectation timeout in milliseconds. */
   public getDefaultTimeoutMs(): number {
     return this.defaultTimeoutMs;
   }
 
+  /** Updates the currently active tab and re-checks pending expectations. */
   public setActiveTab(tab: ActiveSection): void {
     this.currentActiveTab = tab;
     // Check pending expectations when tab changes
     this.checkAllPendingExpectations();
   }
 
+  /** Subscribes to timeout alerts, returning an unsubscribe function. */
   public subscribe(callback: ObserverAlertCallback): () => void {
     this.alertListeners.add(callback);
     return () => {
@@ -76,6 +89,7 @@ export class BackgroundUIObserver {
     };
   }
 
+  /** Sets up the `MutationObserver` watching `document.body` for relevant DOM changes. */
   private initObserver(): void {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
@@ -98,6 +112,11 @@ export class BackgroundUIObserver {
     }
   }
 
+  /**
+   * Registers an expectation that `config.selector` will appear in the DOM,
+   * invoking `onFound` immediately or once detected, or `onTimeout` (and
+   * raising an Overseer alert) if it does not appear within the timeout.
+   */
   public expectElement(config: {
     selector: string;
     stepTitle?: string;
@@ -144,6 +163,7 @@ export class BackgroundUIObserver {
     return id;
   }
 
+  /** Cancels a pending expectation by id, clearing its timeout timer. */
   public cancelExpectation(id: string): void {
     const exp = this.expectations.get(id);
     if (exp) {
@@ -152,6 +172,7 @@ export class BackgroundUIObserver {
     }
   }
 
+  /** Cancels and removes all pending expectations. */
   public clearAllExpectations(): void {
     this.expectations.forEach((exp) => {
       if (exp.timeoutTimer) clearTimeout(exp.timeoutTimer);
@@ -159,10 +180,12 @@ export class BackgroundUIObserver {
     this.expectations.clear();
   }
 
+  /** Returns all expectations that have neither resolved nor timed out. */
   public getActiveExpectations(): ElementExpectation[] {
     return Array.from(this.expectations.values()).filter((e) => !e.resolved && !e.timedOut);
   }
 
+  /** Returns true when `selector` matches a visible element in the DOM. */
   private isElementPresentInDOM(selector: string): boolean {
     if (typeof document === 'undefined') return false;
     try {
@@ -179,6 +202,7 @@ export class BackgroundUIObserver {
     }
   }
 
+  /** Resolves any pending expectations whose selector is now present in the DOM. */
   private checkAllPendingExpectations(): void {
     if (this.expectations.size === 0) return;
 
@@ -195,6 +219,7 @@ export class BackgroundUIObserver {
     });
   }
 
+  /** Plays a short rising alert chime via the Web Audio API, if available. */
   private playAlertChime(): void {
     try {
       if (typeof window !== 'undefined' && 'AudioContext' in window) {
@@ -222,6 +247,11 @@ export class BackgroundUIObserver {
     }
   }
 
+  /**
+   * Handles an expectation's timeout firing: re-checks the DOM once more,
+   * then (if still missing) diagnoses the probable cause and emits an
+   * Overseer nudge/learned-note alert with a suggested recovery action.
+   */
   private handleExpectationTimeout(id: string): void {
     const exp = this.expectations.get(id);
     if (!exp || exp.resolved) return;

@@ -7,19 +7,27 @@ import type {
 } from "@shared/recordings";
 import { DurableStore, type StorageOptions } from "./durable-store";
 
+/** Returns the current time as an ISO-8601 string. */
 const now = () => new Date().toISOString();
+/** Generates a unique id prefixed with `prefix`. */
 const createId = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
+/**
+ * Durable repository for recorded browser sessions, backed by `DurableStore`,
+ * including preview-only operation pack and plan draft generation.
+ */
 export class RecordingRepository {
   private readonly store: DurableStore;
   private recordings = new Map<string, RecordedSession>();
 
+  /** Creates the repository and loads any previously persisted recordings. */
   constructor(options: StorageOptions = {}) {
     this.store = new DurableStore(options);
     this.load();
   }
 
+  /** Reloads the in-memory recordings map from durable storage. */
   private load() {
     this.recordings = new Map(
       this.store
@@ -28,10 +36,12 @@ export class RecordingRepository {
     );
   }
 
+  /** Persists the current recordings map to durable storage. */
   private persist() {
     this.store.writeCollection("recordings", [...this.recordings.values()]);
   }
 
+  /** Starts a new recording session for `sessionId` and persists it. */
   start(
     sessionId: string,
     name: string,
@@ -53,6 +63,7 @@ export class RecordingRepository {
     return recording;
   }
 
+  /** Marks the recording `id` as stopped, setting its `stoppedAt` timestamp. */
   stop(id: string): RecordedSession | undefined {
     this.load();
     const recording = this.recordings.get(id);
@@ -67,6 +78,7 @@ export class RecordingRepository {
     return updated;
   }
 
+  /** Appends `events` to an in-progress recording; returns `undefined` if not recording. */
   append(id: string, events: RecordedAction[]): RecordedSession | undefined {
     this.load();
     const recording = this.recordings.get(id);
@@ -77,6 +89,7 @@ export class RecordingRepository {
     return updated;
   }
 
+  /** Lists recordings, optionally filtered by session id, newest first. */
   list(sessionId?: string): RecordedSession[] {
     this.load();
     return [...this.recordings.values()]
@@ -84,11 +97,13 @@ export class RecordingRepository {
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
+  /** Retrieves a recording by id. */
   get(id: string): RecordedSession | undefined {
     this.load();
     return this.recordings.get(id);
   }
 
+  /** Builds a preview-only operation pack summarizing a recording's actions. */
   createOperationPack(id: string): RecordingOperationPack | undefined {
     const recording = this.get(id);
     if (!recording) return undefined;
@@ -104,6 +119,7 @@ export class RecordingRepository {
     };
   }
 
+  /** Builds a preview-only, step-by-step plan draft from a recording's actions. */
   createPlanDraft(id: string): RecordingPlanDraft | undefined {
     const recording = this.get(id);
     if (!recording) return undefined;
@@ -123,6 +139,7 @@ export class RecordingRepository {
   }
 }
 
+/** Produces a short human-readable description of a recorded action. */
 function describeAction(event: RecordedAction): string {
   switch (event.type) {
     case "mouse-click":

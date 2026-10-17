@@ -1,14 +1,17 @@
+export interface CalibrationCoordinates {
+  x: number;
+  y: number;
+  driftPx?: number;
+}
+
 export interface CoordinateCalibrationProfile {
   offsetX: number;
   offsetY: number;
   scaleX: number;
   scaleY: number;
   dpiScale: number;
-  jitterDamping: number;
-  aspectRatioMode: "16:9" | "19.5:9" | "auto";
-  screenWidth: number;
-  screenHeight: number;
-  lastCalibratedAt: number;
+  resolutionWidth?: number;
+  resolutionHeight?: number;
 }
 
 export const DEFAULT_CALIBRATION_PROFILE: CoordinateCalibrationProfile = {
@@ -16,88 +19,51 @@ export const DEFAULT_CALIBRATION_PROFILE: CoordinateCalibrationProfile = {
   offsetY: 0,
   scaleX: 1.0,
   scaleY: 1.0,
-  dpiScale: typeof window !== "undefined" && window.devicePixelRatio ? window.devicePixelRatio : 1.0,
-  jitterDamping: 1.5,
-  aspectRatioMode: "16:9",
-  screenWidth: 1920,
-  screenHeight: 1080,
-  lastCalibratedAt: Date.now(),
+  dpiScale: 1.0,
+  resolutionWidth: 1920,
+  resolutionHeight: 1080,
 };
 
-const STORAGE_KEY = "sightline_coordinate_calibration";
+const STORAGE_KEY = "sightline_coordinate_calibration_profile";
 
 export function getStoredCalibration(): CoordinateCalibrationProfile {
   if (typeof window === "undefined") return DEFAULT_CALIBRATION_PROFILE;
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      return { ...DEFAULT_CALIBRATION_PROFILE, ...JSON.parse(saved) };
-    }
-  } catch {}
-  return DEFAULT_CALIBRATION_PROFILE;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? { ...DEFAULT_CALIBRATION_PROFILE, ...JSON.parse(raw) } : DEFAULT_CALIBRATION_PROFILE;
+  } catch {
+    return DEFAULT_CALIBRATION_PROFILE;
+  }
 }
 
-export function saveStoredCalibration(profile: Partial<CoordinateCalibrationProfile>): CoordinateCalibrationProfile {
-  const current = getStoredCalibration();
-  const updated: CoordinateCalibrationProfile = {
-    ...current,
-    ...profile,
-    lastCalibratedAt: Date.now(),
-  };
+export function saveStoredCalibration(profile: CoordinateCalibrationProfile): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+  } catch {}
+}
 
-  if (typeof window !== "undefined") {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-      window.dispatchEvent(new CustomEvent("sightline-calibration-updated", { detail: updated }));
-    } catch {}
+export function calibrateCoordinates(
+  xOrCoords: number | { x: number; y: number },
+  yOrOffset?: number | { x?: number; y?: number } | CoordinateCalibrationProfile
+): CalibrationCoordinates {
+  const x = typeof xOrCoords === "number" ? xOrCoords : xOrCoords.x;
+  const y = typeof xOrCoords === "number" ? (typeof yOrOffset === "number" ? yOrOffset : 0) : xOrCoords.y;
+  let offX = 0;
+  let offY = 0;
+  let scaleX = 1.0;
+  let scaleY = 1.0;
 
-    // Sync to backend
-    fetch("/api/ai/coordinate-calibration", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profile: updated }),
-    }).catch(() => {});
+  if (typeof yOrOffset === "object" && yOrOffset !== null) {
+    offX = "offsetX" in yOrOffset ? yOrOffset.offsetX : (yOrOffset.x || 0);
+    offY = "offsetY" in yOrOffset ? yOrOffset.offsetY : (yOrOffset.y || 0);
+    scaleX = "scaleX" in yOrOffset ? yOrOffset.scaleX : 1.0;
+    scaleY = "scaleY" in yOrOffset ? yOrOffset.scaleY : 1.0;
   }
 
-  return updated;
-}
+  const finalX = Math.round((x + offX) * scaleX);
+  const finalY = Math.round((y + offY) * scaleY);
+  const driftPx = Math.round(Math.sqrt(Math.pow(finalX - x, 2) + Math.pow(finalY - y, 2)));
 
-/**
- * Transforms raw x, y coordinates with active calibration parameters (offsets, scale, DPI, jitter damping)
- */
-export function calibrateCoordinates(
-  rawX: number,
-  rawY: number,
-  profile: CoordinateCalibrationProfile = getStoredCalibration()
-): { x: number; y: number; normX: number; normY: number; driftPx: number } {
-  // If normalized (0-1), expand to screen resolution first
-  const baseNorm = rawX <= 1 && rawY <= 1;
-  const targetW = profile.screenWidth || 1920;
-  const targetH = profile.screenHeight || 1080;
-
-  const standardX = baseNorm ? rawX * targetW : rawX;
-  const standardY = baseNorm ? rawY * targetH : rawY;
-
-  // Apply scaling and offsets
-  const calibratedX = (standardX + profile.offsetX) * profile.scaleX;
-  const calibratedY = (standardY + profile.offsetY) * profile.scaleY;
-
-  // Clamped in standard space
-  const clampedX = Math.max(0, Math.min(targetW, Math.round(calibratedX)));
-  const clampedY = Math.max(0, Math.min(targetH, Math.round(calibratedY)));
-
-  const normX = Math.max(0, Math.min(1, clampedX / targetW));
-  const normY = Math.max(0, Math.min(1, clampedY / targetH));
-
-  const driftX = clampedX - standardX;
-  const driftY = clampedY - standardY;
-  const driftPx = Math.sqrt(driftX * driftX + driftY * driftY);
-
-  return {
-    x: clampedX,
-    y: clampedY,
-    normX,
-    normY,
-    driftPx: Math.round(driftPx * 10) / 10,
-  };
+  return { x: finalX, y: finalY, driftPx };
 }

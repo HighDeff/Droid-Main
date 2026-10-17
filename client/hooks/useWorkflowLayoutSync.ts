@@ -1,273 +1,115 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { FlowNode, FlowEdge } from "../components/WorkflowFlowchartView";
-import { toast } from "sonner";
+import { useState, useEffect, useCallback } from "react";
 
-export interface WorkflowLayoutPersistenceData {
-  version: number;
-  timestamp: number;
-  nodes: FlowNode[];
-  edges: FlowEdge[];
-  metadata?: {
-    totalNodes: number;
-    totalEdges: number;
-    viewport?: { x: number; y: number; zoom: number };
-  };
-}
+export const DEFAULT_LAYOUT_STORAGE_KEY = "sightline_workflow_flowchart_layout";
 
-export interface UseWorkflowLayoutSyncOptions {
+export interface LayoutSyncOptions {
   storageKey?: string;
   autoSyncDebounceMs?: number;
-  enableCrossTabSync?: boolean;
-  onSyncSuccess?: (data: WorkflowLayoutPersistenceData) => void;
-  onSyncError?: (error: Error) => void;
 }
 
-export const DEFAULT_LAYOUT_STORAGE_KEY = "sightline_flowchart_layout_v2";
-
-/**
- * Custom hook to synchronize workflow graph layout (node positions, data, and edge connections)
- * to localStorage with debounced persistence, cross-tab sync, and import/export capabilities.
- */
-export function useWorkflowLayoutSync(
-  initialNodes: FlowNode[],
-  initialEdges: FlowEdge[],
-  options: UseWorkflowLayoutSyncOptions = {}
+export function useWorkflowLayoutSync<N = any, E = any>(
+  initialNodes: N[],
+  initialEdges: E[],
+  options: LayoutSyncOptions = {}
 ) {
   const storageKey = options.storageKey || DEFAULT_LAYOUT_STORAGE_KEY;
-  const autoSyncDebounceMs = options.autoSyncDebounceMs ?? 600;
-  const enableCrossTabSync = options.enableCrossTabSync ?? true;
+  const [nodes, setNodes] = useState<N[]>(initialNodes);
+  const [edges, setEdges] = useState<E[]>(initialEdges);
+  const [isSynced, setIsSynced] = useState(true);
+  const [isDirty, setIsDirty] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
 
-  // Primary Graph State
-  const [nodes, setNodes] = useState<FlowNode[]>(initialNodes);
-  const [edges, setEdges] = useState<FlowEdge[]>(initialEdges);
-  const [isLoaded, setIsLoaded] = useState<boolean>(false);
-  const [isDirty, setIsDirty] = useState<boolean>(false);
-  const [lastSavedTimestamp, setLastSavedTimestamp] = useState<number | null>(null);
-  const [isAutoSyncEnabled, setIsAutoSyncEnabled] = useState<boolean>(true);
-
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const isInitialMount = useRef<boolean>(true);
-
-  /**
-   * Load saved layout from localStorage
-   */
-  const loadLayout = useCallback((): boolean => {
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     try {
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) {
-        setNodes(initialNodes);
-        setEdges(initialEdges);
-        setIsLoaded(true);
-        return false;
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.nodes) setNodes(parsed.nodes);
+        if (parsed.edges) setEdges(parsed.edges);
+        setLastSavedAt(parsed.savedAt || null);
       }
+    } catch {}
+  }, [storageKey]);
 
-      const parsed: WorkflowLayoutPersistenceData = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
-        setNodes(parsed.nodes);
-        setEdges(parsed.edges);
-        setLastSavedTimestamp(parsed.timestamp || Date.now());
-        setIsDirty(false);
-        setIsLoaded(true);
-        return true;
-      }
-    } catch (e) {
-      console.warn("[useWorkflowLayoutSync] Failed to parse stored workflow layout:", e);
-      setNodes(initialNodes);
-      setEdges(initialEdges);
-    }
-    setIsLoaded(true);
-    return false;
-  }, [storageKey, initialNodes, initialEdges]);
-
-  /**
-   * Save layout directly to localStorage
-   */
   const saveLayout = useCallback(
-    (customNodes?: FlowNode[], customEdges?: FlowEdge[], notify: boolean = false): boolean => {
+    (newNodes: N[], newEdges: E[]) => {
+      if (typeof window === "undefined") return;
+      const now = new Date().toLocaleTimeString();
       try {
-        const nodesToSave = customNodes || nodes;
-        const edgesToSave = customEdges || edges;
-        const now = Date.now();
-
-        const payload: WorkflowLayoutPersistenceData = {
-          version: 2,
-          timestamp: now,
-          nodes: nodesToSave,
-          edges: edgesToSave,
-          metadata: {
-            totalNodes: nodesToSave.length,
-            totalEdges: edgesToSave.length,
-          },
-        };
-
-        localStorage.setItem(storageKey, JSON.stringify(payload));
-        setLastSavedTimestamp(now);
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify({ nodes: newNodes, edges: newEdges, savedAt: now })
+        );
+        setIsSynced(true);
         setIsDirty(false);
-
-        if (options.onSyncSuccess) {
-          options.onSyncSuccess(payload);
-        }
-
-        if (notify) {
-          toast.success("Workflow graph layout synchronized to local storage");
-        }
-        return true;
-      } catch (err: any) {
-        console.error("[useWorkflowLayoutSync] Save layout error:", err);
-        if (options.onSyncError) {
-          options.onSyncError(err);
-        }
-        if (notify) {
-          toast.error("Failed to save workflow graph layout");
-        }
-        return false;
-      }
+        setLastSavedAt(now);
+      } catch {}
     },
-    [nodes, edges, storageKey, options]
+    [storageKey]
   );
 
-  /**
-   * Reset layout back to default configuration
-   */
+  const updateNodePosition = useCallback(
+    (id: string, pos: { x: number; y: number }) => {
+      setNodes((prev: any[]) => {
+        const next = prev.map((n) =>
+          n.id === id ? { ...n, position: pos } : n
+        );
+        setIsDirty(true);
+        saveLayout(next as N[], edges);
+        return next as N[];
+      });
+    },
+    [edges, saveLayout]
+  );
+
+  const updateNodeData = useCallback(
+    (id: string, data: any) => {
+      setNodes((prev: any[]) => {
+        const next = prev.map((n) =>
+          n.id === id ? { ...n, data: { ...n.data, ...data } } : n
+        );
+        setIsDirty(true);
+        saveLayout(next as N[], edges);
+        return next as N[];
+      });
+    },
+    [edges, saveLayout]
+  );
+
   const resetLayout = useCallback(() => {
     setNodes(initialNodes);
     setEdges(initialEdges);
-    try {
-      localStorage.removeItem(storageKey);
-      setIsDirty(false);
-      setLastSavedTimestamp(Date.now());
-      toast.info("Workflow graph reset to default topology");
-    } catch (e) {
-      console.warn("[useWorkflowLayoutSync] Reset failed:", e);
-    }
-  }, [initialNodes, initialEdges, storageKey]);
+    saveLayout(initialNodes, initialEdges);
+  }, [initialNodes, initialEdges, saveLayout]);
 
-  /**
-   * Update a specific node position and schedule debounced sync
-   */
-  const updateNodePosition = useCallback((nodeId: string, x: number, y: number) => {
-    setNodes((prevNodes) =>
-      prevNodes.map((n) => (n.id === nodeId ? { ...n, x: Math.round(x), y: Math.round(y) } : n))
-    );
-    setIsDirty(true);
-  }, []);
-
-  /**
-   * Update a specific node data fields
-   */
-  const updateNodeData = useCallback((nodeId: string, partialData: Partial<FlowNode["data"]>) => {
-    setNodes((prevNodes) =>
-      prevNodes.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...partialData } } : n))
-    );
-    setIsDirty(true);
-  }, []);
-
-  /**
-   * Export layout as JSON string
-   */
-  const exportLayoutJson = useCallback((): string => {
-    const payload: WorkflowLayoutPersistenceData = {
-      version: 2,
-      timestamp: Date.now(),
-      nodes,
-      edges,
-      metadata: {
-        totalNodes: nodes.length,
-        totalEdges: edges.length,
-      },
-    };
-    return JSON.stringify(payload, null, 2);
+  const exportLayoutJson = useCallback(() => {
+    return JSON.stringify({ nodes, edges, exportedAt: new Date().toISOString() }, null, 2);
   }, [nodes, edges]);
 
-  /**
-   * Import layout from JSON string
-   */
   const importLayoutJson = useCallback(
-    (jsonString: string): boolean => {
+    (json: string) => {
       try {
-        const parsed = JSON.parse(jsonString);
-        if (parsed && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
-          setNodes(parsed.nodes);
-          setEdges(parsed.edges);
-          saveLayout(parsed.nodes, parsed.edges, false);
-          toast.success("Successfully imported workflow layout!");
-          return true;
-        } else {
-          throw new Error("Invalid graph structure in JSON");
-        }
-      } catch (err: any) {
-        toast.error(`Import failed: ${err.message}`);
+        const parsed = JSON.parse(json);
+        if (parsed.nodes) setNodes(parsed.nodes);
+        if (parsed.edges) setEdges(parsed.edges);
+        saveLayout(parsed.nodes || nodes, parsed.edges || edges);
+        return true;
+      } catch {
         return false;
       }
     },
-    [saveLayout]
+    [nodes, edges, saveLayout]
   );
-
-  // Initial load on mount
-  useEffect(() => {
-    loadLayout();
-  }, [loadLayout]);
-
-  // Debounced auto-save on node/edge changes
-  useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      return;
-    }
-
-    if (!isLoaded || !isAutoSyncEnabled) return;
-
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
-
-    debounceTimerRef.current = setTimeout(() => {
-      saveLayout(nodes, edges, false);
-    }, autoSyncDebounceMs);
-
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, [nodes, edges, isLoaded, isAutoSyncEnabled, autoSyncDebounceMs, saveLayout]);
-
-  // Cross-tab synchronization listener
-  useEffect(() => {
-    if (!enableCrossTabSync) return;
-
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === storageKey && e.newValue) {
-        try {
-          const parsed: WorkflowLayoutPersistenceData = JSON.parse(e.newValue);
-          if (parsed && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
-            setNodes(parsed.nodes);
-            setEdges(parsed.edges);
-            setLastSavedTimestamp(parsed.timestamp || Date.now());
-            setIsDirty(false);
-          }
-        } catch (err) {
-          console.warn("[useWorkflowLayoutSync] Error syncing from storage event:", err);
-        }
-      }
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
-  }, [storageKey, enableCrossTabSync]);
 
   return {
     nodes,
-    setNodes,
     edges,
+    setNodes,
     setEdges,
-    isLoaded,
+    isSynced,
     isDirty,
-    lastSavedTimestamp,
-    isAutoSyncEnabled,
-    setIsAutoSyncEnabled,
-    saveLayout,
-    loadLayout,
+    lastSavedAt,
     resetLayout,
     updateNodePosition,
     updateNodeData,

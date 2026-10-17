@@ -300,9 +300,6 @@ export const VirtualDesktopMirrorStudio: React.FC = () => {
     setStreamError(null);
 
     try {
-      if (!navigator?.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-        throw new Error("getUserMedia not supported in this browser context (requires HTTPS or camera permission)");
-      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
         audio: false,
@@ -936,7 +933,7 @@ export const VirtualDesktopMirrorStudio: React.FC = () => {
                                 ))}
                               </div>
                               <form onSubmit={handleExecuteTerminalCommand} className="flex items-center gap-1">
-                                <span className="text-emerald-400 font-bold text-xs">{">"}</span>
+                                <span className="text-emerald-400 font-bold text-xs">&gt;</span>
                                 <input
                                   type="text"
                                   value={terminalInput}

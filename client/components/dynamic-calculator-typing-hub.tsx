@@ -512,6 +512,7 @@ export const DynamicCalculatorTypingHub: React.FC<
                     size="sm"
                     variant="outline"
                     onClick={() => handleDispatchTyping(c.computedAnswer)}
+                    aria-label={`Inject result ${c.computedAnswer} for equation ${c.problemExpression}`}
                     className="h-7 text-[10px] border-purple-800 bg-purple-950/40 text-purple-300 font-mono"
                   >
                     Inject

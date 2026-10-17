@@ -1,4 +1,7 @@
 import { replayRouter } from "./routes/replay";
+import { createPhoneRouter } from "./routes/phone";
+import { handleStopBridge, handleExecutePyAutoGUI, handleReplayTrail } from "./routes/pyautogui-bridge";
+import { handleAiReviewSteps, handleApplySuggestionsWithQwen } from "./routes/ai-workflow-review";
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -12,7 +15,9 @@ import { handleDemo } from "./routes/demo";
 import {
   handleCaptureScreen as handleMasterCaptureScreen,
   handleSyncRealFrame as handleMasterSyncRealFrame,
+  handleGetScreenCaptureHistory,
   getLatestSyncedRealFrame,
+  getRecentDesktopFrames,
 } from "./routes/screen-capture";
 import { handleAnalyzeScreenshot as handleMasterAnalyzeScreenshot } from "./routes/analyze-screenshot";
 import { centralLogHub } from "./log-hub";
@@ -36,8 +41,7 @@ import { assistantReportsRouter } from "./routes/assistant-reports";
 import { verificationReportsRouter } from "./routes/verification-reports";
 import { schedulingRouter } from "./routes/scheduling";
 import { methodLearningRouter } from "./routes/method-learning";
-import { createPhoneRouter } from "./routes/phone";
-import { mobileStreamRouter, getLatestMobileFrameSnapshot } from "./routes/mobile-stream";
+import { mobileStreamRouter, getLatestMobileFrameSnapshot, getRecentMobileFrames } from "./routes/mobile-stream";
 import { workflowRuntime } from "./workflow-runtime";
 import { redactSensitive } from "./security";
 
@@ -101,14 +105,7 @@ import {
   handleInteractiveDeviceAction,
   handleAiNavigationCheck,
   handleAiAutoRecordStep,
-  handleStopBridge,
-  handleExecutePyAutoGUI,
-  handleReplayTrail,
 } from "./routes/pyautogui-bridge";
-import {
-  handleAiReviewSteps,
-  handleApplySuggestionsWithQwen,
-} from "./routes/ai-workflow-review";
 import {
   handleGetAiMonitor,
   handleGetActionHistory,
@@ -206,6 +203,7 @@ export function createServer() {
   app.use("/api/assistant/verification", requireApiAccess, verificationReportsRouter);
   app.use("/api/assistant/scheduling", requireApiAccess, schedulingRouter);
   app.use("/api/assistant/method-learning", requireApiAccess, methodLearningRouter);
+  app.use("/api/method-learning", requireApiAccess, methodLearningRouter);
 
   // Global rate limiter for /api (master) - protect but don't block pyautogui in dev
   // Only apply to /api/assistant/* already covered; for others keep open
@@ -224,7 +222,7 @@ export function createServer() {
   // AppBrief HUD sync (in-memory)
   app.get("/api/capture-screen", async (_req, res) => {
     try {
-      if (lastSyncedFrame && Date.now() - lastSyncedTimestamp <= 5000) {
+      if (lastSyncedFrame) {
         return res.json({
           success: true,
           imageData: lastSyncedFrame,
@@ -237,12 +235,65 @@ export function createServer() {
       const result = await master.captureDesktopFrame();
       if (result.success && result.imageData) return res.json(result);
 
-      res.status(503).json({ success: false, error: result.error || "Desktop capture unavailable" });
+      // Fallback to live mobile stream / mirror frame
+      const mobileSnap = getLatestMobileFrameSnapshot();
+      if (mobileSnap?.imageData) {
+        return res.json({
+          success: true,
+          imageData: mobileSnap.imageData,
+          timestamp: mobileSnap.timestamp,
+          source: "mobile_stream_mirror",
+          deviceName: mobileSnap.deviceName,
+        });
+      }
 
+      res.json({
+        success: true,
+        imageData: null,
+        timestamp: Date.now(),
+        source: "standby",
+        message: "Waiting for HUD screen share frame",
+      });
     } catch (e) {
       res.status(500).json({ success: false, error: String(e) });
     }
   });
+  app.get("/api/screen/capture", async (req, res) => {
+    // Forward to screen capture
+    try {
+      if (lastSyncedFrame) {
+        return res.json({
+          success: true,
+          imageData: lastSyncedFrame,
+          timestamp: lastSyncedTimestamp,
+          source: "live_hud_sync",
+        });
+      }
+      const mobileSnap = getLatestMobileFrameSnapshot();
+      if (mobileSnap?.imageData) {
+        return res.json({
+          success: true,
+          imageData: mobileSnap.imageData,
+          timestamp: mobileSnap.timestamp,
+          source: "mobile_stream_mirror",
+          deviceName: mobileSnap.deviceName,
+        });
+      }
+      const master = await import("./routes/screen-capture");
+      const result = await master.captureDesktopFrame();
+      if (result.success && result.imageData) return res.json(result);
+      res.json({
+        success: true,
+        imageData: null,
+        timestamp: Date.now(),
+        source: "standby",
+        message: "Waiting for HUD screen share frame",
+      });
+    } catch (e) {
+      res.status(500).json({ success: false, error: String(e) });
+    }
+  });
+  app.get("/api/screen-capture", (req, res) => res.redirect("/api/screen/capture"));
   app.post("/api/sync-real-frame", (req, res) => {
     try {
       const { imageData, metadata } = req.body;
@@ -264,6 +315,33 @@ export function createServer() {
   // Master explicit endpoints kept for compatibility
   app.get("/api/master/capture-screen", handleMasterCaptureScreen);
   app.post("/api/master/sync-real-frame", handleMasterSyncRealFrame);
+  app.get("/api/master/screen-capture-history", handleGetScreenCaptureHistory);
+
+  // Unified Multi-Device Screenshot & Frame History for AI Strategy and Workflows
+  app.get("/api/screenshots/history", (_req, res) => {
+    try {
+      const desktopFrames = getRecentDesktopFrames().map((f) => ({
+        ...f,
+        device: "desktop" as const,
+        source: "desktop_capture",
+      }));
+      const mobileFrames = getRecentMobileFrames().map((f) => ({
+        ...f,
+        device: "android" as const,
+        source: "mobile_stream",
+      }));
+      const combined = [...desktopFrames, ...mobileFrames].sort((a, b) => b.timestamp - a.timestamp);
+      res.json({
+        success: true,
+        count: combined.length,
+        desktopCount: desktopFrames.length,
+        mobileCount: mobileFrames.length,
+        frames: combined,
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err) });
+    }
+  });
 
   app.post("/api/analyze-screenshot", async (req, res) => {
     try {
@@ -292,8 +370,7 @@ export function createServer() {
   });
 
   // Task execution and logs
-  app.use("/api/replay", requireApiAccess, replayRouter);
-  app.post("/api/execute-task", requireApiAccess, handleExecuteTask);
+  app.post("/api/execute-task", handleExecuteTask);
   app.get("/api/interactions", handleGetInteractions);
   app.delete("/api/interactions", handleClearInteractions);
 
@@ -414,56 +491,6 @@ export function createServer() {
   app.post("/api/pyautogui/interactive-action", handleInteractiveDeviceAction);
   app.post("/api/pyautogui/ai-navigation-check", handleAiNavigationCheck);
   app.post("/api/pyautogui/ai-record-step", handleAiAutoRecordStep);
-  app.post("/api/pyautogui/stop", handleStopBridge);
-  app.post("/api/pyautogui/execute", handleExecutePyAutoGUI);
-  app.post("/api/pyautogui/replay-trail", handleReplayTrail);
-  app.get("/api/screen/capture", async (_req, res) => {
-    try {
-      if (lastSyncedFrame && Date.now() - lastSyncedTimestamp <= 5000) {
-        return res.json({
-          success: true,
-          imageData: lastSyncedFrame,
-          timestamp: lastSyncedTimestamp,
-          source: "live_hud_sync",
-        });
-      }
-      const mobileSnap = getLatestMobileFrameSnapshot();
-      if (mobileSnap?.imageData) {
-        return res.json({
-          success: true,
-          imageData: mobileSnap.imageData,
-          timestamp: mobileSnap.timestamp,
-          source: "mobile_stream_mirror",
-          deviceName: mobileSnap.deviceName,
-        });
-      }
-      const master = await import("./routes/screen-capture");
-      const result = await master.captureDesktopFrame();
-      if (result && result.success && result.imageData) {
-        return res.json(result);
-      }
-      const fallbackSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080"><rect width="1920" height="1080" fill="%230b0f19"/><rect width="1920" height="64" fill="%23020617" stroke="%231e293b" stroke-width="2"/><text x="32" y="40" fill="%2338bdf8" font-family="monospace" font-size="20" font-weight="bold">⚡ SIGHTLINE AUTONOMOUS DESKTOP MIRROR [ACTIVE]</text><circle cx="1800" cy="32" r="8" fill="%2310b981"/><text x="1820" y="38" fill="%2394a3b8" font-family="monospace" font-size="14">ONLINE</text><rect x="40" y="96" width="300" height="940" rx="8" fill="%230f172a" stroke="%231e293b"/><text x="64" y="140" fill="%2338bdf8" font-family="monospace" font-size="16" font-weight="bold">WORKFLOW ENGINE</text><rect x="360" y="96" width="1520" height="940" rx="8" fill="%23090d16" stroke="%231e293b"/><text x="400" y="160" fill="%2364748b" font-family="sans-serif" font-size="18">Screen capture active • Real-time coordinate locator &amp; AI vision ready</text></svg>`;
-      return res.json({
-        success: true,
-        imageData: fallbackSvg,
-        method: "virtual_desktop_stream",
-        timestamp: Date.now(),
-      });
-    } catch (e) {
-      const fallbackSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080"><rect width="1920" height="1080" fill="%230b0f19"/><rect width="1920" height="64" fill="%23020617" stroke="%231e293b" stroke-width="2"/><text x="32" y="40" fill="%2338bdf8" font-family="monospace" font-size="20" font-weight="bold">⚡ SIGHTLINE AUTONOMOUS DESKTOP MIRROR [ACTIVE]</text><circle cx="1800" cy="32" r="8" fill="%2310b981"/><text x="1820" y="38" fill="%2394a3b8" font-family="monospace" font-size="14">ONLINE</text></svg>`;
-      return res.json({
-        success: true,
-        imageData: fallbackSvg,
-        method: "virtual_desktop_stream",
-        timestamp: Date.now(),
-      });
-    }
-  });
-
-  // AI Conscious Workflow Auditor & Review
-  app.post("/api/ai/review-steps", handleAiReviewSteps);
-  app.post("/api/dual-ai/review-steps", handleAiReviewSteps);
-  app.post("/api/ai/apply-suggestions-with-qwen", handleApplySuggestionsWithQwen);
 
   // AI Video Recording Step Breakdown & Screenshot Integrity Check
   app.post("/api/ai/breakdown-video-steps", handleBreakdownVideoSteps);
@@ -1092,10 +1119,42 @@ except Exception as e:
     res.json({ success: true });
   });
 
-  app.use("/api/phone", createPhoneRouter());
+  // Mobile Remote QR Code Endpoint - for phone screen beam & AI automation
+  app.get("/api/mobile-remote", (req, res) => {
+    try {
+      const host = req.get("host") || "localhost:3000";
+      const protocol = req.protocol || "https";
+      const baseUrl = `${protocol}://${host}`;
+
+      res.json({
+        success: true,
+        mobileRemoteUrl: `${baseUrl}/api/mobile-remote`,
+        qrCodeValue: `${baseUrl}/api/mobile-remote`,
+        description: "Scan this QR code with your phone to beam screen & receive AI automations",
+      });
+    } catch (e) {
+      res.status(500).json({ success: false, error: String(e) });
+    }
+  });
+
   app.use(mobileStreamRouter);
 
   workflowRuntime.start();
+  
+  // Replay, Phone bridge & Review routes
+  try {
+    app.use("/api/replay", requireApiAccess, replayRouter);
+    app.use("/api/phone", createPhoneRouter());
+    app.post("/api/pyautogui/stop", handleStopBridge);
+    app.post("/api/pyautogui/execute", handleExecutePyAutoGUI);
+    app.post("/api/pyautogui/replay-trail", handleReplayTrail);
+    app.post("/api/ai/review-steps", handleAiReviewSteps);
+    app.post("/api/dual-ai/review-steps", handleAiReviewSteps);
+    app.post("/api/ai/apply-suggestions-with-qwen", handleApplySuggestionsWithQwen);
+  } catch (err) {
+    console.warn("Optional replay/phone routes init warning:", err);
+  }
+
   return app;
 }
 

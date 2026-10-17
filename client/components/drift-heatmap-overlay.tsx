@@ -114,7 +114,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
         </defs>
 
         {/* Render Heat Clusters */}
-        {driftPoints.map((point, pIdx) => {
+        {driftPoints.map((point) => {
           const radiusScale =
             point.status === "critical"
               ? Math.max(50, point.driftPx * 4)
@@ -130,7 +130,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
               : "url(#grad-drift-stable)";
 
           return (
-            <g key={`${point.id || "pt"}_${pIdx}`} className="transition-all duration-300">
+            <g key={point.id} className="transition-all duration-300">
               {/* Outer soft heat halo */}
               <circle
                 cx={point.x}
@@ -169,7 +169,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
 
       {/* Interactive Problematic Automation Selector Markers (Pointer-events auto) */}
       <div className="absolute inset-0 pointer-events-none">
-        {driftPoints.map((point, pIdx) => {
+        {driftPoints.map((point) => {
           const leftPercent = (point.x / nativeWidth) * 100;
           const topPercent = (point.y / nativeHeight) * 100;
 
@@ -178,7 +178,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
 
           return (
             <div
-              key={`marker_${point.id || "pt"}_${pIdx}`}
+              key={`marker_${point.id}`}
               style={{
                 left: `${leftPercent}%`,
                 top: `${topPercent}%`,
@@ -331,7 +331,7 @@ export const DriftHeatmapOverlay: React.FC<DriftHeatmapOverlayProps> = ({
                     <span>Stable (≤{Math.round(thresholdPx / 2)}px)</span>
                     <span>Warning</span>
                     <span className="text-red-400 font-bold">
-                      Critical ({">"}{thresholdPx}px)
+                      Critical (&gt;{thresholdPx}px)
                     </span>
                   </div>
                   <div className="h-2 w-full rounded-full bg-gradient-to-r from-emerald-500 via-amber-500 to-red-500 shadow-inner" />

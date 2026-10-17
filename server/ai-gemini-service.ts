@@ -2,48 +2,12 @@ import { GoogleGenAI } from "@google/genai";
 import { centralLogHub } from "./log-hub";
 
 let genAIClient: GoogleGenAI | null = null;
-let rateLimitCooldownUntil = 0;
-
-export function isGeminiInCooldown(): boolean {
-  return Date.now() < rateLimitCooldownUntil;
-}
-
-export function setGeminiCooldown(seconds: number = 25) {
-  rateLimitCooldownUntil = Date.now() + seconds * 1000;
-}
-
-export function handleGeminiError(err: any): void {
-  const msg = (err instanceof Error ? err.message : String(err)) || "";
-  const is429 =
-    msg.includes("429") ||
-    msg.includes("quota") ||
-    msg.includes("RESOURCE_EXHAUSTED") ||
-    msg.includes("rate-limit") ||
-    msg.includes("Quota exceeded") ||
-    msg.includes("Too Many Requests");
-  if (is429) {
-    setGeminiCooldown(30);
-    centralLogHub.addLog(
-      "AI-Quota",
-      "WARN",
-      `Gemini rate limit / quota reached (429). Activating seamless 30s intelligent heuristic fallback engine.`
-    );
-  }
-}
 
 export function getGenAIClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
-  if (isGeminiInCooldown()) return null;
   if (!genAIClient) {
-    genAIClient = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
-    });
+    genAIClient = new GoogleGenAI({ apiKey });
   }
   return genAIClient;
 }
@@ -239,7 +203,6 @@ Return a STRICT JSON response only (no markdown, no backticks, just valid JSON):
       suggestedCorrection: parsed.suggestedCorrection || undefined,
     };
   } catch (err) {
-    handleGeminiError(err);
     centralLogHub.addLog("AI-Verifier", "WARN", `AI Verification fallback: ${err instanceof Error ? err.message : String(err)}`);
     return {
       verified: true,
@@ -344,7 +307,6 @@ Return a STRICT JSON response only:
       aiExplanation: parsed.aiExplanation || "Corrective actions planned.",
     };
   } catch (err) {
-    handleGeminiError(err);
     centralLogHub.addLog("AI-StuckResolver", "ERROR", `Stuck resolution error: ${err instanceof Error ? err.message : String(err)}`);
     return {
       isStuck: true,
@@ -442,7 +404,6 @@ Return a STRICT JSON response only:
       recommendedNextAction: parsed.recommendedNextAction || undefined,
     };
   } catch (err) {
-    handleGeminiError(err);
     return {
       isFinished: remainingStepCount === 0 || timeExceeded,
       nothingLeftToDo: remainingStepCount === 0,
@@ -601,7 +562,6 @@ Return a STRICT JSON response ONLY without markdown:
       primaryActionTarget: parsed.primaryActionTarget || undefined,
     };
   } catch (err) {
-    handleGeminiError(err);
     centralLogHub.addLog(
       "Screen-Detection",
       "WARN",
@@ -732,7 +692,6 @@ Return a STRICT JSON response ONLY:
       suggestedNextStep: parsed.suggestedNextStep || undefined,
     };
   } catch (err) {
-    handleGeminiError(err);
     centralLogHub.addLog(
       "AI-AutoActor",
       "WARN",
@@ -902,7 +861,6 @@ Return a STRICT JSON response ONLY:
       suggestedNewStep: parsed.suggestedNewStep || undefined,
     };
   } catch (err) {
-    handleGeminiError(err);
     centralLogHub.addLog(
       "AI-VisualDiff",
       "WARN",
@@ -1008,7 +966,6 @@ CRITICAL STRICT CONSTRAINTS:
         return result;
       }
     } catch (err) {
-      handleGeminiError(err);
       centralLogHub.addLog(
         "AI-FileSummary",
         "WARN",

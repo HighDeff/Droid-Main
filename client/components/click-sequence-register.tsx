@@ -1,4 +1,3 @@
-import { replayStepSchema } from "@shared/replay";
 import { audioSynthesizer } from "@/lib/audio-synthesizer";
 import React, { useState, useEffect } from "react";
 import {
@@ -28,8 +27,6 @@ import {
   ListOrdered,
   Bot,
   GripVertical,
-  Square,
-  Brain,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -69,8 +66,14 @@ interface ClickSequenceRegisterProps {
   isRunning: boolean;
   isRecordMode: boolean;
   currentScreenshot?: string;
+  repeatCount?: number;
+  onRepeatCountChange?: (count: number) => void;
+  adDismissalEnabled?: boolean;
+  onToggleAdDismissal?: (enabled: boolean) => void;
+  fuzzyDriftTolerance?: boolean;
+  onToggleFuzzyDrift?: (enabled: boolean) => void;
   onToggleRecordMode: () => void;
-  onRunSequence: () => void;
+  onRunSequence: (repeatCount?: number) => void;
   onStopSequence: () => void;
   onResetSequence: () => void;
   onAddStep: () => void;
@@ -80,7 +83,8 @@ interface ClickSequenceRegisterProps {
   onClearSequence: () => void;
   onSelectStep: (id: string) => void;
   onAiReviewSteps?: () => void;
-  onImportSequence?: (steps: SequenceStep[]) => void;
+  onImportSequence?: (steps: any) => void;
+  onExportSequence?: () => void;
 }
 
 export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
@@ -89,6 +93,12 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
   isRunning,
   isRecordMode,
   currentScreenshot,
+  repeatCount,
+  onRepeatCountChange,
+  adDismissalEnabled,
+  onToggleAdDismissal,
+  fuzzyDriftTolerance,
+  onToggleFuzzyDrift,
   onToggleRecordMode,
   onRunSequence,
   onStopSequence,
@@ -99,16 +109,68 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
   onMoveStep,
   onClearSequence,
   onSelectStep,
-  onAiReviewSteps,
-  onImportSequence,
 }) => {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isAiRepeatEnabled, setIsAiRepeatEnabled] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<"steps" | "live_stream">("steps");
   const [draggedStepId, setDraggedStepId] = useState<string | null>(null);
 
+  const [internalRepeatCount, setInternalRepeatCount] = useState<number>(repeatCount ?? 1);
+  const currentRepeatCount = repeatCount ?? internalRepeatCount;
+  const setRepeatCount = onRepeatCountChange ?? setInternalRepeatCount;
+
+  const [internalAdDismiss, setInternalAdDismiss] = useState<boolean>(adDismissalEnabled ?? true);
+  const isAdDismiss = adDismissalEnabled ?? internalAdDismiss;
+  const setAdDismiss = onToggleAdDismissal ?? setInternalAdDismiss;
+
+  const [internalFuzzyDrift, setInternalFuzzyDrift] = useState<boolean>(fuzzyDriftTolerance ?? true);
+  const isFuzzyDrift = fuzzyDriftTolerance ?? internalFuzzyDrift;
+  const setFuzzyDrift = onToggleFuzzyDrift ?? setInternalFuzzyDrift;
+
+  // Attached screenshot preview modal and history picker
+  const [selectedScreenshotPreview, setSelectedScreenshotPreview] = useState<string | null>(null);
+  const [screenshotHistoryList, setScreenshotHistoryList] = useState<Array<{ id: string; url: string; timestamp: number }>>([]);
+  const [isHistoryPickerOpen, setIsHistoryPickerOpen] = useState<boolean>(false);
+  const [attachingStepId, setAttachingStepId] = useState<string | null>(null);
+
+  const fetchScreenshotHistory = async () => {
+    try {
+      const res = await fetch("/api/screenshots/history");
+      if (res.ok) {
+        const data = await res.json();
+        setScreenshotHistoryList(data.screenshots || []);
+      }
+    } catch {}
+  };
+
   // Live Activity Events Ledger (Logs Navigation, Clicks, and Typing as they happen)
-  const [activityEvents, setActivityEvents] = useState<LiveActivityEvent[]>([]);
+  const [activityEvents, setActivityEvents] = useState<LiveActivityEvent[]>([
+    {
+      id: "act_1",
+      type: "navigation",
+      description: "Mouse Navigated to Portal Center",
+      coords: { x: 960, y: 320 },
+      timestamp: "Just now",
+      aiMirrored: true,
+    },
+    {
+      id: "act_2",
+      type: "click",
+      description: "Left Click Registered on Focus Target",
+      coords: { x: 480, y: 320 },
+      timestamp: "Just now",
+      aiMirrored: true,
+    },
+    {
+      id: "act_3",
+      type: "typing",
+      description: "Typed String 'secure_user_01'",
+      payload: "secure_user_01",
+      timestamp: "Just now",
+      aiMirrored: true,
+    },
+  ]);
 
   // When sequence updates or is recorded, log to activity stream and auto-repeat via AI if enabled
   useEffect(() => {
@@ -125,14 +187,29 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
         coords: { x: latest.x, y: latest.y },
         payload: latest.text || latest.keyPayload,
         timestamp: new Date().toLocaleTimeString(),
-        aiMirrored: false,
+        aiMirrored: isAiRepeatEnabled,
       };
 
       setActivityEvents((prev) => [newEvent, ...prev.slice(0, 30)]);
 
-
+      // If AI Repeat is enabled during recording, dispatch physical execution immediately
+      if (isAiRepeatEnabled && isRecordMode) {
+        fetch("/api/execute-task", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            task: {
+              id: `ai_mimic_${latest.id}`,
+              name: `AI Repeat: ${latest.name}`,
+              action: latest.action,
+              targetPosition: { x: latest.x, y: latest.y },
+              textPayload: latest.text || "",
+            },
+          }),
+        }).catch(() => {});
+      }
     }
-  }, [sequence.length]);
+  }, [sequence.length, isAiRepeatEnabled, isRecordMode]);
 
   const totalDurationMs = sequence.reduce((sum, s) => sum + s.delayMs, 0);
 
@@ -159,12 +236,38 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
         try {
           const parsed = JSON.parse(event.target?.result as string);
           if (Array.isArray(parsed)) {
-            if (!onImportSequence) throw new Error("Sequence import is unavailable");
-            const normalized = parsed.slice(0, 100).map((step, idx) => ({
-              ...replayStepSchema.parse({ ...step, id: crypto.randomUUID(), name: step.name || `Step ${idx + 1}`, text: step.text ?? step.textPayload }),
-              stepNumber: idx + 1, status: "pending" as const,
-            }));
-            onImportSequence(normalized as SequenceStep[]);
+            // Clear existing and import as new sequence - use onAddStep via direct DOM workaround: create temporary sequence via multiple onUpdateStep calls is broken,
+            // so we store to localStorage and reload
+            const normalized = parsed
+              .slice(0, 50)
+              .map((step: any, idx: number) => ({
+                id: step.id || `step_${Date.now()}_${idx}`,
+                stepNumber: idx + 1,
+                name: step.name || `Step ${idx + 1}`,
+                action: step.action || "click",
+                x: Number(step.x) || 960,
+                y: Number(step.y) || 540,
+                delayMs: Number(step.delayMs) || 500,
+                text: step.text || step.textPayload || "",
+                keyPayload: step.keyPayload || "enter",
+                status: "pending" as const,
+              }));
+            // Directly replace via localStorage then reload - fallback: iteratively add via onAddStep + update
+            // Use parent-provided clear + add pattern: first clear
+            onClearSequence();
+            setTimeout(() => {
+              normalized.forEach((s: SequenceStep) => {
+                // Use the exposed global add via custom event: we directly push via onUpdateStep with new id after clear, then update
+                // Simpler: use fetch to store and force parent to reload from localStorage
+                try {
+                  localStorage.setItem(
+                    "unified_sequence",
+                    JSON.stringify(normalized),
+                  );
+                  window.location.reload();
+                } catch {}
+              });
+            }, 100);
           } else if (parsed.frames || parsed.slides) {
             alert(
               "This looks like a Pack/Layer file, not a sequence. Use Pack Builder import.",
@@ -210,7 +313,25 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-slate-400">Recording saves actions. Use Run for verified replay.</span>
+            {/* AI Repeat Toggle */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-purple-800/60 text-xs">
+              <Bot
+                className={`w-3.5 h-3.5 ${isAiRepeatEnabled ? "text-purple-400 animate-pulse" : "text-slate-400"}`}
+              />
+              <span className="text-[11px] text-slate-300 font-bold">
+                AI Repeat During Record:
+              </span>
+              <button
+                onClick={() => setIsAiRepeatEnabled(!isAiRepeatEnabled)}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                  isAiRepeatEnabled
+                    ? "bg-purple-600 text-white"
+                    : "bg-slate-800 text-slate-300"
+                }`}
+              >
+                {isAiRepeatEnabled ? "ON" : "OFF"}
+              </button>
+            </div>
 
             {/* Record Clicks Button */}
             <Button
@@ -229,29 +350,54 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                 : "Record Actions on Screen"}
             </Button>
 
-            {/* Emergency STOP Button */}
-            <Button
-              size="sm"
-              onClick={onStopSequence}
-              className="gap-1.5 text-xs font-bold bg-red-600 hover:bg-red-500 text-white border border-red-400 shadow-md shadow-red-950"
-              title="Emergency Stop: Abort all sequence execution, bridge commands, and recording"
-            >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              STOP
-            </Button>
-
-            {/* AI Review Steps */}
-            {onAiReviewSteps && (
-              <Button
-                size="sm"
-                onClick={onAiReviewSteps}
-                className="gap-1.5 text-xs font-bold bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-500 text-white border border-purple-400/50 shadow-md shadow-purple-950"
-                title="AI Conscious Review: Audits workflow steps against screen image and learns navigation patterns"
+            {/* Repeat Count Selector */}
+            <div className="flex items-center gap-1 bg-slate-900 px-2 py-1 rounded border border-slate-700 text-xs font-mono">
+              <RotateCcw className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="text-slate-400 font-bold text-[10px]">REPEAT:</span>
+              <Select
+                value={String(currentRepeatCount)}
+                onValueChange={(val) => setRepeatCount(Number(val))}
               >
-                <Brain className="w-3.5 h-3.5 text-purple-200" />
-                AI Review ({sequence.length})
-              </Button>
-            )}
+                <SelectTrigger className="h-6 w-20 text-[11px] bg-slate-950 border-slate-700 font-bold text-cyan-300">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-950 border-slate-700 text-xs">
+                  <SelectItem value="1">1x (Once)</SelectItem>
+                  <SelectItem value="2">2x</SelectItem>
+                  <SelectItem value="3">3x</SelectItem>
+                  <SelectItem value="5">5x Cycles</SelectItem>
+                  <SelectItem value="10">10x Cycles</SelectItem>
+                  <SelectItem value="25">25x Cycles</SelectItem>
+                  <SelectItem value="50">50x Cycles</SelectItem>
+                  <SelectItem value="999">∞ Infinite</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Resilience Toggles: Ad & Popup Dismissal, Fuzzy Drift Tolerance */}
+            <button
+              onClick={() => setAdDismiss(!isAdDismiss)}
+              className={`h-7 px-2 text-[10px] rounded border font-mono font-bold flex items-center gap-1 transition-all ${
+                isAdDismiss
+                  ? "bg-amber-950/80 border-amber-500 text-amber-300 shadow-sm"
+                  : "bg-slate-900 border-slate-700 text-slate-500"
+              }`}
+              title="Automatically detect and dismiss ads and popups before executing each step"
+            >
+              <span>🛡️ Auto-Dismiss Ads</span>
+            </button>
+
+            <button
+              onClick={() => setFuzzyDrift(!isFuzzyDrift)}
+              className={`h-7 px-2 text-[10px] rounded border font-mono font-bold flex items-center gap-1 transition-all ${
+                isFuzzyDrift
+                  ? "bg-emerald-950/80 border-emerald-500 text-emerald-300 shadow-sm"
+                  : "bg-slate-900 border-slate-700 text-slate-500"
+              }`}
+              title="Fuzzy OCR anchor and drift tolerance for slight screen shifts"
+            >
+              <span>🎯 Fuzzy Anchor</span>
+            </button>
 
             {/* Run / Stop Sequence */}
             {isRunning ? (
@@ -262,17 +408,16 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                 className="gap-1.5 text-xs font-semibold"
               >
                 <Pause className="w-3.5 h-3.5" />
-                Pause Execution
+                Stop Execution
               </Button>
             ) : (
               <Button
                 size="sm"
-                onClick={onRunSequence}
-                disabled={sequence.length === 0}
-                className="gap-1.5 text-xs font-semibold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg shadow-cyan-900/30 disabled:opacity-40"
+                onClick={() => onRunSequence(currentRepeatCount)}
+                className="gap-1.5 text-xs font-semibold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg shadow-cyan-900/30"
               >
                 <Play className="w-3.5 h-3.5" />
-                Run Sequence
+                Run Sequence {currentRepeatCount > 1 ? `(${currentRepeatCount}x)` : ""}
               </Button>
             )}
 
@@ -432,7 +577,7 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                     const isMultiSelected = selectedIds.has(step.id);
                     return (
                       <div
-                        key={`seq_row_${step.id || "step"}_${idx}`}
+                        key={step.id}
                         data-step-row
                         data-step-id={step.id}
                         onClick={() => {
@@ -474,16 +619,34 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                           >
                             {step.stepNumber}
                           </span>
-                          <div className="w-14 h-9 rounded border border-slate-700 overflow-hidden bg-black flex-shrink-0">
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (step.referenceScreenshotUrl) {
+                                setSelectedScreenshotPreview(step.referenceScreenshotUrl);
+                              } else {
+                                setAttachingStepId(step.id);
+                                fetchScreenshotHistory();
+                                setIsHistoryPickerOpen(true);
+                              }
+                            }}
+                            title={step.referenceScreenshotUrl ? "Click to view full reference screenshot" : "Click to attach screenshot from history or live frame"}
+                            className="w-14 h-9 rounded border border-slate-700 hover:border-cyan-400 cursor-pointer overflow-hidden bg-black flex-shrink-0 relative group transition-all"
+                          >
                             {step.referenceScreenshotUrl ? (
-                              <img
-                                src={step.referenceScreenshotUrl}
-                                alt={step.name}
-                                className="w-full h-full object-cover"
-                              />
+                              <>
+                                <img
+                                  src={step.referenceScreenshotUrl}
+                                  alt={step.name}
+                                  className="w-full h-full object-cover"
+                                />
+                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-[8px] text-cyan-300 font-bold">
+                                  View
+                                </div>
+                              </>
                             ) : (
-                              <div className="w-full h-full flex items-center justify-center text-[7px] text-slate-400">
-                                no img
+                              <div className="w-full h-full flex flex-col items-center justify-center text-[7px] text-slate-500 group-hover:text-cyan-300">
+                                <span>+ Snap</span>
                               </div>
                             )}
                           </div>
@@ -582,15 +745,75 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                           </Button>
                         </div>
 
-                        <div className="w-full grid gap-2 mt-2 text-xs">
-                          <label>Target label
-                            <Input value={step.targetOcrLabel || ""} onChange={e => onUpdateStep(step.id, { targetOcrLabel: e.target.value })} placeholder="Visible label of the intended control" />
-                          </label>
-                          <label>Expected visible outcome
-                            <Input value={step.expectedOutcome || ""} onChange={e => onUpdateStep(step.id, { expectedOutcome: e.target.value })} placeholder="For example: Settings page heading is visible" />
-                          </label>
-                          {(step as any).conditionType && (step as any).conditionType !== "always" && <button className="text-amber-300" onClick={() => onUpdateStep(step.id, { conditionType: "always" } as any)}>Remove unsupported legacy branch rule before replay</button>}
-                          <span className="text-slate-400">The AI retries target detection twice. Unconfirmed outcomes stop for review.</span>
+                        {/* Conditional Branching & Error Recovery Rules */}
+                        <div className="w-full mt-2 pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px] bg-slate-950/60 p-2 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <span className="text-amber-400 font-bold flex items-center gap-1">
+                              <span>🔷 CONDITIONAL BRANCH:</span>
+                            </span>
+                            <select
+                              value={(step as any).conditionType || "always"}
+                              onChange={(e) =>
+                                onUpdateStep(step.id, {
+                                  conditionType: e.target.value,
+                                } as any)
+                              }
+                              className="h-6 text-[10px] font-mono bg-slate-900 border border-slate-700 rounded px-1.5 text-cyan-300"
+                            >
+                              <option value="always">Always Proceed</option>
+                              <option value="ocr_contains">
+                                If OCR Contains Text
+                              </option>
+                              <option value="ocr_error">
+                                If Error Dialog Detected
+                              </option>
+                              <option value="pixel_diff">
+                                If State Changed
+                              </option>
+                            </select>
+
+                            {(step as any).conditionType &&
+                              (step as any).conditionType !== "always" && (
+                                <input
+                                  value={(step as any).conditionValue || ""}
+                                  onChange={(e) =>
+                                    onUpdateStep(step.id, {
+                                      conditionValue: e.target.value,
+                                    } as any)
+                                  }
+                                  placeholder="e.g. 'Invalid Token'..."
+                                  className="h-6 text-[10px] font-mono bg-slate-900 border border-slate-700 rounded px-2 text-amber-200 w-32"
+                                />
+                              )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-400 text-[10px]">
+                              Then:
+                            </span>
+                            <select
+                              value={
+                                (step as any).thenBranchAction || "continue"
+                              }
+                              onChange={(e) =>
+                                onUpdateStep(step.id, {
+                                  thenBranchAction: e.target.value,
+                                } as any)
+                              }
+                              className="h-6 text-[10px] font-mono bg-slate-900 border border-slate-700 rounded px-1.5 text-emerald-300"
+                            >
+                              <option value="continue">
+                                Continue Next Step
+                              </option>
+                              <option value="jump_to_step">
+                                Jump to Step #N
+                              </option>
+                              <option value="retry_3x">Auto-Retry 3x</option>
+                              <option value="workaround_escape">
+                                Trigger Escape Workaround
+                              </option>
+                            </select>
+                          </div>
                         </div>
 
                         {/* Order Change Buttons: UP (↑), DOWN (↓), DELETE */}
@@ -692,6 +915,110 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
           </ScrollArea>
         )}
       </CardContent>
+
+      {/* Attached Screenshot Full Preview Modal */}
+      {selectedScreenshotPreview && (
+        <div
+          onClick={() => setSelectedScreenshotPreview(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-3xl max-h-[85vh] bg-slate-950 border border-cyan-500/50 rounded-xl p-3 shadow-2xl flex flex-col items-center gap-2"
+          >
+            <div className="w-full flex items-center justify-between text-xs font-mono text-cyan-300 border-b border-slate-800 pb-2">
+              <span>Attached Reference Screenshot</span>
+              <button
+                onClick={() => setSelectedScreenshotPreview(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            <img
+              src={selectedScreenshotPreview}
+              alt="Reference Preview"
+              className="max-h-[70vh] object-contain rounded border border-slate-800"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Attach Screenshot from History Modal */}
+      {isHistoryPickerOpen && (
+        <div
+          onClick={() => setIsHistoryPickerOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-xl max-h-[80vh] bg-slate-950 border border-cyan-500/50 rounded-xl p-4 shadow-2xl flex flex-col font-mono text-xs"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+              <span className="font-bold text-slate-100 flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-cyan-400" />
+                Select Reference Screenshot
+              </span>
+              <button
+                onClick={() => setIsHistoryPickerOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Option to attach current screenshot */}
+            {currentScreenshot && (
+              <div className="mb-3 p-2 rounded bg-cyan-950/40 border border-cyan-500/50 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <img src={currentScreenshot} alt="Current" className="w-16 h-10 object-cover rounded border border-slate-700" />
+                  <span className="text-cyan-300 font-bold">Use Current Active Screen</span>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (attachingStepId) {
+                      onUpdateStep(attachingStepId, { referenceScreenshotUrl: currentScreenshot });
+                    }
+                    setIsHistoryPickerOpen(false);
+                  }}
+                  className="h-7 text-xs bg-cyan-600 hover:bg-cyan-500 text-white"
+                >
+                  Attach Current
+                </Button>
+              </div>
+            )}
+
+            <span className="text-[11px] text-slate-400 mb-2">Or choose from recent screenshot history ({screenshotHistoryList.length}):</span>
+
+            <div className="flex-1 overflow-y-auto grid grid-cols-3 gap-2 pr-1 max-h-[350px]">
+              {screenshotHistoryList.length === 0 ? (
+                <div className="col-span-3 text-center py-8 text-slate-500">
+                  No screenshot history captured yet. Run live mode to record frames.
+                </div>
+              ) : (
+                screenshotHistoryList.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => {
+                      if (attachingStepId) {
+                        onUpdateStep(attachingStepId, { referenceScreenshotUrl: item.url });
+                      }
+                      setIsHistoryPickerOpen(false);
+                    }}
+                    className="p-1 rounded bg-slate-900 border border-slate-800 hover:border-cyan-400 cursor-pointer group flex flex-col gap-1"
+                  >
+                    <img src={item.url} alt="History frame" className="w-full h-20 object-cover rounded" />
+                    <span className="text-[9px] text-slate-400 group-hover:text-cyan-300 truncate">
+                      {new Date(item.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 };

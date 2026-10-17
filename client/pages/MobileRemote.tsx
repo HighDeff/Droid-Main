@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import { MainAiLiveChat } from "@/components/main-ai-live-chat";
+﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Smartphone,
   Camera,
@@ -64,6 +65,7 @@ import {
   SkipForward,
   Shield,
   Scan,
+  Package,
   Users,
   Grid,
   ZoomIn,
@@ -84,7 +86,15 @@ import { InteractivePhoneVirtualOS } from "@/components/interactive-phone-virtua
 import { ApkAndPwaModal } from "@/components/ApkAndPwaModal";
 import { usePWAInstall } from "@/hooks/usePWAInstall";
 import { InteractiveContextMenu, ContextMenuTarget } from "@/components/interactive-context-menu";
-import { MainAiLiveChat } from "@/components/main-ai-live-chat";
+import { BarcodeInventoryScannerModal } from "@/components/barcode-inventory-scanner-modal";
+import {
+  scanBarcodeFromVideo,
+  lookupBarcodeItem,
+  recordBarcodeScan,
+  playScanBeep,
+  ScannedBarcode,
+  InventoryItem,
+} from "@/lib/barcode-scanner";
 
 export type StreamMode =
   | "interactive_phone"
@@ -195,7 +205,7 @@ export default function MobileRemote() {
   const [fps, setFps] = useState(15);
   const [targetFps, setTargetFps] = useState<number>(15);
   const [framesSent, setFramesSent] = useState(0);
-  const [status, setStatus] = useState<string>("● LIVE: 📱 Interactive Phone OS Active");
+  const [status, setStatus] = useState<string>("â— LIVE: 📱 Interactive Phone OS Active");
   const [lastTouch, setLastTouch] = useState<{ x: number; y: number } | null>(null);
   const [connected, setConnected] = useState(true);
   const [activeActionIndicator, setActiveActionIndicator] = useState<ExecutedActionIndicator | null>(null);
@@ -208,6 +218,43 @@ export default function MobileRemote() {
   const [lastLatencyMs, setLastLatencyMs] = useState<number>(12);
   const [isTemplateDrawerOpen, setIsTemplateDrawerOpen] = useState(false);
   const [activeLinkedApp, setActiveLinkedApp] = useState<LinkedTemplateApp | null>(null);
+
+  // Barcode & Inventory Scanner state
+  const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState<boolean>(false);
+  const [autoBarcodeScan, setAutoBarcodeScan] = useState<boolean>(true);
+  const [detectedBarcode, setDetectedBarcode] = useState<ScannedBarcode | null>(null);
+  const [detectedBarcodeItem, setDetectedBarcodeItem] = useState<InventoryItem | null>(null);
+  const lastBarcodeScanTimeRef = useRef<number>(0);
+  const lastDetectedCodeRef = useRef<string>("");
+
+  // Continuous camera barcode scanner loop
+  useEffect(() => {
+    if (!autoBarcodeScan) return;
+    if (streamMode !== "camera_back" && streamMode !== "camera_front") return;
+    if (!primaryVideoRef.current) return;
+
+    const interval = setInterval(async () => {
+      if (!primaryVideoRef.current || primaryVideoRef.current.readyState < 2) return;
+      try {
+        const result = await scanBarcodeFromVideo(primaryVideoRef.current, canvasRef.current || undefined);
+        if (result && result.rawValue) {
+          const now = Date.now();
+          if (result.rawValue !== lastDetectedCodeRef.current || now - lastBarcodeScanTimeRef.current > 3000) {
+            lastBarcodeScanTimeRef.current = now;
+            lastDetectedCodeRef.current = result.rawValue;
+            setDetectedBarcode(result);
+            playScanBeep(true);
+            toast.success(`ðŸ” Scanned [${result.format}]: ${result.rawValue}`);
+            lookupBarcodeItem(result.rawValue).then((it) => {
+              setDetectedBarcodeItem(it);
+            });
+          }
+        }
+      } catch {}
+    }, 600);
+
+    return () => clearInterval(interval);
+  }, [autoBarcodeScan, streamMode]);
 
   // Standalone App Mode vs Workspace Synced Toggle
   const [isStandaloneApp, setIsStandaloneApp] = useState<boolean>(() => {
@@ -337,105 +384,6 @@ export default function MobileRemote() {
   const [virtualOsCalc, setVirtualOsCalc] = useState<string>("0");
   const [virtualOsNotes, setVirtualOsNotes] = useState<string>("Live interactive notes on mobile bridge");
   const [pcMirrorFrame, setPcMirrorFrame] = useState<string | null>(null);
-
-  // Full Phone Session Recording State
-  const [isFullPhoneRecording, setIsFullPhoneRecording] = useState<boolean>(false);
-  const [fullPhoneRecordDuration, setFullPhoneRecordDuration] = useState<number>(0);
-  const [recordedSessionFrames, setRecordedSessionFrames] = useState<Array<{ timestamp: number; dataUrl: string; label?: string }>>([]);
-  const fullPhoneRecordTimerRef = useRef<any>(null);
-
-  // AI Live Control & Autonomous Copilot State
-  const [isLiveAiControlActive, setIsLiveAiControlActive] = useState<boolean>(false);
-  const [aiLiveGoalPrompt, setAiLiveGoalPrompt] = useState<string>("");
-  const [isAiLiveGoalRunning, setIsAiLiveGoalRunning] = useState<boolean>(false);
-  const [aiLiveStatusBadge, setAiLiveStatusBadge] = useState<string | null>(null);
-
-  // Full Phone Recording Timer
-  useEffect(() => {
-    if (isFullPhoneRecording) {
-      fullPhoneRecordTimerRef.current = setInterval(() => {
-        setFullPhoneRecordDuration((d) => d + 1);
-      }, 1000);
-    } else {
-      if (fullPhoneRecordTimerRef.current) clearInterval(fullPhoneRecordTimerRef.current);
-    }
-    return () => {
-      if (fullPhoneRecordTimerRef.current) clearInterval(fullPhoneRecordTimerRef.current);
-    };
-  }, [isFullPhoneRecording]);
-
-  const handleToggleFullPhoneRecording = () => {
-    if (isFullPhoneRecording) {
-      setIsFullPhoneRecording(false);
-      toast.success(`Full Phone Recording Saved: ${recordedSessionFrames.length} frames captured (${fullPhoneRecordDuration}s)`);
-    } else {
-      setRecordedSessionFrames([]);
-      setFullPhoneRecordDuration(0);
-      setIsFullPhoneRecording(true);
-      toast.info("Full Phone Recording Started: Capturing 60FPS UI & touch interaction traces");
-    }
-  };
-
-  const handleDownloadRecordedSession = () => {
-    if (recordedSessionFrames.length === 0) {
-      toast.warning("No session frames recorded yet. Click 'Record' to capture phone interaction.");
-      return;
-    }
-    const sessionData = {
-      appName: "Sightline Mobile Remote",
-      recordedAt: new Date().toISOString(),
-      durationSeconds: fullPhoneRecordDuration,
-      framesCount: recordedSessionFrames.length,
-      streamMode,
-      activeApp: virtualOsActiveApp,
-      frames: recordedSessionFrames,
-    };
-    const blob = new Blob([JSON.stringify(sessionData, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `sightline-phone-recording-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Recording session package downloaded.");
-  };
-
-  const handleExecuteAiLiveGoal = async (goalText?: string) => {
-    const goal = (goalText || aiLiveGoalPrompt).trim();
-    if (!goal || isAiLiveGoalRunning) return;
-    setIsAiLiveGoalRunning(true);
-    setAiLiveStatusBadge(`AI Goal: "${goal.slice(0, 24)}..."`);
-    toast.info(`Executing AI Live Control: "${goal}"`);
-
-    try {
-      const res = await fetch("/api/ai/main-chat/message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: goal,
-          targetDevice: "android",
-          currentTab: "screen",
-          currentScreenSnapshot: pcMirrorFrame || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast.success(`AI Executed: ${data.message?.content?.slice(0, 60) || "Action completed."}`);
-        setAiLiveStatusBadge("AI: Action Verified");
-        if (data.createdWorkflow) {
-          toast.success(`Generated workflow: ${data.createdWorkflow.name}`);
-        }
-      } else {
-        toast.warning(data.error || "Action queued for device execution.");
-      }
-    } catch {
-      toast.info(`Dispatched AI instruction to mobile bridge: "${goal}"`);
-    } finally {
-      setIsAiLiveGoalRunning(false);
-      setAiLiveGoalPrompt("");
-      setTimeout(() => setAiLiveStatusBadge(null), 4000);
-    }
-  };
 
   // Right-click context menu state on mobile stream
   const [contextMenuTarget, setContextMenuTarget] = useState<ContextMenuTarget | null>(null);
@@ -630,6 +578,40 @@ export default function MobileRemote() {
       workerRef.current.postMessage({ command: "setInterval", interval: intervalMs });
     }
   }, [targetFps, isStreaming]);
+
+  // Auto-connect to server on app load
+  useEffect(() => {
+    const autoConnect = async () => {
+      try {
+        const storedUrl = localStorage.getItem("sightline_server_url");
+        const serverUrl = storedUrl || window.location.origin;
+        
+        const response = await fetch(`${serverUrl}/mobile-remote`, {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            setConnected(true);
+            localStorage.setItem("sightline_server_url", serverUrl);
+            toast.success("Auto-connected to Sightline server");
+          } else {
+            setConnected(false);
+            toast.error("Failed to auto-connect: " + (data.error || "Unknown error"));
+          }
+        } else {
+          setConnected(false);
+        }
+      } catch (error) {
+        setConnected(false);
+        console.warn("Auto-connect failed:", error);
+      }
+    };
+
+    autoConnect();
+  }, []);
 
   // Request & maintain screen wake lock
   const requestWakeLock = useCallback(async () => {
@@ -1050,44 +1032,12 @@ export default function MobileRemote() {
     };
   }, [isStreaming, triggerFrameProcess]);
 
-  // Handle Tab Switch with Instant Device Sync & Mirror Frame Broadcast
-  const handleTabChange = async (newTab: "stream" | "chat" | "docs" | "workflows" | "scheduled" | "pack10" | "actions") => {
-    setActiveTab(newTab);
-    try {
-      await fetch("/api/virtual-os/state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          activeTab: newTab,
-          streamMode,
-          activeApp: virtualOsActiveApp,
-          docCount: uploadedDocs.length,
-          workflowCount: workflows.length,
-          scheduledCount: scheduledWorkflows.length,
-        }),
-      });
-    } catch {}
-
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(
-        new CustomEvent("sightline-virtual-os-sync", {
-          detail: {
-            activeTab: newTab,
-            streamMode,
-            activeApp: virtualOsActiveApp,
-          },
-        })
-      );
-    }
-    triggerFrameProcess();
-  };
-
   // Frame Capture & Sync to PC Engine
   const processFrameTick = async () => {
     if (!canvasRef.current || !isStreamingRef.current) return;
 
     // 1. Synthetic Frame Rendering for Interactive & Live View Modes
-    if (streamModeRef.current === "interactive_phone" || streamModeRef.current === "live_view" || streamModeRef.current === "mirror_pc") {
+    if (streamModeRef.current === "interactive_phone" || streamModeRef.current === "live_view") {
       if (isSendingFrameRef.current) return;
       try {
         isSendingFrameRef.current = true;
@@ -1120,171 +1070,15 @@ export default function MobileRemote() {
 
         ctx.fillStyle = "#38bdf8";
         ctx.font = "bold 12px -apple-system, BlinkMacSystemFont, sans-serif";
-        ctx.fillText(`Sightline Phone • ${activeTab.toUpperCase()}`, 16, 23);
+        ctx.fillText(`Sightline Phone • ${streamModeRef.current === "live_view" ? "LIVE VIEW" : "MIRROR"}`, 16, 23);
 
         const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         ctx.fillStyle = "#94a3b8";
         ctx.font = "11px monospace";
-        ctx.fillText(`98% ⚡ ${timeStr}`, canvas.width - 96, 23);
+        ctx.fillText(`98% âš¡ ${timeStr}`, canvas.width - 96, 23);
 
-        // A. Tab-specific drawing
-        if (activeTab === "chat") {
-          // AI Chat Tab Frame
-          ctx.fillStyle = "#1e112a";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
-          ctx.fill();
-          ctx.strokeStyle = "#ec4899";
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-
-          ctx.fillStyle = "#f472b6";
-          ctx.font = "bold 14px sans-serif";
-          ctx.fillText("✨ Main AI Live Chat & Copilot", 28, 76);
-
-          // Chat Bubbles
-          ctx.fillStyle = "#1e293b";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 110, canvas.width - 64, 120, 12) : ctx.rect(16, 110, canvas.width - 64, 120);
-          ctx.fill();
-          ctx.fillStyle = "#38bdf8";
-          ctx.font = "bold 11px sans-serif";
-          ctx.fillText("🤖 Sightline AI Copilot", 28, 132);
-          ctx.fillStyle = "#f8fafc";
-          ctx.font = "11px sans-serif";
-          ctx.fillText("Live phone automation connected.", 28, 155);
-          ctx.fillText("Ready to dispatch taps, apps, and workflows.", 28, 175);
-
-          ctx.fillStyle = "#065f46";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(64, 250, canvas.width - 80, 60, 12) : ctx.rect(64, 250, canvas.width - 80, 60);
-          ctx.fill();
-          ctx.fillStyle = "#ffffff";
-          ctx.font = "11px sans-serif";
-          ctx.fillText("👤 Switch to Calculator and compute taxes", 76, 285);
-
-          // Chat Input
-          ctx.fillStyle = "#0f172a";
-          ctx.fillRect(16, canvas.height - 110, canvas.width - 32, 45);
-          ctx.strokeStyle = "#ec4899";
-          ctx.strokeRect(16, canvas.height - 110, canvas.width - 32, 45);
-          ctx.fillStyle = "#94a3b8";
-          ctx.font = "11px sans-serif";
-          ctx.fillText("Type command for AI...", 28, canvas.height - 82);
-        } else if (activeTab === "docs") {
-          // Docs Tab Frame
-          ctx.fillStyle = "#1e293b";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
-          ctx.fill();
-          ctx.fillStyle = "#60a5fa";
-          ctx.font = "bold 14px sans-serif";
-          ctx.fillText("📄 Document Grounding & KB", 28, 76);
-
-          ctx.fillStyle = "#0f172a";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 110, canvas.width - 32, 100, 12) : ctx.rect(16, 110, canvas.width - 32, 100);
-          ctx.fill();
-          ctx.fillStyle = "#38bdf8";
-          ctx.font = "bold 12px sans-serif";
-          ctx.fillText("📑 automation_system_manual.pdf", 28, 140);
-          ctx.fillStyle = "#94a3b8";
-          ctx.font = "10px sans-serif";
-          ctx.fillText("24 Pages • Vector Indexed & Semantic Chunked", 28, 165);
-        } else if (activeTab === "scheduled") {
-          // Scheduled Tab Frame
-          ctx.fillStyle = "#2d1b06";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
-          ctx.fill();
-          ctx.fillStyle = "#fbbf24";
-          ctx.font = "bold 14px sans-serif";
-          ctx.fillText("⏰ Scheduled Automation Routines", 28, 76);
-
-          ctx.fillStyle = "#1e293b";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 110, canvas.width - 32, 90, 12) : ctx.rect(16, 110, canvas.width - 32, 90);
-          ctx.fill();
-          ctx.fillStyle = "#fef3c7";
-          ctx.font = "bold 12px sans-serif";
-          ctx.fillText("⚡ Social Feed Sync (Every 15m)", 28, 140);
-          ctx.fillStyle = "#34d399";
-          ctx.font = "10px monospace";
-          ctx.fillText("RUNNING • Next run in 4m 12s", 28, 165);
-        } else if (activeTab === "workflows") {
-          // Workflows Tab Frame
-          ctx.fillStyle = "#1e1b4b";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
-          ctx.fill();
-          ctx.fillStyle = "#a5b4fc";
-          ctx.font = "bold 14px sans-serif";
-          ctx.fillText("⚡ Workflow Orchestrator & Macros", 28, 76);
-
-          ctx.fillStyle = "#1e293b";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 110, canvas.width - 32, 90, 12) : ctx.rect(16, 110, canvas.width - 32, 90);
-          ctx.fill();
-          ctx.fillStyle = "#e0e7ff";
-          ctx.font = "bold 12px sans-serif";
-          ctx.fillText("🚀 Quick App Switch & Form Fill", 28, 140);
-          ctx.fillStyle = "#38bdf8";
-          ctx.font = "10px monospace";
-          ctx.fillText("6 Steps • Ready for Replay", 28, 165);
-        } else if (activeTab === "pack10") {
-          // Pack 10 Tab Frame
-          ctx.fillStyle = "#042f2e";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
-          ctx.fill();
-          ctx.fillStyle = "#2dd4bf";
-          ctx.font = "bold 14px sans-serif";
-          ctx.fillText("📷 10-Differential Frame Sequence", 28, 76);
-
-          ctx.fillStyle = "#1e293b";
-          ctx.fillRect(16, 110, 100, 130);
-          ctx.fillRect(130, 110, 100, 130);
-          ctx.fillRect(244, 110, 100, 130);
-          ctx.fillRect(358, 110, 100, 130);
-          ctx.fillStyle = "#2dd4bf";
-          ctx.font = "bold 12px monospace";
-          ctx.fillText("#1", 55, 180);
-          ctx.fillText("#2", 170, 180);
-          ctx.fillText("#3", 285, 180);
-          ctx.fillText("#4", 400, 180);
-        } else if (activeTab === "actions") {
-          // Actions Tab Frame
-          ctx.fillStyle = "#064e3b";
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(16, 46, canvas.width - 32, 50, 10) : ctx.rect(16, 46, canvas.width - 32, 50);
-          ctx.fill();
-          ctx.fillStyle = "#34d399";
-          ctx.font = "bold 14px sans-serif";
-          ctx.fillText("⚡ ADB & Device Control Surface", 28, 76);
-
-          ctx.fillStyle = "#1e293b";
-          ctx.fillRect(16, 110, 130, 50);
-          ctx.fillRect(160, 110, 130, 50);
-          ctx.fillRect(304, 110, 130, 50);
-          ctx.fillStyle = "#38bdf8";
-          ctx.font = "bold 11px sans-serif";
-          ctx.fillText("◀ BACK", 55, 140);
-          ctx.fillText("🏠 HOME", 200, 140);
-          ctx.fillText("🔀 RECENTS", 335, 140);
-        } else if (streamMode === "mirror_pc") {
-          // PC Mirror Mode
-          ctx.fillStyle = "#0f172a";
-          ctx.fillRect(16, 46, canvas.width - 32, 680);
-          ctx.strokeStyle = "#6366f1";
-          ctx.strokeRect(16, 46, canvas.width - 32, 680);
-          ctx.fillStyle = "#38bdf8";
-          ctx.font = "bold 14px sans-serif";
-          ctx.fillText("🖥️ Desktop PC Viewport Surface", 28, 76);
-          ctx.fillStyle = "#f8fafc";
-          ctx.font = "11px monospace";
-          ctx.fillText("PS C:\\Sightline> adb devices", 28, 110);
-          ctx.fillText("Attached: 1080x1920_ARM64 device [ACTIVE]", 28, 130);
-        } else if (virtualOsActiveApp === "chrome") {
+        // Active App Canvas Drawing
+        if (virtualOsActiveApp === "chrome") {
           // Chrome Browser App
           ctx.fillStyle = "#1e293b";
           ctx.beginPath();
@@ -1296,7 +1090,7 @@ export default function MobileRemote() {
 
           ctx.fillStyle = "#38bdf8";
           ctx.font = "11px monospace";
-          ctx.fillText(`🔒 ${virtualOsAppUrl || "https://google.com"}`, 28, 70);
+          ctx.fillText(`ðŸ”’ ${virtualOsAppUrl || "https://google.com"}`, 28, 70);
 
           ctx.fillStyle = "#0f172a";
           ctx.beginPath();
@@ -1347,69 +1141,11 @@ export default function MobileRemote() {
 
           ctx.fillStyle = "#a5b4fc";
           ctx.font = "bold 16px sans-serif";
-          ctx.fillText("📝 Notes & Workflow Telemetry", 32, 80);
+          ctx.fillText("ðŸ“ Notes & Workflow Telemetry", 32, 80);
 
           ctx.fillStyle = "#f8fafc";
           ctx.font = "12px sans-serif";
           ctx.fillText(virtualOsNotes || "• Live interactive notes on mobile bridge", 32, 120);
-        } else if (virtualOsActiveApp === "camera") {
-          // Camera App
-          ctx.fillStyle = "#020617";
-          ctx.fillRect(16, 46, canvas.width - 32, 640);
-          ctx.strokeStyle = "#10b981";
-          ctx.strokeRect(16, 46, canvas.width - 32, 640);
-          ctx.fillStyle = "#34d399";
-          ctx.font = "bold 16px sans-serif";
-          ctx.fillText("📷 Camera Viewfinder (60 FPS)", 32, 80);
-          ctx.strokeStyle = "#34d399";
-          ctx.beginPath();
-          ctx.arc(canvas.width / 2, 360, 60, 0, Math.PI * 2);
-          ctx.stroke();
-        } else if (virtualOsActiveApp === "terminal") {
-          // Terminal App
-          ctx.fillStyle = "#020617";
-          ctx.fillRect(16, 46, canvas.width - 32, 640);
-          ctx.strokeStyle = "#10b981";
-          ctx.strokeRect(16, 46, canvas.width - 32, 640);
-          ctx.fillStyle = "#10b981";
-          ctx.font = "bold 13px monospace";
-          ctx.fillText("$ adb shell input keyevent KEYCODE_HOME", 32, 80);
-          ctx.fillText("android:sightline_os ARM64 active", 32, 105);
-        } else if (virtualOsActiveApp === "files") {
-          // Files App
-          ctx.fillStyle = "#1e293b";
-          ctx.fillRect(16, 46, canvas.width - 32, 640);
-          ctx.fillStyle = "#f97316";
-          ctx.font = "bold 16px sans-serif";
-          ctx.fillText("📁 Internal Storage (128GB)", 32, 80);
-        } else if (virtualOsActiveApp === "settings") {
-          // Settings App
-          ctx.fillStyle = "#1e293b";
-          ctx.fillRect(16, 46, canvas.width - 32, 640);
-          ctx.fillStyle = "#38bdf8";
-          ctx.font = "bold 16px sans-serif";
-          ctx.fillText("⚙️ Settings & Device Controls", 32, 80);
-        } else if (virtualOsActiveApp === "youtube") {
-          // YouTube App
-          ctx.fillStyle = "#0f172a";
-          ctx.fillRect(16, 46, canvas.width - 32, 640);
-          ctx.fillStyle = "#e11d48";
-          ctx.font = "bold 16px sans-serif";
-          ctx.fillText("▶ YouTube Video Player", 32, 80);
-        } else if (virtualOsActiveApp === "recents" || virtualOsActiveApp === "overview") {
-          // Recents App Switcher
-          ctx.fillStyle = "#0f172a";
-          ctx.fillRect(16, 46, canvas.width - 32, 640);
-          ctx.fillStyle = "#38bdf8";
-          ctx.font = "bold 16px sans-serif";
-          ctx.fillText("🔀 Running Apps (Tap to switch)", 32, 80);
-          ctx.fillStyle = "#1e293b";
-          ctx.fillRect(32, 110, 180, 220);
-          ctx.fillRect(230, 110, 180, 220);
-          ctx.fillStyle = "#38bdf8";
-          ctx.font = "bold 12px sans-serif";
-          ctx.fillText("Chrome", 45, 140);
-          ctx.fillText("Calculator", 245, 140);
         } else {
           // Home Screen with App Grid
           ctx.fillStyle = "rgba(30, 41, 59, 0.85)";
@@ -1422,18 +1158,18 @@ export default function MobileRemote() {
 
           ctx.fillStyle = "#94a3b8";
           ctx.font = "11px sans-serif";
-          ctx.fillText("🔍 Search apps, actions, or ask AI...", 28, 70);
+          ctx.fillText("ðŸ” Search apps, actions, or ask AI...", 28, 70);
 
-          // Draw 8 Quick App Tiles
+          // Draw 6 Quick App Tiles
           const apps = [
-            { name: "Chrome", color: "#2563eb", icon: "🌐", x: 30, y: 110 },
-            { name: "Calc", color: "#d97706", icon: "🔢", x: 140, y: 110 },
-            { name: "Notes", color: "#4f46e5", icon: "📝", x: 250, y: 110 },
-            { name: "Camera", color: "#059669", icon: "📷", x: 360, y: 110 },
-            { name: "Terminal", color: "#0f172a", icon: "⚡", x: 30, y: 220 },
-            { name: "Files", color: "#ea580c", icon: "📁", x: 140, y: 220 },
-            { name: "Settings", color: "#334155", icon: "⚙️", x: 250, y: 220 },
-            { name: "YouTube", color: "#e11d48", icon: "▶️", x: 360, y: 220 },
+            { name: "Chrome", color: "#2563eb", icon: "ðŸŒ", x: 30, y: 110 },
+            { name: "Calc", color: "#d97706", icon: "ðŸ”¢", x: 140, y: 110 },
+            { name: "Notes", color: "#4f46e5", icon: "ðŸ“", x: 250, y: 110 },
+            { name: "Camera", color: "#059669", icon: "ðŸ“·", x: 360, y: 110 },
+            { name: "Terminal", color: "#0f172a", icon: "âš¡", x: 30, y: 220 },
+            { name: "Files", color: "#ea580c", icon: "ðŸ“", x: 140, y: 220 },
+            { name: "Settings", color: "#334155", icon: "âš™ï¸", x: 250, y: 220 },
+            { name: "YouTube", color: "#e11d48", icon: "â–¶ï¸", x: 360, y: 220 },
           ];
 
           apps.forEach((a) => {
@@ -1464,7 +1200,7 @@ export default function MobileRemote() {
 
           ctx.fillStyle = "#38bdf8";
           ctx.font = "bold 13px sans-serif";
-          ctx.fillText("⚡ Scheduled Device Automation", 32, 392);
+          ctx.fillText("âš¡ Scheduled Device Automation", 32, 392);
 
           ctx.fillStyle = "#94a3b8";
           ctx.font = "11px sans-serif";
@@ -1493,7 +1229,7 @@ export default function MobileRemote() {
         ctx.fillStyle = "#94a3b8";
         ctx.font = "bold 14px sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText("◀         ⚪         ◼", canvas.width / 2, canvas.height - 18);
+        ctx.fillText("â—€         âšª         â—¼", canvas.width / 2, canvas.height - 18);
         ctx.textAlign = "left";
 
         const qualityVal = streamQuality === "hd" ? 0.75 : streamQuality === "fast" ? 0.45 : 0.6;
@@ -1669,7 +1405,7 @@ export default function MobileRemote() {
       setConnected(true);
 
       if (mode === "interactive_phone") {
-        setStatus("● LIVE: 📱 Interactive Phone OS Active");
+        setStatus("â— LIVE: 📱 Interactive Phone OS Active");
         requestWakeLock();
         startBackgroundAudioKeepalive();
         toast.success("📱 Interactive Phone OS: Tap, type & automate");
@@ -1677,18 +1413,18 @@ export default function MobileRemote() {
       }
 
       if (mode === "live_view") {
-        setStatus("● LIVE: 👀 Live Telepresence Mirror • Read-Only Inspection");
+        setStatus("â— LIVE: 👁️ Live Telepresence Mirror • Read-Only Inspection");
         requestWakeLock();
         startBackgroundAudioKeepalive();
-        toast.info("👀 Live View Mirror: Read-Only inspection feed");
+        toast.info("👁️ Live View Mirror: Read-Only inspection feed");
         return;
       }
 
       if (mode === "mirror_pc") {
-        setStatus("● LIVE: 🖥️ PC Desktop Screen Mirror & Remote Controller");
+        setStatus("â— LIVE: ðŸ–¥ï¸ PC Desktop Screen Mirror & Remote Controller");
         requestWakeLock();
         startBackgroundAudioKeepalive();
-        toast.info("🖥️ PC Mirror Active: Control PC from phone");
+        toast.info("ðŸ–¥ï¸ PC Mirror Active: Control PC from phone");
         return;
       }
 
@@ -1715,45 +1451,15 @@ export default function MobileRemote() {
       } else {
         // Camera mode (back or front)
         const facing = mode === "camera_front" ? "user" : "environment";
-        try {
-          const nav = typeof window !== "undefined" ? window.navigator : null;
-          if (nav?.mediaDevices && typeof nav.mediaDevices.getUserMedia === "function") {
-            primaryStream = await nav.mediaDevices.getUserMedia({
-              video: {
-                facingMode: facing,
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-                frameRate: { ideal: targetFps },
-              },
-              audio: false,
-            });
-          } else {
-            const legacyGetUserMedia =
-              (nav as any)?.getUserMedia ||
-              (nav as any)?.webkitGetUserMedia ||
-              (nav as any)?.mozGetUserMedia ||
-              (nav as any)?.msGetUserMedia;
-            if (typeof legacyGetUserMedia === "function") {
-              primaryStream = await new Promise<MediaStream>((resolve, reject) => {
-                legacyGetUserMedia.call(
-                  nav,
-                  { video: true, audio: false },
-                  resolve,
-                  reject
-                );
-              });
-            } else {
-              throw new Error("Camera API not available in current security context (HTTPS required)");
-            }
-          }
-        } catch (camErr: any) {
-          toast.warning("Camera hardware unavailable in this browser context. Activated Interactive Phone OS mode.");
-          setStreamMode("interactive_phone");
-          setStatus("● LIVE: 📱 Interactive Phone OS Active (Camera Unavailable)");
-          requestWakeLock();
-          startBackgroundAudioKeepalive();
-          return;
-        }
+        primaryStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: facing,
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: targetFps },
+          },
+          audio: false,
+        });
       }
 
       primaryStreamRef.current = primaryStream;
@@ -1765,7 +1471,7 @@ export default function MobileRemote() {
         await primaryVideoRef.current.play();
       }
 
-      setStatus(`● LIVE: ${mode.toUpperCase()} Stream Active`);
+      setStatus(`â— LIVE: ${mode.toUpperCase()} Stream Active`);
       requestWakeLock();
       startBackgroundAudioKeepalive();
     } catch (err: any) {
@@ -1811,23 +1517,15 @@ export default function MobileRemote() {
       }),
     }).catch(() => {});
 
-    toast.success(`🖥️ Dispatched Click to PC at (${Math.round(relX * 100)}%, ${Math.round(relY * 100)}%)`);
+    toast.success(`ðŸ–¥ï¸ Dispatched Click to PC at (${Math.round(relX * 100)}%, ${Math.round(relY * 100)}%)`);
   };
 
   // Dispatch Action Helper for Mobile Remote
   const sendMobileAction = (act: any) => {
-    const fullAction = {
+    handleExecuteIncomingAction({
       id: `act_${Date.now()}`,
       ...act,
-    };
-    handleExecuteIncomingAction(fullAction);
-
-    // Sync to backend so PC Vision HUD and simulated stream update simultaneously
-    fetch("/api/mobile-stream/actions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actions: [fullAction] }),
-    }).catch(() => {});
+    });
   };
 
   // Interactive Live View Touch Handler (Fully interactive directly through phone)
@@ -1868,7 +1566,7 @@ export default function MobileRemote() {
         deviceMode: "desktop_mirror",
       }),
     }).catch(() => {});
-    toast.success(`⌨️ Typed to PC: "${pcTextInput}"`);
+    toast.success(`âŒ¨ï¸ Typed to PC: "${pcTextInput}"`);
     setPcTextInput("");
   };
 
@@ -1882,13 +1580,13 @@ export default function MobileRemote() {
         deviceMode: "desktop_mirror",
       }),
     }).catch(() => {});
-    toast.success(`⌨️ Sent [${label}] to PC`);
+    toast.success(`âŒ¨ï¸ Sent [${label}] to PC`);
   };
 
   // Windows Key Toggle (Opens/Closes Windows Start Menu & dispatches Win Key)
   const handleToggleWindowsKey = () => {
     setIsPcStartMenuOpen((prev) => !prev);
-    handleSendPcKey("win", "⊞ Windows Key");
+    handleSendPcKey("win", "âŠž Windows Key");
   };
 
   // Windows Desktop Hotkey Combinations (Win+R, Win+D, Win+E, Win+X, Alt+Tab, Ctrl+Alt+Del)
@@ -1914,7 +1612,7 @@ export default function MobileRemote() {
       }),
     }).catch(() => {});
 
-    toast.success(`⌨️ Triggered Shortcut: [${label}]`);
+    toast.success(`âŒ¨ï¸ Triggered Shortcut: [${label}]`);
   };
 
   // Real Screen Sharing (WebRTC / getDisplayMedia) for Phone and PC Desktop
@@ -1930,7 +1628,7 @@ export default function MobileRemote() {
           await realScreenVideoRef.current.play().catch(() => {});
         }
         setIsRealPcScreenActive(true);
-        toast.success("🖥️ Real PC Screen Share Active & Streaming Live!");
+        toast.success("ðŸ–¥ï¸ Real PC Screen Share Active & Streaming Live!");
         stream.getVideoTracks()[0].onended = () => {
           setIsRealPcScreenActive(false);
           toast.info("PC Screen share ended");
@@ -2007,7 +1705,7 @@ export default function MobileRemote() {
           parsedSummary: content.slice(0, 140) + (content.length > 140 ? "..." : ""),
         };
         setUploadedDocs((prev) => [newDocItem, ...prev]);
-        toast.success(`📄 Ingested "${file.name}" for AI task grounding!`);
+        toast.success(`ðŸ“„ Ingested "${file.name}" for AI task grounding!`);
 
         // Notify chat
         setChatMessages((prev) => [
@@ -2016,7 +1714,7 @@ export default function MobileRemote() {
             id: `sys_doc_${Date.now()}`,
             role: "agent",
             agentName: "Vision Co-Pilot",
-            text: `📎 Ingested document "${file.name}" (${(file.size / 1024).toFixed(1)} KB). I will use its instructions and SOPs to guide my actions!`,
+            text: `ðŸ“Ž Ingested document "${file.name}" (${(file.size / 1024).toFixed(1)} KB). I will use its instructions and SOPs to guide my actions!`,
             time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           },
         ]);
@@ -2037,7 +1735,7 @@ export default function MobileRemote() {
         deviceMode: "desktop_mirror",
       }),
     }).catch(() => {});
-    toast.success(`↔️ Dispatched Swipe ${direction.toUpperCase()} to PC`);
+    toast.success(`â†”ï¸ Dispatched Swipe ${direction.toUpperCase()} to PC`);
   };
 
   // Single Snapshot Capture and addition into 10-Screenshots Pack
@@ -2065,7 +1763,7 @@ export default function MobileRemote() {
     };
 
     setTenFramesPack((prev) => [...prev.slice(-9), newFrame]);
-    toast.success(`📸 Added Snapshot #${nextStep} to 10-Pack!`);
+    toast.success(`ðŸ“¸ Added Snapshot #${nextStep} to 10-Pack!`);
   };
 
   // AI Assistant Chat Handler for Mobile Remote
@@ -2090,33 +1788,49 @@ export default function MobileRemote() {
 
     if (lower.includes("snap") || lower.includes("screen") || lower.includes("capture")) {
       handleAddSingleSnapshotTo10Pack("Chat AI Snapshot Trigger");
-      replyText = "📸 Captured snapshot and added to 10-Screenshots Pack for workflow building!";
+      replyText = "ðŸ“¸ Captured snapshot and added to 10-Screenshots Pack for workflow building!";
       actionDone = "Snapshot Captured";
     } else if (lower.includes("calc") || lower.includes("math")) {
       sendMobileAction({ type: "open_app", appName: "Calculator" });
-      replyText = "🧮 Opened Calculator app and ready for math inputs!";
+      replyText = "ðŸ§® Opened Calculator app and ready for math inputs!";
       actionDone = "Launched Calculator";
     } else if (lower.includes("chrome") || lower.includes("search") || lower.includes("browser")) {
       sendMobileAction({ type: "open_app", appName: "Google Chrome", appUrl: "https://google.com" });
-      replyText = "🌐 Launched Google Chrome browser with web navigation active!";
+      replyText = "ðŸŒ Launched Google Chrome browser with web navigation active!";
       actionDone = "Launched Chrome";
     } else if (lower.includes("note") || lower.includes("write")) {
       sendMobileAction({ type: "open_app", appName: "Notes", text: messageText });
-      replyText = "📝 Opened Notes app and synced entry!";
+      replyText = "ðŸ“ Opened Notes app and synced entry!";
       actionDone = "Updated Notes";
+    } else if (lower.includes("settings") || lower.includes("config")) {
+      sendMobileAction({ type: "open_app", appName: "Settings" });
+      replyText = "âš™ï¸ Opened Settings app!";
+      actionDone = "Opened Settings";
     } else if (lower.includes("swipe") || lower.includes("scroll")) {
       const dir = lower.includes("up") ? "swipe_up" : lower.includes("down") ? "swipe_down" : lower.includes("left") ? "swipe_left" : "swipe_right";
       sendMobileAction({ type: "swipe", description: `Swiped ${dir}` });
-      replyText = `↔️ Dispatched swipe gesture (${dir}) across screen!`;
+      replyText = `â†”ï¸ Dispatched swipe gesture (${dir}) across screen!`;
       actionDone = `Swiped ${dir}`;
     } else if (lower.includes("back")) {
       sendMobileAction({ type: "key", key: "BACK", description: "Navigated Back" });
-      replyText = "◀ Dispatched Back navigation key!";
+      replyText = "â—€ Dispatched Back navigation key!";
       actionDone = "Navigated Back";
     } else if (lower.includes("home")) {
       sendMobileAction({ type: "key", key: "HOME", description: "Navigated Home" });
-      replyText = "🏠 Returned to Home Launcher screen!";
+      replyText = "ðŸ  Returned to Home Launcher screen!";
       actionDone = "Navigated Home";
+    } else if (lower.includes("app") || lower.includes("switcher")) {
+      sendMobileAction({ type: "key", key: "APPS", description: "App Switcher" });
+      replyText = "📱 Opened App Switcher!";
+      actionDone = "Opened App Switcher";
+    } else if (lower.includes("vibrate")) {
+      if (navigator.vibrate) navigator.vibrate(50);
+      replyText = "ðŸ“³ Phone vibrated";
+      actionDone = "Vibrated";
+    } else if (lower.includes("volume") || lower.includes("sound")) {
+      sendMobileAction({ type: "key", key: "VOLUME_UP", description: "Volume Up" });
+      replyText = "ðŸ”Š Volume increased";
+      actionDone = "Volume Up";
     } else {
       sendMobileAction({ type: "tap", x: 0.5, y: 0.5, description: messageText });
       replyText = `🤖 AI processed command: "${messageText}". Action executed on device!`;
@@ -2145,7 +1859,7 @@ export default function MobileRemote() {
     setIsRecording10Pack(true);
     setPackProgress(0);
     const frames: DifferentialFrame[] = [];
-    toast.info("📸 Starting 10-Screenshot Workflow Sequence Recording...");
+    toast.info("ðŸ“¸ Starting 10-Screenshot Workflow Sequence Recording...");
 
     try {
       const actionsSequence = [
@@ -2188,7 +1902,7 @@ export default function MobileRemote() {
 
       setTenFramesPack(frames);
       setActiveTab("pack10");
-      toast.success("✅ Recorded 10-Differential Frame Sequence Pack!");
+      toast.success("âœ… Recorded 10-Differential Frame Sequence Pack!");
 
       await fetch("/api/mobile-stream/pack10", {
         method: "POST",
@@ -2214,9 +1928,9 @@ export default function MobileRemote() {
       a.href = dataUrl;
       a.download = `sightline-snapshot-${Date.now()}.png`;
       a.click();
-      toast.success("📷 Snapshot downloaded");
+      toast.success("ðŸ“· Snapshot downloaded");
     } else {
-      toast.info("📷 Snapshot captured & logged to Hub");
+      toast.info("ðŸ“· Snapshot captured & logged to Hub");
     }
   };
 
@@ -2259,7 +1973,7 @@ export default function MobileRemote() {
         }),
       });
       if (res.ok) {
-        toast.success(`✨ Created schedule "${schedFormName}" (Every ${schedFormInterval}m)`);
+        toast.success(`âœ¨ Created schedule "${schedFormName}" (Every ${schedFormInterval}m)`);
         setIsCreateScheduleModalOpen(false);
         fetchScheduledWorkflows();
       }
@@ -2305,7 +2019,7 @@ export default function MobileRemote() {
         }),
       });
       if (res.ok) {
-        toast.success(`✏️ Updated schedule "${schedFormName}"`);
+        toast.success(`âœï¸ Updated schedule "${schedFormName}"`);
         setIsEditScheduleModalOpen(false);
         setEditingScheduleWf(null);
         fetchScheduledWorkflows();
@@ -2320,7 +2034,7 @@ export default function MobileRemote() {
     try {
       const res = await fetch(`/api/mobile-stream/scheduled-workflows/${id}`, { method: "DELETE" });
       if (res.ok) {
-        toast.success("🗑️ Removed scheduled workflow");
+        toast.success("ðŸ—‘ï¸ Removed scheduled workflow");
         fetchScheduledWorkflows();
       }
     } catch {
@@ -2347,7 +2061,7 @@ export default function MobileRemote() {
         }),
       });
       if (res.ok) {
-        toast.success("📅 Converted 10-Snap pack to active schedule!");
+        toast.success("ðŸ“… Converted 10-Snap pack to active schedule!");
         fetchScheduledWorkflows();
         setActiveTab("scheduled");
       }
@@ -2390,7 +2104,7 @@ export default function MobileRemote() {
       if (res.ok) {
         const data = await res.json();
         if (data.success) {
-          toast.success(`⚡ ${data.message || `Workflow ${action}ed`}`);
+          toast.success(`âš¡ ${data.message || `Workflow ${action}ed`}`);
           fetchScheduledWorkflows();
         }
       }
@@ -2404,7 +2118,7 @@ export default function MobileRemote() {
   // Run Synced Workflow on Connected Phone
   const handleExecuteWorkflow = async (wf: SyncedWorkflow) => {
     setExecutingWorkflowId(wf.id);
-    toast.info(`▶ Executing "${wf.name}" on Phone...`);
+    toast.info(`â–¶ Executing "${wf.name}" on Phone...`);
     try {
       for (let i = 0; i < wf.actions.length; i++) {
         const step = wf.actions[i];
@@ -2419,7 +2133,7 @@ export default function MobileRemote() {
         });
         await new Promise((resolve) => setTimeout(resolve, step.durationMs || 900));
       }
-      toast.success(`✅ Completed "${wf.name}" execution`);
+      toast.success(`âœ… Completed "${wf.name}" execution`);
     } catch {
       toast.error("Workflow execution interrupted");
     } finally {
@@ -2448,12 +2162,12 @@ export default function MobileRemote() {
                 <span className={`text-[8px] px-1.5 py-0.5 rounded font-mono border ${
                   isStandaloneApp ? "bg-amber-950 text-amber-300 border-amber-700" : "bg-indigo-950 text-indigo-300 border-indigo-700"
                 }`}>
-                  {isStandaloneApp ? "📱 Standalone" : "🔄 Synced"}
+                  {isStandaloneApp ? "📱 Standalone" : "ðŸ”„ Synced"}
                 </span>
               </h1>
               <p className="text-[10px] text-slate-400 font-mono">
                 {connected ? (
-                  <span className="text-emerald-400 font-bold">● Connected • Latency: {lastLatencyMs}ms</span>
+                  <span className="text-emerald-400 font-bold">â— Connected • Latency: {lastLatencyMs}ms</span>
                 ) : (
                   <span className="text-amber-400 font-bold">Connecting...</span>
                 )}
@@ -2476,25 +2190,14 @@ export default function MobileRemote() {
             >
               <ExternalLink className="w-3 h-3" />
             </Button>
-            <div className="flex items-center gap-0.5 bg-slate-900 border border-slate-700 rounded p-0.5">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setIsApkModalOpen(true)}
-                className="h-6 px-1.5 text-[10px] font-bold text-cyan-300 hover:text-white hover:bg-slate-800 gap-1"
-                title="Open APK & WebAPK Build Guide"
-              >
-                <Smartphone className="w-3 h-3 text-cyan-400" /> APK
-              </Button>
-              <a
-                href="/api/mobile/download-apk-bundle"
-                download="sightline-mobile-apk-project.zip"
-                className="h-6 px-1.5 flex items-center justify-center rounded text-[10px] font-bold text-cyan-400 hover:text-white hover:bg-slate-800"
-                title="Download APK Build Project (.zip)"
-              >
-                <Download className="w-3 h-3" />
-              </a>
-            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIsApkModalOpen(true)}
+              className="h-7 px-2 text-[10px] font-bold border-slate-700 bg-slate-900 hover:bg-slate-800 text-cyan-300 gap-1"
+            >
+              <Download className="w-3 h-3 text-cyan-400" /> APK
+            </Button>
             {isInstallable && (
               <Button
                 size="sm"
@@ -2520,19 +2223,19 @@ export default function MobileRemote() {
                 checked={!isStandaloneApp}
                 onCheckedChange={(checked) => {
                   setIsStandaloneApp(!checked);
-                  toast.info(checked ? "🔄 Synced with Workspace" : "📱 Running as Standalone Companion App");
+                  toast.info(checked ? "ðŸ”„ Synced with Workspace" : "📱 Running as Standalone Companion App");
                 }}
                 className="scale-75 data-[state=checked]:bg-indigo-500"
               />
             </div>
             {/* Auto Switch Back and Forth Toggle */}
             <div className="flex items-center gap-1 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800" title="Auto switch back and forth between stream and background phone app">
-              <span className="text-[8px] text-slate-400">🔄 Auto</span>
+              <span className="text-[8px] text-slate-400">ðŸ”„ Auto</span>
               <Switch
                 checked={autoSwitchMode}
                 onCheckedChange={(checked) => {
                   setAutoSwitchMode(checked);
-                  toast.info(checked ? "🔄 Auto-Switch ON: Keeps app open & syncs phone usage" : "Auto-Switch OFF");
+                  toast.info(checked ? "ðŸ”„ Auto-Switch ON: Keeps app open & syncs phone usage" : "Auto-Switch OFF");
                 }}
                 className="scale-75 data-[state=checked]:bg-emerald-500"
               />
@@ -2546,7 +2249,7 @@ export default function MobileRemote() {
         {/* 7 Main Module Navigation Tabs (Including AI Chat & Document Grounding) */}
         <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-800 gap-1 mt-1 overflow-x-auto no-scrollbar">
           <button
-            onClick={() => handleTabChange("stream")}
+            onClick={() => setActiveTab("stream")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "stream" ? "bg-cyan-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2554,7 +2257,7 @@ export default function MobileRemote() {
             <Video className="w-3 h-3" /> Screen
           </button>
           <button
-            onClick={() => handleTabChange("chat")}
+            onClick={() => setActiveTab("chat")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "chat" ? "bg-pink-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2562,7 +2265,7 @@ export default function MobileRemote() {
             <MessageSquare className="w-3 h-3 text-pink-300" /> AI Chat
           </button>
           <button
-            onClick={() => handleTabChange("docs")}
+            onClick={() => setActiveTab("docs")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "docs" ? "bg-blue-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2573,7 +2276,7 @@ export default function MobileRemote() {
             )}
           </button>
           <button
-            onClick={() => handleTabChange("scheduled")}
+            onClick={() => setActiveTab("scheduled")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "scheduled" ? "bg-amber-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2584,7 +2287,7 @@ export default function MobileRemote() {
             )}
           </button>
           <button
-            onClick={() => handleTabChange("workflows")}
+            onClick={() => setActiveTab("workflows")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "workflows" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2593,7 +2296,7 @@ export default function MobileRemote() {
             <span className="text-[8px] px-1 rounded-full bg-black/40">{workflows.length}</span>
           </button>
           <button
-            onClick={() => handleTabChange("pack10")}
+            onClick={() => setActiveTab("pack10")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "pack10" ? "bg-teal-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2601,7 +2304,7 @@ export default function MobileRemote() {
             <Camera className="w-3 h-3" /> 10-Snap
           </button>
           <button
-            onClick={() => handleTabChange("actions")}
+            onClick={() => setActiveTab("actions")}
             className={`flex-1 py-1 px-1.5 rounded-lg text-[10px] font-mono font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${
               activeTab === "actions" ? "bg-emerald-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
             }`}
@@ -2616,7 +2319,7 @@ export default function MobileRemote() {
         <div className="w-full max-w-md my-1 p-2 rounded-xl bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950 border border-indigo-500/40 flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 rounded-md bg-indigo-600 flex items-center justify-center text-white text-[11px] font-bold">
-              ⚡
+              âš¡
             </div>
             <div className="text-[10px] leading-tight">
               <span className="text-slate-400">Template Connect: </span>
@@ -2624,12 +2327,23 @@ export default function MobileRemote() {
               <span className="text-[9px] text-indigo-300 block">AI automation scoped to this app only</span>
             </div>
           </div>
-          <button
-            onClick={() => setActiveLinkedApp(null)}
-            className="text-[9px] font-mono text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700"
-          >
-            Clear Scope
-          </button>
+          <div className="flex items-center gap-1.5">
+            {activeLinkedApp.id === "app_inventory" && (
+              <Button
+                size="sm"
+                onClick={() => setIsBarcodeModalOpen(true)}
+                className="h-6 px-2 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold gap-1 shadow"
+              >
+                <Scan className="w-3 h-3" /> Scanner Hub
+              </Button>
+            )}
+            <button
+              onClick={() => setActiveLinkedApp(null)}
+              className="text-[9px] font-mono text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700"
+            >
+              Clear Scope
+            </button>
+          </div>
         </div>
       )}
 
@@ -2655,7 +2369,6 @@ export default function MobileRemote() {
                     if (state.notesList && state.notesList.length > 0) {
                       setVirtualOsNotes(state.notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"));
                     }
-                    triggerFrameProcess();
                   }}
                   onActionLogged={(action, details) => {
                     setStatus(`Action: ${action} - ${details}`);
@@ -2724,7 +2437,7 @@ export default function MobileRemote() {
                   <div className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
                     <span className="text-[10px] font-mono font-bold text-cyan-300">
-                      👀 LIVE VIEW MIRROR
+                      👁️ LIVE VIEW MIRROR
                     </span>
                     <Badge className={`text-[8px] py-0 px-1 font-mono ${isAiThinking || isAiExecuting ? "bg-purple-950 text-purple-300 border-purple-600 animate-pulse" : "bg-emerald-950 text-emerald-300 border-emerald-700"}`}>
                       {isAiThinking || isAiExecuting ? "🤖 AI OPERATING" : "👤 USER ACTIVE"}
@@ -2757,7 +2470,7 @@ export default function MobileRemote() {
                     <div className="flex items-center gap-1 text-[9px]">
                       <Wifi className="w-3 h-3 text-emerald-400" />
                       <span>5G</span>
-                      <span>96% ⚡</span>
+                      <span>96% âš¡</span>
                     </div>
                   </div>
 
@@ -2829,7 +2542,7 @@ export default function MobileRemote() {
                       onClick={(e) => {
                         e.stopPropagation();
                         sendMobileAction({ type: "key", key: "BACK", description: "Navigated Back" });
-                        toast.info("◀ Back");
+                        toast.info("â—€ Back");
                       }}
                       className="p-1 hover:text-white"
                     >
@@ -2839,7 +2552,7 @@ export default function MobileRemote() {
                       onClick={(e) => {
                         e.stopPropagation();
                         sendMobileAction({ type: "key", key: "HOME", description: "Navigated Home" });
-                        toast.info("🏠 Home");
+                        toast.info("ðŸ  Home");
                       }}
                       className="p-1 text-cyan-400 hover:text-cyan-300"
                     >
@@ -2849,7 +2562,7 @@ export default function MobileRemote() {
                       onClick={(e) => {
                         e.stopPropagation();
                         sendMobileAction({ type: "key", key: "RECENTS", description: "App Switcher" });
-                        toast.info("📑 Recents");
+                        toast.info("ðŸ“‘ Recents");
                       }}
                       className="p-1 hover:text-white"
                     >
@@ -2931,10 +2644,10 @@ export default function MobileRemote() {
                   <div className="flex items-center gap-1.5">
                     <Laptop className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
                     <span className="text-[10px] font-mono font-bold text-indigo-300">
-                      🖥️ FULL PC DESKTOP (WINDOWS 11)
+                      ðŸ–¥ï¸ FULL PC DESKTOP (WINDOWS 11)
                     </span>
                     <Badge className="bg-indigo-950 text-indigo-300 border-indigo-700 text-[8px] font-mono">
-                      {isRealPcScreenActive ? "📹 Live Stream" : "💻 Virtual OS"}
+                      {isRealPcScreenActive ? "ðŸ“¹ Live Stream" : "ðŸ’» Virtual OS"}
                     </Badge>
                   </div>
                   <div className="flex items-center gap-1">
@@ -3000,7 +2713,7 @@ export default function MobileRemote() {
                               e.stopPropagation();
                               setActivePcWindow(iconItem.app);
                               setIsPcStartMenuOpen(false);
-                              toast.success(`💻 Opened ${iconItem.name} on PC Desktop`);
+                              toast.success(`ðŸ’» Opened ${iconItem.name} on PC Desktop`);
                             }}
                             className="flex flex-col items-center gap-1 p-1.5 rounded-xl hover:bg-white/10 active:scale-95 cursor-pointer transition-all group max-w-[68px]"
                           >
@@ -3036,14 +2749,14 @@ export default function MobileRemote() {
                                 className="w-4 h-4 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[9px] flex items-center justify-center"
                                 title="Minimize"
                               >
-                                ─
+                                â”€
                               </button>
                               <button
                                 onClick={() => setActivePcWindow("desktop")}
                                 className="w-4 h-4 rounded bg-red-600/80 hover:bg-red-500 text-white text-[9px] flex items-center justify-center font-bold"
                                 title="Close"
                               >
-                                ✕
+                                âœ•
                               </button>
                             </div>
                           </div>
@@ -3073,10 +2786,10 @@ export default function MobileRemote() {
                                 <div className="p-2 rounded bg-black border border-slate-800 text-emerald-400 space-y-1">
                                   <p>Microsoft Windows [Version 10.0.22631.3085]</p>
                                   <p>(c) Microsoft Corporation. All rights reserved.</p>
-                                  <p className="text-cyan-300">{"PS C:\\Sightline\\Automation> adb devices"}</p>
+                                  <p className="text-cyan-300">PS C:\Sightline\Automation&gt; adb devices</p>
                                   <p className="text-slate-300">List of devices attached: 1080x1920_ARM64 device</p>
-                                  <p className="text-cyan-300">{"PS C:\\Sightline\\Automation> ai --status"}</p>
-                                  <p className="text-emerald-300">● Sightline Perception + Planner: READY (Zero Drift)</p>
+                                  <p className="text-cyan-300">PS C:\Sightline\Automation&gt; ai --status</p>
+                                  <p className="text-emerald-300">â— Sightline Perception + Planner: READY (Zero Drift)</p>
                                 </div>
                                 <div className="flex gap-1">
                                   <Input
@@ -3104,9 +2817,9 @@ export default function MobileRemote() {
                                   </div>
                                 </div>
                                 <div className="flex items-center justify-between text-[10px] font-mono p-1 bg-slate-900 rounded-lg">
-                                  <Button size="sm" variant="ghost" className="h-6 px-2 text-white">▶ Play</Button>
+                                  <Button size="sm" variant="ghost" className="h-6 px-2 text-white">â–¶ Play</Button>
                                   <span className="text-slate-400">01:45 / 03:20</span>
-                                  <Button size="sm" variant="ghost" className="h-6 px-2 text-white">🔊 100%</Button>
+                                  <Button size="sm" variant="ghost" className="h-6 px-2 text-white">ðŸ”Š 100%</Button>
                                 </div>
                               </div>
                             )}
@@ -3259,7 +2972,7 @@ export default function MobileRemote() {
                             <button
                               onClick={() => {
                                 setIsPcStartMenuOpen(false);
-                                toast.info("🔒 PC Locked");
+                                toast.info("ðŸ”’ PC Locked");
                               }}
                               className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white"
                             >
@@ -3274,7 +2987,7 @@ export default function MobileRemote() {
                         onClick={(e) => e.stopPropagation()}
                         className="h-10 bg-slate-950/95 border-t border-slate-800 rounded-xl flex items-center justify-between px-2 shadow-2xl z-20 backdrop-blur"
                       >
-                        {/* Windows Logo Start Button ⊞ */}
+                        {/* Windows Logo Start Button âŠž */}
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={handleToggleWindowsKey}
@@ -3283,9 +2996,9 @@ export default function MobileRemote() {
                                 ? "bg-cyan-500 text-slate-950 shadow-cyan-950 scale-105"
                                 : "bg-indigo-600 hover:bg-indigo-500 text-white"
                             }`}
-                            title="Windows Start Menu (⊞ Win Key)"
+                            title="Windows Start Menu (âŠž Win Key)"
                           >
-                            ⊞
+                            âŠž
                           </button>
 
                           {/* Search bar widget */}
@@ -3373,9 +3086,9 @@ export default function MobileRemote() {
                         className={`h-5 px-2 text-[9px] font-bold gap-1 shadow-sm ${
                           isPcStartMenuOpen ? "bg-cyan-500 text-black" : "bg-indigo-600 hover:bg-indigo-500 text-white"
                         }`}
-                        title="Windows Key (⊞ Win) - Toggle Start Menu"
+                        title="Windows Key (âŠž Win) - Toggle Start Menu"
                       >
-                        ⊞ Win
+                        âŠž Win
                       </Button>
                       <Button
                         size="sm"
@@ -3419,7 +3132,7 @@ export default function MobileRemote() {
                         onClick={() => handleSendPcKey("enter", "Enter")}
                         className="h-5 px-1.5 text-[8px] font-mono border-slate-700 text-slate-300"
                       >
-                        Enter ↵
+                        Enter â†µ
                       </Button>
                       <Button
                         size="sm"
@@ -3439,7 +3152,7 @@ export default function MobileRemote() {
                         className="h-5 px-1 text-[8px] font-mono border-slate-700 text-cyan-300"
                         title="Scroll Up"
                       >
-                        ▲
+                        â–²
                       </Button>
                       <Button
                         size="sm"
@@ -3448,7 +3161,7 @@ export default function MobileRemote() {
                         className="h-5 px-1 text-[8px] font-mono border-slate-700 text-cyan-300"
                         title="Scroll Down"
                       >
-                        ▼
+                        â–¼
                       </Button>
                       <Button
                         size="sm"
@@ -3457,7 +3170,7 @@ export default function MobileRemote() {
                         className="h-5 px-1 text-[8px] font-mono border-slate-700 text-cyan-300"
                         title="Scroll Left"
                       >
-                        ◄
+                        â—„
                       </Button>
                       <Button
                         size="sm"
@@ -3466,7 +3179,7 @@ export default function MobileRemote() {
                         className="h-5 px-1 text-[8px] font-mono border-slate-700 text-cyan-300"
                         title="Scroll Right"
                       >
-                        ►
+                        â–º
                       </Button>
                     </div>
                   </div>
@@ -3489,20 +3202,116 @@ export default function MobileRemote() {
 
             {/* Camera Viewfinder Overlay when in camera mode */}
             {(streamMode === "camera_back" || streamMode === "camera_front") && (
-              <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-3">
-                <div className="flex items-center justify-between">
+              <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-3 z-20">
+                <div className="flex items-center justify-between pointer-events-auto">
                   <span className="px-2 py-0.5 rounded bg-black/70 text-[9px] font-mono text-teal-300 border border-teal-500/40">
-                    📷 LIVE CAMERA ({streamMode === "camera_front" ? "FRONT" : "REAR"})
+                    ðŸ“· LIVE CAMERA ({streamMode === "camera_front" ? "FRONT" : "REAR"})
                   </span>
-                  <span className="px-2 py-0.5 rounded bg-emerald-950 text-[9px] font-mono text-emerald-400 border border-emerald-500/40">
-                    60 FPS
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setAutoBarcodeScan(!autoBarcodeScan)}
+                      className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border transition-all flex items-center gap-1 ${
+                        autoBarcodeScan
+                          ? "bg-emerald-950 text-emerald-300 border-emerald-500/60 shadow-sm"
+                          : "bg-slate-900/80 text-slate-400 border-slate-700"
+                      }`}
+                      title="Toggle auto barcode detection"
+                    >
+                      <Scan className="w-3 h-3" /> {autoBarcodeScan ? "Barcode ON" : "Barcode OFF"}
+                    </button>
+                    <button
+                      onClick={() => setIsBarcodeModalOpen(true)}
+                      className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[9px] font-bold shadow flex items-center gap-1"
+                    >
+                      <Package className="w-2.5 h-2.5" /> Stock
+                    </button>
+                    <span className="px-2 py-0.5 rounded bg-emerald-950 text-[9px] font-mono text-emerald-400 border border-emerald-500/40">
+                      60 FPS
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center justify-center">
-                  <div className="w-20 h-20 border-2 border-dashed border-teal-400/60 rounded-xl" />
+
+                {/* Reticle with Laser Line */}
+                <div className="relative flex items-center justify-center my-auto">
+                  <div className="w-36 h-36 border-2 border-dashed border-emerald-400/70 rounded-2xl relative shadow-[0_0_15px_rgba(16,185,129,0.2)]">
+                    <div className="w-4 h-4 border-t-2 border-l-2 border-emerald-400 absolute -top-1 -left-1" />
+                    <div className="w-4 h-4 border-t-2 border-r-2 border-emerald-400 absolute -top-1 -right-1" />
+                    <div className="w-4 h-4 border-b-2 border-l-2 border-emerald-400 absolute -bottom-1 -left-1" />
+                    <div className="w-4 h-4 border-b-2 border-r-2 border-emerald-400 absolute -bottom-1 -right-1" />
+                    {autoBarcodeScan && (
+                      <div className="absolute inset-x-2 top-1/2 -translate-y-1/2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_10px_rgba(239,68,68,1)] animate-pulse" />
+                    )}
+                  </div>
                 </div>
-                <div className="text-center text-[9px] font-mono text-slate-400 bg-black/60 p-1 rounded-md">
-                  Point camera at screen or workspace to stream directly to PC HUD
+
+                {/* Floating Detected Barcode Overlay Card */}
+                {detectedBarcode && (
+                  <div className="pointer-events-auto p-2.5 rounded-xl bg-slate-950/95 border-2 border-emerald-500/80 shadow-2xl space-y-1.5 backdrop-blur-md mb-2 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Badge className="bg-emerald-600 text-white text-[9px] font-mono">
+                          {detectedBarcode.format}
+                        </Badge>
+                        <span className="text-[11px] font-mono font-bold text-white truncate max-w-[180px]">
+                          {detectedBarcode.rawValue}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setDetectedBarcode(null)}
+                        className="text-slate-400 hover:text-white p-0.5"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {detectedBarcodeItem && (
+                      <div className="text-[10px] text-cyan-300 font-medium">
+                        {detectedBarcodeItem.name} • Stock: <span className="font-bold text-white">{detectedBarcodeItem.quantity}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1.5 pt-0.5">
+                      <Button
+                        size="sm"
+                        onClick={async () => {
+                          const res = await recordBarcodeScan({
+                            barcode: detectedBarcode.rawValue,
+                            delta: 1,
+                            productName: detectedBarcodeItem?.name,
+                          });
+                          if (res.success && res.item) {
+                            setDetectedBarcodeItem(res.item);
+                            toast.success(`+1 Stock updated (${res.item.quantity} in stock)`);
+                          }
+                        }}
+                        className="h-6 px-2 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold gap-1 shadow"
+                      >
+                        <Plus className="w-3 h-3" /> +1 Stock
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(detectedBarcode.rawValue);
+                          toast.info("Copied barcode to clipboard");
+                        }}
+                        className="h-6 px-2 border-slate-700 text-slate-300 text-[10px]"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => setIsBarcodeModalOpen(true)}
+                        className="h-6 px-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold"
+                      >
+                        Details
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-center text-[9px] font-mono text-slate-300 bg-black/75 p-1 rounded-md border border-slate-800">
+                  {autoBarcodeScan ? "ðŸ” Auto-scanning camera for barcodes & QR codes" : "Point camera at barcode or screen"}
                 </div>
               </div>
             )}
@@ -3609,79 +3418,6 @@ export default function MobileRemote() {
             </button>
           </div>
 
-          {/* AI Live Control & Full Phone Recording Command Deck */}
-          <div className="p-2.5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950/60 to-slate-900 border border-indigo-500/50 shadow-xl space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <div className="p-1 rounded-lg bg-indigo-600/30 text-indigo-400 border border-indigo-500/40">
-                  <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-                </div>
-                <span className="text-[11px] font-bold text-white font-mono">AI Live Control & Copilot</span>
-                {aiLiveStatusBadge && (
-                  <Badge className="bg-indigo-950 text-indigo-300 border-indigo-600 text-[8px] animate-pulse">
-                    {aiLiveStatusBadge}
-                  </Badge>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5">
-                {isFullPhoneRecording ? (
-                  <Button
-                    size="sm"
-                    onClick={handleToggleFullPhoneRecording}
-                    className="h-6 px-2 text-[9px] font-bold bg-red-600 hover:bg-red-500 text-white animate-pulse gap-1"
-                  >
-                    <Square className="w-2.5 h-2.5" /> Stop REC ({fullPhoneRecordDuration}s)
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    onClick={handleToggleFullPhoneRecording}
-                    variant="outline"
-                    className="h-6 px-2 text-[9px] font-bold border-red-500/60 text-red-300 bg-red-950/40 hover:bg-red-900/60 gap-1"
-                  >
-                    <Radio className="w-2.5 h-2.5 text-red-400" /> Full Phone REC
-                  </Button>
-                )}
-                {recordedSessionFrames.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleDownloadRecordedSession}
-                    className="h-6 px-1.5 text-[9px] font-bold text-cyan-300 hover:text-white"
-                    title="Download recorded phone session JSON"
-                  >
-                    <Download className="w-3 h-3" />
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {/* AI Live Goal Input */}
-            <div className="flex items-center gap-1.5">
-              <Input
-                value={aiLiveGoalPrompt}
-                onChange={(e) => setAiLiveGoalPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleExecuteAiLiveGoal();
-                }}
-                placeholder="Ask AI: e.g. 'Open Calculator', 'Type admin', 'Press Home'..."
-                className="h-8 text-xs bg-slate-950 border-slate-700 text-cyan-200 font-mono focus:border-indigo-400"
-              />
-              <Button
-                size="sm"
-                onClick={() => handleExecuteAiLiveGoal()}
-                disabled={isAiLiveGoalRunning || !aiLiveGoalPrompt.trim()}
-                className="h-8 px-3 text-xs font-bold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shrink-0"
-              >
-                {isAiLiveGoalRunning ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Send className="w-3.5 h-3.5" />
-                )}
-              </Button>
-            </div>
-          </div>
-
           {/* Quick Hardware Action Bar */}
           <div className="grid grid-cols-4 gap-1.5">
             <Button
@@ -3697,13 +3433,13 @@ export default function MobileRemote() {
                   setIsRecordingWorkflow((prev) => !prev);
                   if (!isRecordingWorkflow) {
                     setRecordedSteps([]);
-                    toast.info("Workflow Recording Started: Tap apps to record steps");
+                    toast.info("ðŸ”´ Workflow Recording Started: Tap apps to record steps");
                   }
                 } else {
                   handleSwitchStreamSource("interactive_phone");
                   setIsRecordingWorkflow(true);
                   setRecordedSteps([]);
-                  toast.info("Switched to Phone & Started Recording Steps");
+                  toast.info("ðŸ”´ Switched to Phone & Started Recording Steps");
                 }
               }}
               variant="outline"
@@ -3730,27 +3466,6 @@ export default function MobileRemote() {
               <Zap className="w-3 h-3" /> Snap
             </Button>
           </div>
-        </div>
-      )}
-
-      {/* ---------------------------------------------------- */}
-      {/* TAB: MAIN AI CHAT & COPILOT FULL VIEWPORT */}
-      {/* ---------------------------------------------------- */}
-      {activeTab === "chat" && (
-        <div className="w-full max-w-md flex-1 space-y-2.5 my-2">
-          <MainAiLiveChat
-            currentScreenSnapshot={pcMirrorFrame || undefined}
-            currentTab="screen"
-            targetDevice="android"
-            onRunWorkflow={(wf) => {
-              if (wf?.steps) {
-                toast.success(`Loaded workflow "${wf.name}" with ${wf.steps.length} steps`);
-                setActiveTab("workflows");
-              }
-            }}
-            compact={false}
-            className="h-[620px] border-pink-500/40 shadow-2xl"
-          />
         </div>
       )}
 
@@ -3856,7 +3571,7 @@ export default function MobileRemote() {
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
                 <span className="text-[10px] font-mono font-bold text-cyan-300">
-                  ⚡ 10s Completion Checks Active
+                  âš¡ 10s Completion Checks Active
                 </span>
               </div>
               <Badge className="bg-cyan-950 text-cyan-300 border-cyan-700 text-[8px] font-mono">
@@ -3958,7 +3673,7 @@ export default function MobileRemote() {
                     <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden flex gap-0.5">
                       {sw.steps.map((step, idx) => (
                         <div
-                          key={`mob_step_${step.id || "step"}_${idx}`}
+                          key={step.id}
                           className={`flex-1 h-full rounded-full transition-all ${
                             idx < sw.currentStepIndex
                               ? "bg-emerald-400"
@@ -3974,7 +3689,7 @@ export default function MobileRemote() {
 
                     <div className="flex items-center justify-between text-[8px] font-mono text-slate-400">
                       <span>Current: {sw.steps[sw.currentStepIndex]?.description || "Ready"}</span>
-                      {sw.autoHeal && <span className="text-emerald-400">⚡ Auto-Heal ON</span>}
+                      {sw.autoHeal && <span className="text-emerald-400">âš¡ Auto-Heal ON</span>}
                     </div>
                   </div>
 
@@ -4052,6 +3767,11 @@ export default function MobileRemote() {
       {/* ---------------------------------------------------- */}
       {/* TAB 3: WORKFLOWS MANAGER */}
       {/* ---------------------------------------------------- */}
+      {activeTab === "chat" && (
+        <div className="flex-1 min-h-0 bg-slate-950 p-2 overflow-hidden flex flex-col">
+          <MainAiLiveChat targetDevice="android" />
+        </div>
+      )}
       {activeTab === "workflows" && (
         <div className="w-full max-w-md flex-1 space-y-2.5 my-2">
           <div className="flex items-center justify-between bg-slate-900 p-2.5 rounded-xl border border-slate-800">
@@ -4270,7 +3990,7 @@ export default function MobileRemote() {
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
               <div className="flex items-center gap-2">
                 <div className="w-7 h-7 rounded-xl bg-amber-600 flex items-center justify-center text-white font-bold">
-                  ⚡
+                  âš¡
                 </div>
                 <div>
                   <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -4297,7 +4017,10 @@ export default function MobileRemote() {
                   onClick={() => {
                     setActiveLinkedApp(app);
                     setIsTemplateDrawerOpen(false);
-                    toast.success(`⚡ Template Connected: Scoped to "${app.name}"`);
+                    if (app.id === "app_inventory") {
+                      setIsBarcodeModalOpen(true);
+                    }
+                    toast.success(`âš¡ Template Connected: Scoped to "${app.name}"`);
                   }}
                   className={`p-3 rounded-2xl border transition-all cursor-pointer flex flex-col gap-2 ${
                     activeLinkedApp?.id === app.id
@@ -4335,7 +4058,7 @@ export default function MobileRemote() {
                         key={cap}
                         className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-slate-950 text-slate-300 border border-slate-800"
                       >
-                        ✓ {cap}
+                        âœ“ {cap}
                       </span>
                     ))}
                   </div>
@@ -4464,7 +4187,7 @@ export default function MobileRemote() {
                     setWorkflows((prev) => [newWf, ...prev]);
                     setIsCreateWfModalOpen(false);
                     setRecordedSteps([]);
-                    toast.success("✅ Saved workflow to cloud repository");
+                    toast.success("âœ… Saved workflow to cloud repository");
                   } catch {
                     toast.error("Failed saving workflow");
                   }
@@ -4533,7 +4256,7 @@ export default function MobileRemote() {
 
                 <div className="flex flex-col justify-end">
                   <div className="flex items-center justify-between p-1.5 rounded-lg bg-slate-950 border border-slate-800">
-                    <span className="text-[9px] font-mono text-slate-300">⚡ Auto-Heal</span>
+                    <span className="text-[9px] font-mono text-slate-300">âš¡ Auto-Heal</span>
                     <Switch
                       checked={schedFormAutoHeal}
                       onCheckedChange={setSchedFormAutoHeal}
@@ -4562,7 +4285,7 @@ export default function MobileRemote() {
                 <div className="space-y-1.5 max-h-40 overflow-y-auto">
                   {schedFormSteps.map((step, idx) => (
                     <div
-                      key={`sched_step_${step.id || "step"}_${idx}`}
+                      key={step.id}
                       className="p-2 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs text-slate-300"
                     >
                       <div className="flex items-center justify-between">
@@ -4700,7 +4423,7 @@ export default function MobileRemote() {
 
                 <div className="flex flex-col justify-end">
                   <div className="flex items-center justify-between p-1.5 rounded-lg bg-slate-950 border border-slate-800">
-                    <span className="text-[9px] font-mono text-slate-300">⚡ Auto-Heal</span>
+                    <span className="text-[9px] font-mono text-slate-300">âš¡ Auto-Heal</span>
                     <Switch
                       checked={schedFormAutoHeal}
                       onCheckedChange={setSchedFormAutoHeal}
@@ -4729,7 +4452,7 @@ export default function MobileRemote() {
                 <div className="space-y-1.5 max-h-40 overflow-y-auto">
                   {schedFormSteps.map((step, idx) => (
                     <div
-                      key={`sched_step_edit_${step.id || "step"}_${idx}`}
+                      key={step.id}
                       className="p-2 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs text-slate-300"
                     >
                       <div className="flex items-center justify-between">
@@ -4862,6 +4585,19 @@ export default function MobileRemote() {
           toast.success(`Tagged phone entity (${x}, ${y}) as ${type.toUpperCase()}`);
         }}
       />
+
+      {/* Barcode & Inventory Scanner Dialog */}
+      <BarcodeInventoryScannerModal
+        isOpen={isBarcodeModalOpen}
+        onClose={() => setIsBarcodeModalOpen(false)}
+        videoElement={primaryVideoRef.current}
+        initialBarcode={detectedBarcode?.rawValue}
+        onBarcodeDetected={(barcode, item) => {
+          setDetectedBarcode(barcode);
+          if (item) setDetectedBarcodeItem(item);
+        }}
+      />
     </div>
   );
 }
+

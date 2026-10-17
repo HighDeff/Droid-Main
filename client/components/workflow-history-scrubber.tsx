@@ -270,6 +270,7 @@ export const WorkflowHistoryScrubber: React.FC<WorkflowHistoryScrubberProps> = (
           <Button
             size="sm"
             variant="outline"
+            aria-label="Previous step in minimized scrubber"
             onClick={() => handleScrubChange(Math.max(0, activeIndex - 1))}
             disabled={activeIndex <= 0}
             className="h-6 w-6 p-0 bg-slate-900 border-slate-700"
@@ -280,6 +281,7 @@ export const WorkflowHistoryScrubber: React.FC<WorkflowHistoryScrubberProps> = (
           <Button
             size="sm"
             variant="outline"
+            aria-label="Next step in minimized scrubber"
             onClick={() => handleScrubChange(Math.min(steps.length - 1, activeIndex + 1))}
             disabled={activeIndex >= steps.length - 1}
             className="h-6 w-6 p-0 bg-slate-900 border-slate-700"
@@ -290,6 +292,7 @@ export const WorkflowHistoryScrubber: React.FC<WorkflowHistoryScrubberProps> = (
           <Button
             size="sm"
             onClick={() => setIsMinimized(false)}
+            aria-label="Expand Workflow Scrubber"
             className="h-6 px-2 text-[10px] bg-cyan-700 hover:bg-cyan-600 text-white font-bold"
           >
             Expand Scrubber
@@ -300,6 +303,7 @@ export const WorkflowHistoryScrubber: React.FC<WorkflowHistoryScrubberProps> = (
               onClick={onClose}
               className="text-slate-400 hover:text-white px-1 text-xs font-bold"
               title="Close Scrubber"
+              aria-label="Close Workflow Scrubber"
             >
               ✕
             </button>
@@ -371,6 +375,7 @@ export const WorkflowHistoryScrubber: React.FC<WorkflowHistoryScrubberProps> = (
           <Button
             size="sm"
             variant="outline"
+            aria-label="Previous step in workflow scrubber"
             onClick={() => handleScrubChange(Math.max(0, activeIndex - 1))}
             disabled={activeIndex <= 0}
             className="h-7 w-7 p-0 border-slate-700 text-slate-300 hover:text-white bg-slate-900"
@@ -381,6 +386,7 @@ export const WorkflowHistoryScrubber: React.FC<WorkflowHistoryScrubberProps> = (
           <Button
             size="sm"
             variant="outline"
+            aria-label={isPlaying ? "Pause Workflow Scrubber playback" : "Play Flow in Workflow Scrubber"}
             onClick={() => setIsPlaying(!isPlaying)}
             className="h-7 px-2 text-xs border-cyan-800 text-cyan-300 hover:bg-cyan-950/80 bg-slate-900 gap-1 font-mono"
           >
@@ -391,6 +397,7 @@ export const WorkflowHistoryScrubber: React.FC<WorkflowHistoryScrubberProps> = (
           <Button
             size="sm"
             variant="outline"
+            aria-label="Next step in workflow scrubber"
             onClick={() => handleScrubChange(Math.min(steps.length - 1, activeIndex + 1))}
             disabled={activeIndex >= steps.length - 1}
             className="h-7 w-7 p-0 border-slate-700 text-slate-300 hover:text-white bg-slate-900"
@@ -404,6 +411,7 @@ export const WorkflowHistoryScrubber: React.FC<WorkflowHistoryScrubberProps> = (
             onClick={() => setIsMinimized(true)}
             className="h-7 px-2 text-[11px] font-mono text-slate-400 hover:text-white hover:bg-slate-800"
             title="Minimize Scrubber to Compact Bar"
+            aria-label="Minimize Scrubber to Compact Bar"
           >
             Minimize
           </Button>
@@ -415,6 +423,7 @@ export const WorkflowHistoryScrubber: React.FC<WorkflowHistoryScrubberProps> = (
               onClick={onClose}
               className="h-7 w-7 p-0 text-slate-400 hover:text-white"
               title="Close Scrubber"
+              aria-label="Close Workflow Scrubber"
             >
               ✕
             </Button>

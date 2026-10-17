@@ -219,7 +219,7 @@ export function AutoActorEngineStudio({
               ) : (
                 verificationSteps.map((step, idx) => (
                   <button
-                    key={`act_step_${step.id || "step"}_${idx}`}
+                    key={step.id}
                     onClick={() => {
                       setActiveStepIndex(idx);
                       setComparisonResult(null);

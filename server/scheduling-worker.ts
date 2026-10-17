@@ -22,7 +22,7 @@ class SchedulingWorker {
   private isRunning = false;
 
   constructor() {
-    // Lazy start when requested
+    this.start();
   }
 
   start() {
@@ -32,7 +32,6 @@ class SchedulingWorker {
     this.workerInterval = setInterval(() => {
       this.processScheduledTasks();
     }, 1000); // Check every second
-    this.workerInterval?.unref?.();
     
     console.log("Scheduling worker started");
   }

@@ -1,93 +1,44 @@
 /**
- * Safe API client utilities to guard against HTML 404/500/502 fallbacks,
- * plain-text rate limiting (e.g. "Rate exceeded."), network drops, and JSON parsing syntax errors.
+ * Safe fetch & JSON parsing helpers that gracefully handle non-JSON responses,
+ * server error pages, and network failures without throwing unhandled rejections.
  */
 
-export interface SafeApiResponse<T = any> {
-  success: boolean;
-  data?: T;
+export type SafeApiResponse<T> = T & {
+  success?: boolean;
   error?: string;
-  status?: number;
-  [key: string]: any;
-}
+  message?: string;
+};
 
 export async function safeFetchJson<T = any>(
   url: string,
   options?: RequestInit
 ): Promise<SafeApiResponse<T>> {
   try {
-    const res = await fetch(url, {
-      ...options,
-      headers: {
-        Accept: "application/json",
-        ...(options?.body && !(options.body instanceof FormData)
-          ? { "Content-Type": "application/json" }
-          : {}),
-        ...options?.headers,
-      },
-    });
-
+    const res = await fetch(url, options);
     const contentType = res.headers.get("content-type") || "";
-
-    if (!res.ok) {
-      if (contentType.includes("application/json")) {
-        try {
-          const errJson = await res.json();
-          return {
-            success: false,
-            status: res.status,
-            error: errJson.error || errJson.message || `Request failed with status ${res.status}`,
-            ...errJson,
-          };
-        } catch {
-          // fallback
-        }
-      }
-      const rawText = await res.text().catch(() => "");
-      const cleanMsg = rawText.length < 200 && !rawText.includes("<!doctype") && !rawText.includes("<html")
-        ? rawText.trim()
-        : `Server responded with HTTP ${res.status}`;
-      return {
-        success: false,
-        status: res.status,
-        error: cleanMsg || `Request failed (${res.status})`,
-      };
+    if (contentType.includes("application/json")) {
+      const data = await res.json();
+      return { success: res.ok, ...data };
     }
-
-    if (!contentType.includes("application/json")) {
-      const text = await res.text().catch(() => "");
-      return {
-        success: false,
-        status: res.status,
-        error: text.length < 150 ? text : "Received non-JSON response from server",
-      };
-    }
-
-    const data = await res.json();
-    return {
-      success: true,
-      status: res.status,
-      data,
-      ...data,
-    };
+    const text = await res.text();
+    return { success: res.ok, message: text } as SafeApiResponse<T>;
   } catch (err: any) {
-    const isAbort = err?.name === "AbortError";
-    const msg = isAbort ? "Request aborted" : err?.message || "Network connection error";
-    return {
-      success: false,
-      error: msg,
-    };
+    return { success: false, error: err?.message || String(err) } as SafeApiResponse<T>;
   }
 }
 
 export async function safePostJson<T = any>(
   url: string,
-  body?: any,
-  options?: RequestInit
+  body: any,
+  options?: Omit<RequestInit, "body" | "method">
 ): Promise<SafeApiResponse<T>> {
   return safeFetchJson<T>(url, {
     method: "POST",
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options?.headers || {}),
+    },
+    body: JSON.stringify(body),
     ...options,
   });
 }

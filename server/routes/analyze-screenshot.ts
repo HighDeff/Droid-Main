@@ -6,7 +6,6 @@ import { gameStateManager } from "../state-manager";
 import { autoTaskGenerator } from "../auto-task-generator";
 import { multiAgentExecutor } from "../multi-agent-executor";
 import { DEFAULT_QWEN_MODEL, resolveAiEndpoint } from "../ai-endpoint";
-import { detectScreenElementsAndSteps } from "../ai-gemini-service";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -58,12 +57,12 @@ export const handleAnalyzeScreenshot: RequestHandler = async (req, res) => {
     const executionResults = multiAgentExecutor.processAndExecuteTasks();
 
     // Step 5: Analyze with the configured AI endpoint for natural language
-    // understanding (with Gemini provider & offline fallback). No endpoint is hardcoded: it comes
+    // understanding (with offline fallback). No endpoint is hardcoded: it comes
     // from the request or the OLLAMA_ENDPOINT environment variable.
     const ollamaEndpoint = resolveAiEndpoint(endpoint);
     const base64Image = imageData.includes(",")
-      ? imageData.split(",")[1].trim()
-      : imageData.trim();
+      ? imageData.split(",")[1]
+      : imageData;
 
     let detection =
       "Live desktop frame captured - interactive workspace detected";
@@ -85,61 +84,50 @@ export const handleAnalyzeScreenshot: RequestHandler = async (req, res) => {
       }
     };
 
-    let triedOllama = false;
-    if (ollamaEndpoint) {
-      try {
-        triedOllama = true;
-        const payload = {
-          model: DEFAULT_QWEN_MODEL,
-          messages: [
-            {
-              role: "user",
-              content:
-                "Analyze this game/app screenshot. Describe what you see, identify UI elements, and suggest the next action. Be concise.",
-              images: [base64Image],
-            },
-          ],
-          stream: false,
-        };
-
-        const response = await fetch(ollamaEndpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
+    if (!ollamaEndpoint) {
+      applyHeuristicFallback();
+    } else try {
+      const payload = {
+        model: DEFAULT_QWEN_MODEL,
+        messages: [
+          {
+            role: "user",
+            content:
+              "Analyze this game/app screenshot. Describe what you see, identify UI elements, and suggest the next action. Be concise.",
+            images: [base64Image],
           },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(6000),
-        });
+        ],
+        stream: false,
+      };
 
-        if (response.ok) {
-          const data = await response.json();
-          const content = data.message?.content || "";
-          if (content) {
-            detection = extractDetection(content);
-            suggestion = extractSuggestion(content);
-            confidence = calculateConfidence(content);
-            ollamaOnline = true;
-          }
-        }
-      } catch (ollamaErr) {
-        // Log at debug level and fallback to Gemini / heuristics
-      }
-    }
+      const response = await fetch(ollamaEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(8000),
+      });
 
-    if (!ollamaOnline) {
-      // Fallback 1: Use app's Gemini vision provider
-      try {
-        const geminiAnalysis = await detectScreenElementsAndSteps({ imageData });
-        if (geminiAnalysis && geminiAnalysis.elements && geminiAnalysis.elements.length > 0) {
-          detection = geminiAnalysis.summary || `Detected ${geminiAnalysis.elements.length} interactive screen element(s)`;
-          suggestion = geminiAnalysis.suggestedSteps?.[0]?.name || "Inspect primary action target";
-          confidence = 0.90;
-        } else {
-          applyHeuristicFallback();
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.message?.content || "";
+        if (content) {
+          detection = extractDetection(content);
+          suggestion = extractSuggestion(content);
+          confidence = calculateConfidence(content);
+          ollamaOnline = true;
         }
-      } catch {
-        applyHeuristicFallback();
+      } else {
+        throw new Error(`Ollama API error: ${response.statusText}`);
       }
+    } catch (ollamaErr) {
+      // Offline fallback: generate heuristic detection from entities & game state
+      console.warn(
+        "AI endpoint unavailable, using heuristic fallback:",
+        ollamaErr instanceof Error ? ollamaErr.message : ollamaErr,
+      );
+      applyHeuristicFallback();
     }
 
     // Get current game state

@@ -417,13 +417,7 @@ export default function AgentsPage() {
                         >
                           {agent.status}
                         </span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            window.dispatchEvent(new CustomEvent("open-settings"));
-                          }}
-                        >
+                        <Button variant="outline" size="sm">
                           <Settings className="w-4 h-4 mr-2" />
                           Configure
                         </Button>

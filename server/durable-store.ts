@@ -3,6 +3,7 @@ import path from "path";
 
 export interface StorageOptions {
   storageDir?: string;
+  filePath?: string;
   inMemory?: boolean;
   mode?: "memory" | "disk" | string;
 }

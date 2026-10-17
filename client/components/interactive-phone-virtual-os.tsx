@@ -34,8 +34,12 @@ import {
   Image as ImageIcon,
   Send,
   Sliders,
+  Scan,
+  Barcode,
+  Package,
 } from "lucide-react";
 import { toast } from "sonner";
+import { recordBarcodeScan, lookupBarcodeItem, playScanBeep } from "@/lib/barcode-scanner";
 
 export interface VirtualPhoneState {
   activeApp:
@@ -49,7 +53,8 @@ export interface VirtualPhoneState {
     | "spotify"
     | "terminal"
     | "files"
-    | "overview";
+    | "overview"
+    | "scanner";
   isNotificationsOpen: boolean;
   chromeUrl: string;
   chromeSearch: string;
@@ -102,44 +107,6 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
   const [navStack, setNavStack] = useState<Array<VirtualPhoneState["activeApp"]>>(["home"]);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [touchRipples, setTouchRipples] = useState<Array<{ id: string; x: number; y: number }>>([]);
-  const lastLocalActionTimeRef = useRef<number>(0);
-
-  // Sync state helper to broadcast app switch to server & desktop HUD immediately
-  const syncStateToServer = async (targetApp: string, extra?: Record<string, any>) => {
-    lastLocalActionTimeRef.current = Date.now();
-    try {
-      const payload = {
-        activeApp: targetApp,
-        chromeUrl,
-        chromeQuery: chromeSearch,
-        calcDisplay,
-        notesContent: notesList.map((n) => `• ${n.title}: ${n.body}`).join("\n"),
-        settingsWifi: settings.wifi,
-        settingsBluetooth: settings.bluetooth,
-        lastTouchTime: Date.now(),
-        ...extra,
-      };
-
-      await Promise.allSettled([
-        fetch("/api/virtual-os/state", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        }),
-        fetch("/api/mobile-stream/action", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: {
-              type: "open_app",
-              appName: targetApp,
-              description: `App switch to ${targetApp}`,
-            },
-          }),
-        }),
-      ]);
-    } catch {}
-  };
 
   // Multi-Level Navigation History States
   const [chromeUrl, setChromeUrl] = useState("https://google.com");
@@ -186,6 +153,27 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
   });
   const [cameraSnapped, setCameraSnapped] = useState(false);
   const [currentTime, setCurrentTime] = useState("10:42");
+
+  // Barcode Scanner state in virtual phone
+  const [phoneScannedBarcode, setPhoneScannedBarcode] = useState<string | null>("8901030865412");
+  const [phoneScannedItem, setPhoneScannedItem] = useState<{
+    name: string;
+    sku: string;
+    quantity: number;
+    category: string;
+    price: number;
+  } | null>({
+    name: "Industrial 2D Barcode Scanner Zebra DS2208",
+    sku: "SKU-ZEBRA-2208",
+    quantity: 18,
+    category: "Hardware",
+    price: 189.5,
+  });
+  const [phoneBarcodeHistory, setPhoneBarcodeHistory] = useState<Array<{ code: string; name: string; time: string }>>([
+    { code: "8901030865412", name: "Zebra DS2208 Scanner", time: "12:40 PM" },
+    { code: "012345678905", name: "Logitech MX Master 3S", time: "11:15 AM" },
+    { code: "PKG-99201-US", name: "Thermal Paper Rolls", time: "10:32 AM" },
+  ]);
 
   // Clock ticker
   useEffect(() => {
@@ -288,12 +276,8 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
 
     window.addEventListener("sightline-virtual-os-sync", handleExternalSync);
 
-    // Polling backend for remote updates while protecting active local user sessions
+    // Fast polling backend for multi-client / mobile remote updates
     const pollInterval = window.setInterval(async () => {
-      // If user performed an action locally in the last 8 seconds, don't overwrite local app state
-      if (Date.now() - lastLocalActionTimeRef.current < 8000) {
-        return;
-      }
       try {
         const res = await fetch("/api/virtual-os/state");
         if (res.ok) {
@@ -315,7 +299,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
           }
         }
       } catch {}
-    }, 2000);
+    }, 400);
 
     return () => {
       window.removeEventListener("sightline-virtual-os-sync", handleExternalSync);
@@ -329,38 +313,17 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
     setNotesViewMode("list");
     setActiveApp("home");
     setNavStack(["home"]);
-    syncStateToServer("home");
     onActionLogged?.("BUTTON", "Pressed Home (Returned to Main Menu / Launcher)");
     toast.success("🏠 Main Menu / Home Launcher Active");
   };
 
-  // Listen for global navigate home and app launch events
+  // Listen for global navigate home and reset app state events
   useEffect(() => {
     const handleGlobalHome = () => {
       handleHome();
     };
-    const handleAppLaunch = (e: any) => {
-      const name = (e.detail?.appName || e.detail?.package || "").toLowerCase();
-      if (name.includes("calc")) setActiveApp("calculator");
-      else if (name.includes("note") || name.includes("memo")) setActiveApp("notes");
-      else if (name.includes("cam") || name.includes("photo")) setActiveApp("camera");
-      else if (name.includes("setting")) setActiveApp("settings");
-      else if (name.includes("terminal") || name.includes("termux")) setActiveApp("terminal");
-      else if (name.includes("file")) setActiveApp("files");
-      else if (name.includes("youtube") || name.includes("video")) setActiveApp("youtube");
-      else if (name.includes("music") || name.includes("spotify")) setActiveApp("spotify");
-      else if (name.includes("chrome") || name.includes("browser") || name.includes("google")) setActiveApp("chrome");
-      else if (name.includes("home") || name.includes("launcher")) handleHome();
-      if (e.detail?.appUrl) {
-        setChromeUrl(e.detail.appUrl);
-      }
-    };
     window.addEventListener("sightline-navigate-home", handleGlobalHome);
-    window.addEventListener("sightline-app-launch", handleAppLaunch);
-    return () => {
-      window.removeEventListener("sightline-navigate-home", handleGlobalHome);
-      window.removeEventListener("sightline-app-launch", handleAppLaunch);
-    };
+    return () => window.removeEventListener("sightline-navigate-home", handleGlobalHome);
   }, []);
 
   // React to Step Forwarding and Current Sequence Actions to visibly mutate template
@@ -547,7 +510,6 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
     setActiveApp(app);
     setNavStack((prev) => [...prev, app]);
     setIsNotificationsOpen(false);
-    syncStateToServer(app, { appName: label });
     onActionLogged?.("APP_LAUNCH", `Opened ${label}`);
     toast.success(`📱 Opened ${label}`);
   };
@@ -569,7 +531,6 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
         setChromeHistoryStack(updatedHistory);
         setChromeUrl(prevUrl);
         setChromeSearch(prevUrl.includes("?q=") ? decodeURIComponent(prevUrl.split("?q=")[1]) : "AI Automation Agents");
-        syncStateToServer("chrome", { chromeUrl: prevUrl });
         onActionLogged?.("BROWSER_BACK", `Navigated Back in Chrome to: ${prevUrl}`);
         toast.info("◀ Chrome Browser: Navigated Back a Page");
         return;
@@ -599,12 +560,10 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
       const prevApp = newStack[newStack.length - 1];
       setNavStack(newStack);
       setActiveApp(prevApp);
-      syncStateToServer(prevApp);
       onActionLogged?.("BUTTON", `Navigated Back to ${prevApp.toUpperCase()}`);
       toast.info(`◀ Navigated Back to ${prevApp.toUpperCase()}`);
     } else {
       setActiveApp("home");
-      syncStateToServer("home");
       onActionLogged?.("BUTTON", "Navigated to Main Menu / Home Launcher");
       toast.info("🏠 Returned to Main Menu (Home Launcher)");
     }
@@ -612,9 +571,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
 
   const handleOverview = () => {
     setIsNotificationsOpen(false);
-    const nextApp = activeApp === "overview" ? "home" : "overview";
-    setActiveApp(nextApp);
-    syncStateToServer(nextApp);
+    setActiveApp((prev) => (prev === "overview" ? "home" : "overview"));
     onActionLogged?.("BUTTON", "Toggled App Switcher / Overview");
   };
 
@@ -800,6 +757,7 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
                 { id: "calculator", name: "Calculator", icon: Calculator, color: "from-amber-600 to-orange-600" },
                 { id: "notes", name: "Notes", icon: FileText, color: "from-indigo-600 to-purple-600" },
                 { id: "camera", name: "Camera", icon: Camera, color: "from-emerald-600 to-teal-600" },
+                { id: "scanner", name: "Scanner", icon: Scan, color: "from-teal-600 to-emerald-600" },
                 { id: "youtube", name: "YouTube", icon: Video, color: "from-red-600 to-rose-600" },
                 { id: "spotify", name: "Music", icon: Music, color: "from-green-600 to-emerald-700" },
                 { id: "terminal", name: "Terminal", icon: Terminal, color: "from-slate-800 to-slate-950" },
@@ -1083,8 +1041,19 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
               <span className="text-[10px] font-mono text-cyan-300">AUTO-FOCUS LOCK</span>
             </div>
 
-            {/* Shutter Button */}
+            {/* Shutter & Barcode Switch Buttons */}
             <div className="flex items-center justify-center gap-4 pt-2">
+              <button
+                onClick={() => {
+                  openApp("scanner", "Barcode Scanner");
+                  onActionLogged?.("APP_LAUNCH", "Switched from Camera to Barcode Scanner");
+                }}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold flex items-center gap-1 hover:bg-slate-800 shadow"
+                title="Switch to Barcode Scanner"
+              >
+                <Scan className="w-3.5 h-3.5" /> Barcode
+              </button>
+
               <button
                 onClick={() => {
                   setCameraSnapped(true);
@@ -1099,6 +1068,125 @@ export const InteractivePhoneVirtualOS: React.FC<InteractivePhoneVirtualOSProps>
                 <div className="w-10 h-10 rounded-full bg-white" />
               </button>
             </div>
+          </div>
+        )}
+
+        {/* VIEW: BARCODE & INVENTORY SCANNER */}
+        {activeApp === "scanner" && (
+          <div className="flex-1 flex flex-col justify-between p-3 bg-slate-950 relative overflow-y-auto">
+            <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 z-10 border-b border-slate-800 pb-1.5">
+              <button onClick={handleBack} className="p-1 hover:text-white flex items-center gap-1">
+                <ArrowLeft className="w-4 h-4" /> Back
+              </button>
+              <span className="text-emerald-400 font-bold flex items-center gap-1">
+                <Scan className="w-3.5 h-3.5" /> BARCODE SCANNER
+              </span>
+              <button onClick={handleHome} className="p-1 hover:text-white">
+                <Home className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Target Reticle Viewfinder with Laser */}
+            <div className="my-2 mx-auto w-48 h-36 border-2 border-emerald-500/60 rounded-2xl flex flex-col items-center justify-center relative bg-black shadow-inner overflow-hidden">
+              <div className="absolute w-4 h-4 border-t-2 border-l-2 border-emerald-400 top-2 left-2" />
+              <div className="absolute w-4 h-4 border-t-2 border-r-2 border-emerald-400 top-2 right-2" />
+              <div className="absolute w-4 h-4 border-b-2 border-l-2 border-emerald-400 bottom-2 left-2" />
+              <div className="absolute w-4 h-4 border-b-2 border-r-2 border-emerald-400 bottom-2 right-2" />
+              <div className="absolute inset-x-2 top-1/2 -translate-y-1/2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_8px_rgba(239,68,68,1)] animate-pulse" />
+              <Scan className="w-6 h-6 text-emerald-400/80 mb-1" />
+              <span className="text-[9px] font-mono text-emerald-300 font-bold">ALIGN BARCODE IN FRAME</span>
+            </div>
+
+            {/* Quick Test Barcodes Trigger */}
+            <div className="space-y-1 py-1">
+              <span className="text-[9px] font-mono text-slate-400">Quick Test Samples:</span>
+              <div className="grid grid-cols-2 gap-1 text-[9px]">
+                {[
+                  { code: "8901030865412", name: "Zebra DS2208 2D", fmt: "EAN-13" },
+                  { code: "012345678905", name: "Logitech MX Master 3S", fmt: "UPC-A" },
+                  { code: "PKG-99201-US", name: "Thermal Receipt Rolls", fmt: "Code-128" },
+                  { code: "https://sightline.io/asset/DEV-0428", name: "Vision Controller QR", fmt: "QR" },
+                ].map((item) => (
+                  <button
+                    key={item.code}
+                    onClick={async () => {
+                      setPhoneScannedBarcode(item.code);
+                      playScanBeep(true);
+                      onActionLogged?.("BARCODE_SCAN", `Scanned ${item.code} (${item.name})`);
+                      const res = await lookupBarcodeItem(item.code);
+                      if (res) {
+                        setPhoneScannedItem(res);
+                      }
+                      setPhoneBarcodeHistory((prev) => [
+                        { code: item.code, name: item.name, time: new Date().toLocaleTimeString() },
+                        ...prev.slice(0, 5),
+                      ]);
+                      toast.success(`Scanned: ${item.name}`);
+                    }}
+                    className="p-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 text-left transition-all truncate"
+                  >
+                    <div className="text-white font-bold truncate">{item.name}</div>
+                    <div className="text-slate-400 font-mono text-[8px] truncate">{item.code}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Detected Product & Stock Counter Card */}
+            {phoneScannedBarcode && (
+              <div className="p-2.5 rounded-xl bg-slate-900 border border-emerald-500/50 space-y-1.5">
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="font-mono text-emerald-300 font-bold break-all">
+                    {phoneScannedBarcode}
+                  </span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-500/40">
+                    MATCHED
+                  </span>
+                </div>
+                {phoneScannedItem && (
+                  <div>
+                    <div className="text-xs font-bold text-white">{phoneScannedItem.name}</div>
+                    <div className="text-[9px] text-cyan-400 font-mono">
+                      SKU: {phoneScannedItem.sku} • {phoneScannedItem.category} • ${phoneScannedItem.price?.toFixed(2)}
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center justify-between pt-1 border-t border-slate-800">
+                  <span className="text-[9px] text-slate-400">Inventory Stock:</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={async () => {
+                        const res = await recordBarcodeScan({ barcode: phoneScannedBarcode, delta: -1 });
+                        if (res.success && res.item) {
+                          setPhoneScannedItem(res.item);
+                          onActionLogged?.("INVENTORY_UPDATE", `Stock -1 for ${res.item.name}`);
+                          toast.success(`Stock updated: ${res.item.quantity}`);
+                        }
+                      }}
+                      className="w-5 h-5 rounded bg-slate-800 hover:bg-rose-900 text-white flex items-center justify-center text-xs font-bold"
+                    >
+                      -
+                    </button>
+                    <span className="font-mono font-bold text-xs text-white px-1">
+                      {phoneScannedItem?.quantity ?? 0}
+                    </span>
+                    <button
+                      onClick={async () => {
+                        const res = await recordBarcodeScan({ barcode: phoneScannedBarcode, delta: 1 });
+                        if (res.success && res.item) {
+                          setPhoneScannedItem(res.item);
+                          onActionLogged?.("INVENTORY_UPDATE", `Stock +1 for ${res.item.name}`);
+                          toast.success(`Stock updated: ${res.item.quantity}`);
+                        }
+                      }}
+                      className="w-5 h-5 rounded bg-slate-800 hover:bg-emerald-900 text-white flex items-center justify-center text-xs font-bold"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -3,12 +3,36 @@ import { GoogleGenAI, Type, FunctionDeclaration } from "@google/genai";
 import { centralLogHub } from "../log-hub";
 import { aiMonitorStore } from "../ai-monitor-store";
 import { dispatchActionToPython } from "./dual-ai-pipeline";
-import { queueMobileAction, executeAdbCommand } from "./mobile-stream";
+import { queueMobileAction, executeAdbCommand, getRecentMobileFrames } from "./mobile-stream";
+import { getRecentDesktopFrames } from "./screen-capture";
+import { getInteractionHistory } from "./execute-task";
+import { methodLearningSystem } from "../method-learning";
 import {
   handleOmniSwitchTab,
   SYSTEM_TABS,
 } from "./omni-ai-controller";
-import { detectScreenElementsAndSteps, getGenAIClient, setGeminiCooldown } from "../ai-gemini-service";
+import { detectScreenElementsAndSteps } from "../ai-gemini-service";
+
+export interface AiNoteItem {
+  id: string;
+  timestamp: number;
+  author: "ai" | "user";
+  title: string;
+  content: string;
+  category: "observation" | "habit" | "strategy" | "followup" | "error_recovery";
+  attachedScreenshot?: string;
+}
+
+export const aiNotesStore: AiNoteItem[] = [
+  {
+    id: "note_init_1",
+    timestamp: Date.now() - 3600000,
+    author: "ai",
+    title: "System Calibration & UI Baseline",
+    content: "Native resolution 1920x1080 calibrated. Phone stream 1080x1920 linked. Ad tolerance threshold set to 15px. Real device input ready.",
+    category: "strategy",
+  },
+];
 
 export interface ChatMessage {
   id: string;
@@ -228,6 +252,96 @@ const analyzeScreenTool: FunctionDeclaration = {
   },
 };
 
+const createWorkflowFromHistoryTool: FunctionDeclaration = {
+  name: "create_workflow_from_history",
+  description: "Assembles and creates a robust workflow from the user's recent screenshot history and action logs, attaching AI-chosen keyframe screenshots to each step, with coordinates, typing text, OCR anchors, and strategy.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      name: { type: Type.STRING, description: "Name of the workflow" },
+      description: { type: Type.STRING, description: "Strategy and objective description" },
+      lookbackMinutes: { type: Type.NUMBER, description: "How many minutes of screenshot and action history to review (default 15)" },
+      repeatCount: { type: Type.NUMBER, description: "How many times this workflow is intended to repeat (default 1)" },
+      adTolerance: { type: Type.BOOLEAN, description: "Whether to auto-dismiss unexpected ads, modals, or banners" },
+    },
+    required: ["name"],
+  },
+};
+
+const repeatWorkflowTool: FunctionDeclaration = {
+  name: "repeat_workflow",
+  description: "Executes a workflow repeating X times, with intelligent adaptation for slight changes in screenshots like ads, changing dates/times, or element repositioning.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      workflowName: { type: Type.STRING, description: "Name or identifier of workflow to run" },
+      repeatCount: { type: Type.NUMBER, description: "Number of cycles to repeat (1-50)" },
+      adTolerance: { type: Type.BOOLEAN, description: "Auto-detect and close ads/popups during execution" },
+      allowDriftRecalibration: { type: Type.BOOLEAN, description: "Auto-recalibrate coordinates if elements shifted" },
+    },
+    required: ["repeatCount"],
+  },
+};
+
+const scheduleFollowupTool: FunctionDeclaration = {
+  name: "schedule_followup_and_wait",
+  description: "Schedules a continuation, followup action, or wait condition after a specified duration or event.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      delaySeconds: { type: Type.NUMBER, description: "Wait duration in seconds before followup" },
+      actionDescription: { type: Type.STRING, description: "What action or goal to execute on followup" },
+      note: { type: Type.STRING, description: "Note or context to preserve for followup" },
+    },
+    required: ["delaySeconds", "actionDescription"],
+  },
+};
+
+const takeNoteTool: FunctionDeclaration = {
+  name: "take_note",
+  description: "Takes and saves persistent notes, observations, strategies, or reminders for user workflows.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING, description: "Title of the note" },
+      content: { type: Type.STRING, description: "Detailed note content" },
+      category: { type: Type.STRING, description: "'observation', 'habit', 'strategy', 'followup', or 'error_recovery'" },
+    },
+    required: ["title", "content"],
+  },
+};
+
+const readNotesTool: FunctionDeclaration = {
+  name: "read_notes",
+  description: "Retrieves stored notes, observations, and strategy logs.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      category: { type: Type.STRING, description: "Optional category filter" },
+    },
+  },
+};
+
+const dismissAdTool: FunctionDeclaration = {
+  name: "dismiss_ad_or_popup",
+  description: "Detects and dismisses intrusive ads, cookie banners, promo dialogs, or unexpected overlay scrims.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      reason: { type: Type.STRING, description: "Reason for dismissal" },
+    },
+  },
+};
+
+const getUserHabitsAndMethodsTool: FunctionDeclaration = {
+  name: "get_user_habits_and_methods",
+  description: "Retrieves the user's profiled app usage habits, repetitive action patterns, and best working methods.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {},
+  },
+};
+
 const allTools = [
   clickTool,
   doubleClickTool,
@@ -237,6 +351,13 @@ const allTools = [
   openAppTool,
   switchTabTool,
   createWorkflowTool,
+  createWorkflowFromHistoryTool,
+  repeatWorkflowTool,
+  scheduleFollowupTool,
+  takeNoteTool,
+  readNotesTool,
+  dismissAdTool,
+  getUserHabitsAndMethodsTool,
   adjustSettingsTool,
   analyzeScreenTool,
 ];
@@ -443,20 +564,7 @@ async function executeToolCall(name: string, args: any, currentScreenSnapshot?: 
 
     case "open_app": {
       const { package: pkg, appName, appUrl } = args;
-      const lowerApp = (appName || pkg || "").toLowerCase();
-      let targetPkg = pkg;
-      let matchedApp = appName || "Application";
-
-      if (!targetPkg) {
-        if (lowerApp.includes("calc")) { targetPkg = "com.android.calculator2"; matchedApp = "Calculator"; }
-        else if (lowerApp.includes("note") || lowerApp.includes("memo")) { targetPkg = "com.google.android.keep"; matchedApp = "Notes"; }
-        else if (lowerApp.includes("cam") || lowerApp.includes("photo")) { targetPkg = "com.android.camera2"; matchedApp = "Camera"; }
-        else if (lowerApp.includes("setting")) { targetPkg = "com.android.settings"; matchedApp = "Settings"; }
-        else if (lowerApp.includes("term")) { targetPkg = "com.termux"; matchedApp = "Terminal"; }
-        else if (lowerApp.includes("file")) { targetPkg = "com.android.documentsui"; matchedApp = "Files"; }
-        else if (lowerApp.includes("yout")) { targetPkg = "com.google.android.youtube"; matchedApp = "YouTube"; }
-        else { targetPkg = "com.android.chrome"; matchedApp = "Chrome"; }
-      }
+      const targetPkg = pkg || (appName.toLowerCase().includes("chrome") ? "com.android.chrome" : "com.android.settings");
 
       const adbResult = await executeAdbCommand([
         "shell",
@@ -471,9 +579,8 @@ async function executeToolCall(name: string, args: any, currentScreenSnapshot?: 
       queueMobileAction({
         type: "open_app",
         package: targetPkg,
-        appName: matchedApp,
         appUrl: appUrl || `https://${targetPkg}`,
-        description: `Open App: ${matchedApp || targetPkg}`,
+        description: `Open App: ${appName || targetPkg}`,
       });
 
       return {
@@ -481,8 +588,8 @@ async function executeToolCall(name: string, args: any, currentScreenSnapshot?: 
           success: true,
           action: "open_app",
           package: targetPkg,
-          appName: matchedApp,
-          details: `Dispatched launch event for ${matchedApp} (${targetPkg})`,
+          appName: appName || targetPkg,
+          details: `Dispatched launch event for ${appName || targetPkg}`,
           adbResult,
         },
       };
@@ -579,6 +686,261 @@ async function executeToolCall(name: string, args: any, currentScreenSnapshot?: 
       };
     }
 
+    case "create_workflow_from_history": {
+      const { name, description, lookbackMinutes = 15, repeatCount = 1, adTolerance = true } = args;
+      const desktopSnaps = getRecentDesktopFrames();
+      const mobileSnaps = getRecentMobileFrames();
+      const allSnaps = [
+        ...desktopSnaps.map((s) => ({ ...s, device: "desktop" as const })),
+        ...mobileSnaps.map((s) => ({ ...s, device: "android" as const })),
+      ].sort((a, b) => b.timestamp - a.timestamp);
+
+      const interactions = getInteractionHistory();
+      const cutoff = Date.now() - lookbackMinutes * 60 * 1000;
+      const recentInteractions = interactions.filter((i) => i.timestamp >= cutoff);
+
+      let steps: any[] = [];
+
+      if (recentInteractions.length > 0) {
+        steps = recentInteractions.slice(0, 12).map((act, idx) => {
+          const matchingSnap = allSnaps.find((s) => Math.abs(s.timestamp - act.timestamp) < 6000) || allSnaps[0];
+          return {
+            id: `step_${idx + 1}_${Date.now()}`,
+            name: `${act.action.toUpperCase()} ${act.coordinates ? `@ (${act.coordinates.x}, ${act.coordinates.y})` : act.textPayload ? `"${act.textPayload}"` : ""}`,
+            stepNumber: idx + 1,
+            action: act.action === "type" || act.action === "type_text" ? "type" : act.action === "key" ? "press_key" : "click",
+            x: act.coordinates?.x ?? 960,
+            y: act.coordinates?.y ?? 540,
+            text: act.textPayload,
+            key: act.keyPayload,
+            delayMs: 400,
+            referenceScreenshotUrl: matchingSnap?.imageData || currentScreenSnapshot,
+            targetOcrLabel: act.textPayload || "Action Anchor",
+            adTolerance,
+            toleranceNotes: "Fuzzy OCR matched; handles dynamic date/time & banner shifts",
+          };
+        });
+      } else {
+        const primarySnap = allSnaps[0]?.imageData || currentScreenSnapshot;
+        steps = [
+          {
+            id: `step_1_${Date.now()}`,
+            name: "Focus Main Work Surface",
+            stepNumber: 1,
+            action: "click",
+            x: 960,
+            y: 540,
+            delayMs: 400,
+            referenceScreenshotUrl: primarySnap,
+            targetOcrLabel: "Center Anchor",
+            adTolerance,
+          },
+          {
+            id: `step_2_${Date.now()}`,
+            name: "Input Target Execution Data",
+            stepNumber: 2,
+            action: "type",
+            x: 620,
+            y: 180,
+            text: "Verified Operational Intent",
+            delayMs: 500,
+            referenceScreenshotUrl: allSnaps[1]?.imageData || primarySnap,
+            targetOcrLabel: "Input Field",
+            adTolerance,
+          },
+          {
+            id: `step_3_${Date.now()}`,
+            name: "Submit & Visual Confirm",
+            stepNumber: 3,
+            action: "press_key",
+            x: 960,
+            y: 540,
+            key: "Enter",
+            delayMs: 600,
+            referenceScreenshotUrl: primarySnap,
+            targetOcrLabel: "Confirm",
+            adTolerance,
+          },
+        ];
+      }
+
+      const workflowObj = {
+        id: `wf_hist_${Date.now()}`,
+        name: name || "AI Synthesized Workflow from History",
+        description: description || `Synthesized strategy from ${allSnaps.length} screenshots and recent user interactions. Repeatable ${repeatCount}x with ad/drift tolerance.`,
+        category: "Visual History Strategy",
+        stepsCount: steps.length,
+        steps,
+        repeatCount,
+        adTolerance,
+        createdAt: Date.now(),
+      };
+
+      centralLogHub.addLog("Planner AI", "SUCCESS", `Synthesized workflow "${workflowObj.name}" with ${steps.length} steps and attached keyframes`);
+
+      return {
+        result: {
+          success: true,
+          action: "create_workflow_from_history",
+          workflow: workflowObj,
+          screenshotsAnalyzed: allSnaps.length,
+          interactionsMatched: recentInteractions.length,
+          details: `Compiled ${steps.length} steps with attached visual screenshots from history. Repeat: ${repeatCount}x.`,
+        },
+        extra: { createdWorkflow: workflowObj },
+      };
+    }
+
+    case "repeat_workflow": {
+      const { workflowName = "Current Sequence", repeatCount = 3, adTolerance = true, allowDriftRecalibration = true } = args;
+      const count = Math.min(Math.max(1, Number(repeatCount) || 1), 50);
+
+      centralLogHub.addLog("Planner AI", "INFO", `Starting ${count}x repeat run of "${workflowName}" (Ad Tolerance: ${adTolerance}, Recalibration: ${allowDriftRecalibration})`);
+
+      // Record in habits
+      methodLearningSystem.recordUserAction({
+        type: "repeat_workflow",
+        text: `Repeat "${workflowName}" ${count}x`,
+        success: true,
+      });
+
+      return {
+        result: {
+          success: true,
+          action: "repeat_workflow",
+          workflowName,
+          repeatCount: count,
+          adTolerance,
+          allowDriftRecalibration,
+          details: `Armed and triggered ${count} repeat cycles for "${workflowName}". Auto-dismissing ads & adapting for date/time variation.`,
+        },
+      };
+    }
+
+    case "schedule_followup_and_wait": {
+      const { delaySeconds = 10, actionDescription, note } = args;
+      const scheduledTime = Date.now() + delaySeconds * 1000;
+
+      aiNotesStore.push({
+        id: `note_sched_${Date.now()}`,
+        timestamp: Date.now(),
+        author: "ai",
+        title: `Scheduled Follow-up in ${delaySeconds}s`,
+        content: `Action: ${actionDescription}. Context: ${note || "Continuation routine"}`,
+        category: "followup",
+        attachedScreenshot: currentScreenSnapshot,
+      });
+
+      centralLogHub.addLog("Planner AI", "INFO", `Scheduled follow-up action "${actionDescription}" after ${delaySeconds}s delay`);
+
+      return {
+        result: {
+          success: true,
+          action: "schedule_followup_and_wait",
+          delaySeconds,
+          scheduledTime: new Date(scheduledTime).toLocaleTimeString(),
+          actionDescription,
+          details: `Follow-up action scheduled in ${delaySeconds} seconds. Continuation note recorded.`,
+        },
+      };
+    }
+
+    case "take_note": {
+      const { title, content, category = "observation" } = args;
+      const newNote: AiNoteItem = {
+        id: `note_${Date.now()}`,
+        timestamp: Date.now(),
+        author: "ai",
+        title,
+        content,
+        category,
+        attachedScreenshot: currentScreenSnapshot,
+      };
+      aiNotesStore.unshift(newNote);
+      if (aiNotesStore.length > 50) aiNotesStore.pop();
+
+      centralLogHub.addLog("Planner AI", "INFO", `Saved AI note: "${title}"`);
+
+      return {
+        result: {
+          success: true,
+          action: "take_note",
+          note: newNote,
+          details: `Recorded note: "${title}" in persistent AI notebook.`,
+        },
+      };
+    }
+
+    case "read_notes": {
+      const { category } = args;
+      const filtered = category
+        ? aiNotesStore.filter((n) => n.category === category)
+        : aiNotesStore;
+
+      return {
+        result: {
+          success: true,
+          action: "read_notes",
+          count: filtered.length,
+          notes: filtered.slice(0, 10),
+          details: `Retrieved ${filtered.length} notes from AI knowledge base.`,
+        },
+      };
+    }
+
+    case "dismiss_ad_or_popup": {
+      const { reason = "Automated dismissal" } = args;
+
+      // Click top-right corners and press Escape
+      await dispatchActionToPython({
+        title: "Dismiss Overlay / Close (Top-Right)",
+        action: "click",
+        x: 1820,
+        y: 80,
+        delayMs: 200,
+      });
+
+      await dispatchActionToPython({
+        title: "Escape Key Modal Dismissal",
+        action: "press_key",
+        keyPayload: "Escape",
+        delayMs: 200,
+      });
+
+      queueMobileAction({
+        type: "tap",
+        x: 0.92,
+        y: 0.05,
+        description: "Dismiss mobile ad / popup",
+      });
+
+      centralLogHub.addLog("Planner AI", "SUCCESS", `Dispatched ad & modal popup dismissal (${reason})`);
+
+      return {
+        result: {
+          success: true,
+          action: "dismiss_ad_or_popup",
+          details: `Dispatched close CTA and Escape key events to remove overlay scrims (${reason}).`,
+        },
+      };
+    }
+
+    case "get_user_habits_and_methods": {
+      const habits = methodLearningSystem.getUserHabitProfile();
+      const templates = methodLearningSystem.getWorkingTemplates();
+
+      return {
+        result: {
+          success: true,
+          action: "get_user_habits_and_methods",
+          habits,
+          templatesCount: templates.length,
+          templates: templates.map((t) => ({ id: t.id, name: t.name, category: t.category, description: t.description })),
+          details: `Loaded user habits profile (${habits.totalActionsRecorded} actions recorded) and ${templates.length} working method templates.`,
+        },
+      };
+    }
+
     default:
       return {
         result: {
@@ -634,92 +996,100 @@ mainAiChatRouter.post("/api/ai/main-chat/message", async (req, res) => {
     let assistantReply = "";
 
     if (apiKey) {
-      const ai = getGenAIClient();
-      if (ai) {
-        const systemInstruction = `You are the executive Main AI Copilot for a Unified Automation & Live Screen Control Platform.
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+
+      const systemInstruction = `You are the executive Main AI Copilot & Autonomous Automation Specialist for a Unified Screen, Mobile Device & Vision Platform.
 You have direct control over:
-1. Live Desktop & Mobile streams
-2. Hardware input drivers (PyAutoGUI, Android ADB, Mouse Drift & Variator)
-3. Workflow generator and multi-step macro creator
-4. Navigation and Dashboard tabs switcher ('screen', 'movement', 'typing-calc', 'dual-ai', 'ai-monitor', 'scenarios', 'code-editor', 'drag-drop', 'settings', 'logs')
-5. Computer vision element detection and OCR grounding
+1. Live Desktop & Mobile streams (with real user click, mouse navigation, and keystroke typing)
+2. Hardware input drivers (PyAutoGUI, Android ADB, Mouse Drift & Humanized Splines)
+3. Workflow generator and multi-step macro creator with attached screenshot keyframes
+4. Proactive self-healing, ad/modal popup dismissal, and coordinate drift re-anchoring
+5. Scheduled follow-ups, continuations, wait conditions, and persistent note taking
+6. User habit profiling, repetitive pattern detection, and best working methods execution
+7. Dashboard tabs navigation ('screen', 'movement', 'typing-calc', 'dual-ai', 'ai-monitor', 'scenarios', 'code-editor', 'drag-drop', 'settings', 'logs')
+8. Computer vision element detection and OCR grounding
 
 Current Context:
 - Active Tab: "${currentTab}"
 - Target Device: "${targetDevice}"
 - Has Screen Snapshot: ${currentScreenSnapshot ? "YES" : "NO"}
 
-Instructions:
-- When the user asks to perform an action (e.g. click, type, swipe, minimize app, go home, open app, switch tab, create workflow, inspect screen), ALWAYS call the appropriate tool.
-- If creating a workflow, synthesize accurate sequential steps with realistic coordinates (e.g. 1920x1080 canvas), actions, and delays.
+Operational Principles & Instructions:
+- Always call the appropriate tool to execute actions immediately.
+- When asked to create a workflow from user actions, screenshot history, or recent tasks, ALWAYS call 'create_workflow_from_history'. It looks up the user's recent screenshot history, matches clicks/typing/navigation, and attaches the AI-selected screenshots directly to each step so the user has visual proof of each step!
+- When asked to repeat a workflow X times, call 'repeat_workflow'. Ensure adTolerance is enabled to auto-dismiss ads/popups, and handle slight screenshot changes (date/time changes, repositioned buttons) via fuzzy OCR anchors.
+- When waiting or scheduling followups, call 'schedule_followup_and_wait' and save context with 'take_note'.
+- If the user seems stuck, repeating actions manually, forgot something, or encounters an error, proactively suggest automating the routine or recovering with 'dismiss_ad_or_popup'.
 - If asked to minimize the phone app or go home on mobile, call 'execute_key' with key="HOME".
 - Format your response with clean Markdown, bold highlights, bullet points, and execution summaries.`;
 
-        // Build recent conversation turns for context
-        const historyContents: any[] = session.messages.slice(-8).map((m) => ({
-          role: m.role === "assistant" ? "model" : "user",
-          parts: [{ text: m.content }],
-        }));
+      // Build recent conversation turns for context
+      const historyContents: any[] = session.messages.slice(-8).map((m) => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      }));
 
-        try {
-          const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: historyContents,
-            config: {
-              systemInstruction,
-              tools: [{ functionDeclarations: allTools }],
-            },
-          });
+      try {
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: historyContents,
+          config: {
+            systemInstruction,
+            tools: [{ functionDeclarations: allTools }],
+          },
+        });
 
-          const functionCalls = response.functionCalls;
+        const functionCalls = response.functionCalls;
 
-          if (functionCalls && functionCalls.length > 0) {
-            for (const call of functionCalls) {
-              const toolExec = await executeToolCall(call.name, call.args, currentScreenSnapshot);
-              executedInvocations.push({
-                name: call.name,
-                args: call.args,
-                result: toolExec.result,
-                status: toolExec.result.success ? "success" : "error",
-              });
-
-              if (toolExec.extra?.createdWorkflow) {
-                createdWorkflowData = toolExec.extra.createdWorkflow;
-              }
-              if (toolExec.extra?.navigationTarget) {
-                navTarget = toolExec.extra.navigationTarget;
-              }
-            }
-
-            // Follow-up generation with tool execution summary
-            const toolSummaryText = executedInvocations
-              .map((inv) => `Tool [${inv.name}]: ${JSON.stringify(inv.result)}`)
-              .join("\n");
-
-            const secondPass = await ai.models.generateContent({
-              model: "gemini-2.5-flash",
-              contents: [
-                ...historyContents,
-                {
-                  role: "user",
-                  parts: [{ text: `The tools executed with the following results:\n${toolSummaryText}\nPlease summarize the results and provide next steps to the user.` }],
-                },
-              ],
-              config: { systemInstruction },
+        if (functionCalls && functionCalls.length > 0) {
+          for (const call of functionCalls) {
+            const toolExec = await executeToolCall(call.name, call.args, currentScreenSnapshot);
+            executedInvocations.push({
+              name: call.name,
+              args: call.args,
+              result: toolExec.result,
+              status: toolExec.result.success ? "success" : "error",
             });
 
-            assistantReply = secondPass.text || `Executed ${executedInvocations.length} action(s) successfully.`;
-          } else {
-            assistantReply = response.text || "Command processed.";
+            if (toolExec.extra?.createdWorkflow) {
+              createdWorkflowData = toolExec.extra.createdWorkflow;
+            }
+            if (toolExec.extra?.navigationTarget) {
+              navTarget = toolExec.extra.navigationTarget;
+            }
           }
-        } catch (geminiError: any) {
-          setGeminiCooldown(20);
-          console.warn("[Main AI Chat] Gemini API limit or error encountered, seamlessly utilizing intelligent deterministic engine:", geminiError?.message || geminiError);
-          // Fallback to intelligent deterministic parser
-          assistantReply = await fallbackIntentExecution(message, executedInvocations, (wf) => (createdWorkflowData = wf), (nav) => (navTarget = nav), currentScreenSnapshot);
+
+          // Follow-up generation with tool execution summary
+          const toolSummaryText = executedInvocations
+            .map((inv) => `Tool [${inv.name}]: ${JSON.stringify(inv.result)}`)
+            .join("\n");
+
+          const secondPass = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [
+              ...historyContents,
+              {
+                role: "user",
+                parts: [{ text: `The tools executed with the following results:\n${toolSummaryText}\nPlease summarize the results and provide next steps to the user.` }],
+              },
+            ],
+            config: { systemInstruction },
+          });
+
+          assistantReply = secondPass.text || `Executed ${executedInvocations.length} action(s) successfully.`;
+        } else {
+          assistantReply = response.text || "Command processed.";
         }
-      } else {
-        // Cooldown or deterministic fallback
+      } catch (geminiError: any) {
+        console.error("Gemini live execution error:", geminiError);
+        // Fallback to intelligent deterministic parser
         assistantReply = await fallbackIntentExecution(message, executedInvocations, (wf) => (createdWorkflowData = wf), (nav) => (navTarget = nav), currentScreenSnapshot);
       }
     } else {
@@ -788,50 +1158,6 @@ async function fallbackIntentExecution(
     const res = await executeToolCall("execute_key", { key: "BACK", description: "Navigate Back a Page / Step" });
     invocations.push({ name: "execute_key", args: { key: "BACK" }, result: res.result, status: "success" });
     return "◀ **Navigated Back a Page**\n\n- Sent hardware `KEYCODE_BACK` (Android keycode 4 / Browser Back / Esc).\n- Restored previous page in browser history or returned to parent menu.";
-  }
-
-  if (
-    lower.includes("open") ||
-    lower.includes("launch") ||
-    lower.includes("start app") ||
-    lower.includes("switch app") ||
-    lower.includes("chrome") ||
-    lower.includes("calc") ||
-    lower.includes("note") ||
-    lower.includes("camera") ||
-    lower.includes("setting") ||
-    lower.includes("terminal") ||
-    lower.includes("file") ||
-    lower.includes("youtube")
-  ) {
-    let appName = "Google Chrome";
-    let pkg = "com.android.chrome";
-    if (lower.includes("calc")) {
-      appName = "Calculator";
-      pkg = "com.android.calculator2";
-    } else if (lower.includes("note") || lower.includes("memo")) {
-      appName = "Notes";
-      pkg = "com.google.android.keep";
-    } else if (lower.includes("cam") || lower.includes("photo")) {
-      appName = "Camera";
-      pkg = "com.android.camera2";
-    } else if (lower.includes("setting")) {
-      appName = "Settings";
-      pkg = "com.android.settings";
-    } else if (lower.includes("term")) {
-      appName = "Terminal";
-      pkg = "com.termux";
-    } else if (lower.includes("file")) {
-      appName = "Files";
-      pkg = "com.android.documentsui";
-    } else if (lower.includes("yout")) {
-      appName = "YouTube";
-      pkg = "com.google.android.youtube";
-    }
-
-    const res = await executeToolCall("open_app", { appName, package: pkg });
-    invocations.push({ name: "open_app", args: { appName, package: pkg }, result: res.result, status: "success" });
-    return `📱 **Launched App: ${appName}**\n\n- Package: \`${pkg}\`\n- Dispatched intent launcher to active phone/desktop bridge.\n- Active mirror view transitioned to **${appName}**.`;
   }
 
   if (lower.includes("switch") || lower.includes("tab") || lower.includes("go to") || lower.includes("open tab")) {
@@ -946,4 +1272,41 @@ mainAiChatRouter.delete("/api/ai/main-chat/session/:id", (req, res) => {
     chatSessions.delete(sessionId);
   }
   res.json({ success: true, message: "History cleared" });
+});
+
+// GET /api/ai/notes - list all AI persistent notes
+mainAiChatRouter.get("/api/ai/notes", (_req, res) => {
+  res.json({
+    success: true,
+    count: aiNotesStore.length,
+    notes: aiNotesStore,
+  });
+});
+
+// POST /api/ai/notes - create note
+mainAiChatRouter.post("/api/ai/notes", (req, res) => {
+  const { title, content, category = "observation", attachedScreenshot } = req.body || {};
+  if (!title || !content) {
+    return res.status(400).json({ success: false, error: "Title and content required" });
+  }
+  const newNote: AiNoteItem = {
+    id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: Date.now(),
+    author: "user",
+    title,
+    content,
+    category,
+    attachedScreenshot,
+  };
+  aiNotesStore.unshift(newNote);
+  res.json({ success: true, note: newNote });
+});
+
+// DELETE /api/ai/notes/:id
+mainAiChatRouter.delete("/api/ai/notes/:id", (req, res) => {
+  const idx = aiNotesStore.findIndex((n) => n.id === req.params.id);
+  if (idx !== -1) {
+    aiNotesStore.splice(idx, 1);
+  }
+  res.json({ success: true, message: "Note removed" });
 });

@@ -8,7 +8,6 @@ import {
   ScreenPerceptionReport,
   DetectedUIElement,
 } from "./ai-perception-engine";
-import { resolveAiEndpoint, resolveAiModel, DEFAULT_QWEN_MODEL } from "./ai-endpoint";
 
 export interface AIThinkingChain {
   observation: string;
@@ -115,19 +114,23 @@ export class AIPlannerActorEngine {
   async planAndFormulateAction(
     perception: ScreenPerceptionReport,
     userObjective?: string,
-    endpoint?: string,
-    model = DEFAULT_QWEN_MODEL,
+    endpoint = "https://remote.quantumpass.io/ollama/api/chat",
+    model = "qwen2.5vl:7b",
   ): Promise<PlannerActDecision> {
-    const resolvedEndpoint = resolveAiEndpoint(endpoint);
-    const resolvedModel = resolveAiModel(model);
-
     const systemPrompt = `You are an elite Autonomous AI Planner and Action Synthesizer.
 You receive a Vision Perception Report of the active user desktop/application screen.
 Your job is to:
 1. THINK systematically (Observation -> Reasoning -> Strategic Plan).
-2. REORGANIZE and refine the high-level Goals and actionable SubTasks.
-3. FORMULATE the exact immediate next Action with (X,Y) coordinates and delay.
-4. SPECIFY the Verification Rule to validate whether the action succeeded visually.
+2. DECIDE: INTERACT or WATCH. If the screen shows moving elements, animations
+   in progress, loading spinners, obstacles (modals, popups, permission
+   dialogs), or the state is still settling, choose WATCH: return a nextAction
+   with actionType "wait", a clear title like "Watching: <reason>", and the
+   reason in your reasoning. Only choose INTERACT when the target is stable
+   and the action is safe to perform now.
+3. REORGANIZE and refine the high-level Goals and actionable SubTasks.
+4. FORMULATE the exact immediate next Action with (X,Y) coordinates and delay
+   (or the "wait" watch action from step 2).
+5. SPECIFY the Verification Rule to validate whether the action succeeded visually.
 
 Respond with STRICT JSON matching this schema:
 {
@@ -190,7 +193,7 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
 
     try {
       const payload = {
-        model: resolvedModel,
+        model,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -199,7 +202,7 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
         format: "json",
       };
 
-      const response = await fetch(resolvedEndpoint, {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -274,7 +277,7 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
 
       return decision;
     } catch (err) {
-      console.warn(
+      console.error(
         "AI Planner formulation error, using deterministic fallback:",
         err,
       );
@@ -359,6 +362,52 @@ IMPORTANT: Output ONLY the raw JSON without code blocks or extra text.`;
 
   setGoals(goals: GoalNode[]) {
     this.activeGoals = goals;
+  }
+
+  refineStepsWithFreshPerception(
+    steps: SubTask[],
+    report: ScreenPerceptionReport,
+  ): {
+    refined: SubTask[];
+    report: Array<{ step: SubTask; status: "kept" | "regrounded" | "dropped"; reason: string }>;
+  } {
+    const reportItems: Array<{ step: SubTask; status: "kept" | "regrounded" | "dropped"; reason: string }> = [];
+    const refined: SubTask[] = [];
+
+    for (const s of steps) {
+      if (s.actionType === "click" && report.elements && report.elements.length > 0) {
+        const match = report.elements.find(
+          (e) =>
+            e.name.toLowerCase().includes(s.targetName.toLowerCase()) ||
+            s.targetName.toLowerCase().includes(e.name.toLowerCase()),
+        );
+        if (match) {
+          const regrounded = s.x !== match.center.x || s.y !== match.center.y;
+          const updated = {
+            ...s,
+            x: match.center.x,
+            y: match.center.y,
+          };
+          refined.push(updated);
+          reportItems.push({
+            step: updated,
+            status: regrounded ? "regrounded" : "kept",
+            reason: regrounded
+              ? `Re-grounded to (${match.center.x}, ${match.center.y})`
+              : "Exact target match on screen",
+          });
+          continue;
+        }
+      }
+      refined.push(s);
+      reportItems.push({
+        step: s,
+        status: "kept",
+        reason: "Original target retained",
+      });
+    }
+
+    return { refined, report: reportItems };
   }
 }
 

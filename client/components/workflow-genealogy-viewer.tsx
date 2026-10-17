@@ -73,6 +73,7 @@ export function WorkflowGenealogyViewer({
     setIsLoading(true);
     try {
       const data = await safeFetchJson<{
+        success?: boolean;
         nodes?: GenealogyNode[];
         patterns?: SuccessPattern[];
       }>("/api/mobile-stream/genealogy");

@@ -1,8 +1,8 @@
-import type { ReplayStep } from "@shared/replay";
-import PhoneDevicePanel from "./phone-device-panel";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { generateDefaultMobileFrame } from "@/lib/mobile-screen-generator";
 import { InteractivePhoneVirtualOS } from "@/components/interactive-phone-virtual-os";
+import { MobileSettingsModal } from "./mobile-settings-modal";
+import { ApkAndPwaModal } from "./ApkAndPwaModal";
 import {
   Bluetooth,
   Smartphone,
@@ -75,6 +75,9 @@ import {
   Settings,
   Crosshair,
   Target,
+  Scan,
+  Package,
+  Barcode,
 } from "lucide-react";
 import { calibrateCoordinates } from "@/lib/coordinate-calibration";
 import { Button } from "@/components/ui/button";
@@ -85,6 +88,12 @@ import { toast } from "sonner";
 import { AutonomousWorkflowModal } from "@/components/autonomous-workflow-modal";
 import { WorkflowGenealogyViewer } from "@/components/workflow-genealogy-viewer";
 import { MainAiLiveChat } from "@/components/main-ai-live-chat";
+import { BarcodeInventoryScannerModal } from "@/components/barcode-inventory-scanner-modal";
+import {
+  scanBarcodeFromDataUrl,
+  playScanBeep,
+  ScannedBarcode,
+} from "@/lib/barcode-scanner";
 
 export interface NavigationNode {
   id: string;
@@ -215,7 +224,6 @@ export interface MobileFrameSnapshot {
 }
 
 interface UniversalDeviceBridgeHubProps {
-  replaySteps?: ReplayStep[];
   onSelectDeviceFrame?: (imageData: string) => void;
   selectedAdbDevice?: string;
   onDeviceSelected?: (id: string) => void;
@@ -224,10 +232,10 @@ interface UniversalDeviceBridgeHubProps {
   wifiStatus?: string;
   setWifiStatus?: (status: string) => void;
   onSendWorkflowToMainVisionHud?: (workflow: any) => void;
+  replaySteps?: any[];
 }
 
 export function UniversalDeviceBridgeHub({
-  replaySteps,
   onSelectDeviceFrame,
   selectedAdbDevice,
   onDeviceSelected,
@@ -323,6 +331,35 @@ export function UniversalDeviceBridgeHub({
   const [viewPhoneLauncher, setViewPhoneLauncher] = useState(false);
   const [mobileDeviceName, setMobileDeviceName] = useState<string>("Mobile Phone");
   const [phonePreviewSize, setPhonePreviewSize] = useState<"compact" | "large" | "theater">("large");
+
+  // Barcode & Inventory Scanner state
+  const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
+  const [activeDecodedBarcode, setActiveDecodedBarcode] = useState<ScannedBarcode | null>(null);
+  const [isScanningFrameBarcode, setIsScanningFrameBarcode] = useState(false);
+
+  const handleScanCurrentFrameBarcode = async () => {
+    if (!mobileFrame) {
+      toast.error("No active mobile frame to scan");
+      return;
+    }
+    setIsScanningFrameBarcode(true);
+    try {
+      const res = await scanBarcodeFromDataUrl(mobileFrame);
+      if (res && res.rawValue) {
+        setActiveDecodedBarcode(res);
+        playScanBeep(true);
+        toast.success(`🔍 Decoded [${res.format}]: ${res.rawValue}`);
+        setIsBarcodeModalOpen(true);
+      } else {
+        playScanBeep(false);
+        toast.info("No barcode or QR code detected in current frame");
+      }
+    } catch {
+      toast.error("Failed scanning frame for barcodes");
+    } finally {
+      setIsScanningFrameBarcode(false);
+    }
+  };
   const [copiedLink, setCopiedLink] = useState(false);
   const [textInputPayload, setTextInputPayload] = useState("");
   const [aiGoal, setAiGoal] = useState("");
@@ -387,63 +424,6 @@ export function UniversalDeviceBridgeHub({
   const [customPackageInput, setCustomPackageInput] = useState<string>("");
   const phoneDragStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
-  // Persistent Live Workflow & 10-Pack Recording State
-  const [isLiveRecording, setIsLiveRecording] = useState<boolean>(false);
-  const [isCapturing10Pack, setIsCapturing10Pack] = useState<boolean>(false);
-  const [packCaptureProgress, setPackCaptureProgress] = useState<number>(0);
-
-  // 10-Screenshot Differential Verification Pack Capture Handler
-  const handleCapture10PackScreenshots = async () => {
-    setIsCapturing10Pack(true);
-    setPackCaptureProgress(1);
-    toast.info("📸 Recording 10 Differential Screenshots Pack...");
-    try {
-      const capturedPack: MobileFrameSnapshot[] = [];
-      for (let i = 1; i <= 10; i++) {
-        setPackCaptureProgress(i);
-        const snapRes = await fetch("/api/mobile-stream/snapshot", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            note: `Auto 10-Pack Differential Frame #${i}`,
-            touchX: 0.5,
-            touchY: 0.1 * i,
-          }),
-        });
-        if (snapRes.ok) {
-          const snapData = await snapRes.json();
-          if (snapData.snapshot) {
-            capturedPack.push(snapData.snapshot);
-          }
-        }
-        await new Promise((r) => setTimeout(r, 400));
-      }
-
-      // Compile into workflow
-      const compileRes = await fetch("/api/mobile-stream/screenshot-pack-workflow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: `10-Snap Workflow (${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})`,
-          description: `Differential verification pack with 10 captured steps`,
-          frames: capturedPack,
-          autoForwardToDesktop: true,
-        }),
-      });
-
-      if (compileRes.ok) {
-        toast.success("✅ Compiled and saved 10-Screenshot Differential Workflow!");
-        fetchWorkflows();
-        fetchRecentFrames();
-      }
-    } catch {
-      toast.error("Failed recording 10-pack differential screenshots");
-    } finally {
-      setIsCapturing10Pack(false);
-      setPackCaptureProgress(0);
-    }
-  };
-
   // Extend to Screen Overlay state
   const [extendedWorkflow, setExtendedWorkflow] = useState<any | null>(null);
   const [isExtendScreenActive, setIsExtendScreenActive] = useState<boolean>(false);
@@ -455,7 +435,46 @@ export function UniversalDeviceBridgeHub({
   const [draggingPinIndex, setDraggingPinIndex] = useState<number | null>(null);
 
   const phonePreviewRef = useRef<HTMLDivElement | null>(null);
-  const mobileLinkUrl = typeof window !== "undefined" ? `${window.location.origin}/mobile-remote` : "";
+  const [customMobileUrl, setCustomMobileUrl] = useState<string>("");
+  const [detectedLanIp, setDetectedLanIp] = useState<string>("");
+  const [qrPairingMode, setQrPairingMode] = useState<"standard" | "backup_apk">("standard");
+  const [networkInterfaces, setNetworkInterfaces] = useState<{ name: string; address: string }[]>([]);
+  const [isMobileSettingsModalOpen, setIsMobileSettingsModalOpen] = useState<boolean>(false);
+  const [isApkModalOpen, setIsApkModalOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetch("/api/mobile/network-info")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.lanIp) {
+          setDetectedLanIp(data.lanIp);
+          if (Array.isArray(data.allInterfaces)) {
+            setNetworkInterfaces(data.allInterfaces);
+          }
+          if (
+            typeof window !== "undefined" &&
+            (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+          ) {
+            setCustomMobileUrl(data.recommendedMobileUrl);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const handleOpenSettings = () => setIsMobileSettingsModalOpen(true);
+    window.addEventListener("sightline-open-mobile-settings", handleOpenSettings);
+    return () => window.removeEventListener("sightline-open-mobile-settings", handleOpenSettings);
+  }, []);
+
+  const mobileLinkUrl =
+    customMobileUrl ||
+    (detectedLanIp
+      ? `http://${detectedLanIp}:3000/mobile-remote`
+      : typeof window !== "undefined"
+      ? `${window.location.origin}/mobile-remote`
+      : "");
 
   // Fetch workflows
   const fetchWorkflows = useCallback(async () => {
@@ -1820,107 +1839,6 @@ export function UniversalDeviceBridgeHub({
             <Wifi className="w-3.5 h-3.5" /> WiFi ADB
           </button>
         </div>
-
-        {/* PERSISTENT UNIVERSAL AUTOMATION ACTION BAR (VISIBLE ON ALL TABS & STREAM MODES) */}
-        <div className="w-full bg-slate-950 p-2 rounded-xl border border-indigo-500/40 shadow-xl flex flex-wrap items-center justify-between gap-2">
-          {/* Left: Recording Controls & Status */}
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              onClick={() => {
-                if (isLiveRecording) {
-                  setIsLiveRecording(false);
-                  if (liveRecordedActions.length > 0) {
-                    setIsSavingWorkflow(true);
-                  }
-                  toast.info("⏹️ Stopped Live Workflow Recording");
-                } else {
-                  setLiveRecordedActions([]);
-                  setIsLiveRecording(true);
-                  toast.info("🔴 Live Recording Active: Tap anywhere to record workflow steps!");
-                }
-              }}
-              className={`h-7 px-3 text-[10px] font-bold gap-1.5 shadow-md transition-all ${
-                isLiveRecording
-                  ? "bg-red-600 hover:bg-red-500 text-white animate-pulse"
-                  : "bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white"
-              }`}
-              title="Record workflow steps on live device stream"
-            >
-              {isLiveRecording ? (
-                <>
-                  <Square className="w-3 h-3 fill-white" /> Stop & Save ({liveRecordedActions.length})
-                </>
-              ) : (
-                <>
-                  <Play className="w-3 h-3 fill-white" /> 🔴 Record Workflow
-                </>
-              )}
-            </Button>
-
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleCapture10PackScreenshots}
-              disabled={isCapturing10Pack}
-              className="h-7 px-2.5 text-[10px] font-mono border-teal-500/40 bg-slate-900 text-teal-300 hover:text-teal-200 gap-1"
-              title="Record 10-Screenshot Differential Verification Pack"
-            >
-              <Camera className={`w-3 h-3 ${isCapturing10Pack ? "animate-spin text-teal-400" : ""}`} />
-              {isCapturing10Pack ? `10-Snap (${packCaptureProgress}/10)` : "📸 10-Snap"}
-            </Button>
-          </div>
-
-          {/* Right: Send Live Camera/Screen Feed to AI & SOP Grounding */}
-          <div className="flex items-center gap-1.5">
-            <Button
-              size="sm"
-              onClick={() => {
-                const goal = aiGoal.trim() || "Analyze screen elements and plan next automation step";
-                setAiGoal(goal);
-                handleRunAiGoal(false);
-                toast.success("📹 Live Feed sent to AI for instant perception!");
-              }}
-              disabled={isAiExecuting}
-              className="h-7 px-2.5 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-[10px] font-bold gap-1 shadow-md"
-              title="Capture current camera/screen frame and send directly to AI Gemini Vision"
-            >
-              {isAiExecuting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3 text-amber-300" />}
-              📹 Send Live Feed to AI
-            </Button>
-
-            <label className="h-7 px-2.5 rounded-lg bg-slate-900 border border-slate-700 hover:border-blue-500 text-slate-200 hover:text-white text-[10px] font-bold cursor-pointer flex items-center gap-1">
-              <Upload className="w-2.5 h-2.5 text-blue-400" /> Ingest SOP
-              <input
-                type="file"
-                accept=".pdf,.txt,.docx,.json,.md,.csv,.png,.jpg"
-                className="hidden"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  try {
-                    const content = await file.text().catch(() => `[Binary: ${file.name}]`);
-                    await fetch("/api/mobile-stream/upload-doc", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        name: file.name,
-                        content,
-                        fileType: file.type || "text/plain",
-                        size: file.size,
-                        tags: ["grounding-doc", "sop"],
-                      }),
-                    });
-                    setAiGoal(`Follow uploaded SOP "${file.name}" to execute task`);
-                    toast.success(`📎 Ingested "${file.name}" for AI grounding!`);
-                  } catch {
-                    toast.error("Upload failed");
-                  }
-                }}
-              />
-            </label>
-          </div>
-        </div>
       </div>
 
       {/* ---------------------------------------------------- */}
@@ -1928,52 +1846,161 @@ export function UniversalDeviceBridgeHub({
       {/* ---------------------------------------------------- */}
       {activeTab === "qr-link" && (
         <div className="space-y-3">
-          <PhoneDevicePanel replaySteps={replaySteps} />
-          <h3 className="text-sm text-slate-400">Browser-only sharing and virtual phone tools</h3>
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
             {/* Left Column: QR Code + Connection info */}
             <div className="lg:col-span-4 space-y-3">
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col items-center justify-center space-y-2.5 text-center shadow-md">
-                <div className="p-2.5 rounded-xl bg-white border-2 border-emerald-500/40 shadow-xl">
+                {/* Pairing Mode Switcher: Standard Web vs Backup APK Scanner */}
+                <div className="flex w-full rounded-lg bg-slate-900 p-0.5 border border-slate-800 text-[10px]">
+                  <button
+                    onClick={() => setQrPairingMode("standard")}
+                    className={`flex-1 py-1 px-2 rounded-md font-bold transition-all flex items-center justify-center gap-1 ${
+                      qrPairingMode === "standard"
+                        ? "bg-emerald-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <Smartphone className="w-3 h-3" /> Standard Web
+                  </button>
+                  <button
+                    onClick={() => setQrPairingMode("backup_apk")}
+                    className={`flex-1 py-1 px-2 rounded-md font-bold transition-all flex items-center justify-center gap-1 ${
+                      qrPairingMode === "backup_apk"
+                        ? "bg-cyan-600 text-white shadow-sm ring-1 ring-cyan-400"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <Zap className="w-3 h-3" /> Backup APK Scan
+                  </button>
+                </div>
+
+                <div
+                  className={`p-2.5 rounded-xl bg-white border-2 shadow-xl transition-all ${
+                    qrPairingMode === "backup_apk"
+                      ? "border-cyan-500 shadow-cyan-950/50"
+                      : "border-emerald-500/40"
+                  }`}
+                >
                   <QRCodeSVG
-                    value={mobileLinkUrl}
-                    size={130}
+                    value={
+                      qrPairingMode === "backup_apk"
+                        ? JSON.stringify({
+                            app: "sightline",
+                            url: mobileLinkUrl,
+                            host: detectedLanIp || "192.168.1.162",
+                            port: 3000,
+                          })
+                        : mobileLinkUrl
+                    }
+                    size={135}
                     level="M"
                     includeMargin={false}
                   />
                 </div>
-                <div className="space-y-1">
-                  <span className="text-[11px] font-bold text-emerald-400 flex items-center justify-center gap-1">
-                    <Smartphone className="w-3.5 h-3.5" /> Browser sharing / virtual phone
-                  </span>
+                <div className="space-y-1.5 w-full">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className={`text-[11px] font-bold flex items-center gap-1 ${
+                        qrPairingMode === "backup_apk" ? "text-cyan-400" : "text-emerald-400"
+                      }`}
+                    >
+                      {qrPairingMode === "backup_apk" ? (
+                        <>
+                          <Zap className="w-3.5 h-3.5 text-cyan-400 animate-pulse" /> APK Camera Pairing
+                        </>
+                      ) : (
+                        <>
+                          <Smartphone className="w-3.5 h-3.5" /> Scan to Beam Screen
+                        </>
+                      )}
+                    </span>
+                    {detectedLanIp && (
+                      <Badge
+                        className={`text-[8px] font-mono ${
+                          qrPairingMode === "backup_apk"
+                            ? "bg-cyan-950 text-cyan-300 border-cyan-700/60"
+                            : "bg-emerald-950/80 text-emerald-300 border-emerald-700/60"
+                        }`}
+                      >
+                        LAN: {detectedLanIp}
+                      </Badge>
+                    )}
+                  </div>
                   <p className="text-[10px] text-slate-400">
-                    Browser camera or virtual UI only. For actual Android control and recording, use the paired device panel above.
+                    {qrPairingMode === "backup_apk"
+                      ? "In your Android APK, tap [📷 Scan QR] and point camera here to auto-pair!"
+                      : "Open on your phone to stream live screen & receive AI automations."}
                   </p>
-                </div>
 
-                <div className="flex gap-1 w-full">
-                  <Input
-                    readOnly
-                    value={mobileLinkUrl}
-                    className="h-7 text-[10px] bg-slate-900 border-slate-700 font-mono text-slate-300"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleCopyLink}
-                    className="h-7 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs"
-                    title="Copy Link"
-                  >
-                    {copiedLink ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => window.open(mobileLinkUrl, "_blank")}
-                    className="h-7 px-2 border-slate-700 text-slate-300 hover:text-white text-xs"
-                    title="Open in new tab"
-                  >
-                    <ExternalLink className="w-3 h-3" />
-                  </Button>
+                  {/* Network Adapter IP Selector if multiple adapters detected */}
+                  {networkInterfaces.length > 1 && (
+                    <div className="flex items-center gap-1 w-full text-[10px] bg-slate-900/80 border border-slate-800 rounded px-1.5 py-1">
+                      <span className="text-slate-400 text-[9px] shrink-0">IP:</span>
+                      <select
+                        value={detectedLanIp}
+                        onChange={(e) => {
+                          const ip = e.target.value;
+                          setDetectedLanIp(ip);
+                          setCustomMobileUrl(`http://${ip}:3000/mobile-remote`);
+                        }}
+                        className="flex-1 bg-transparent text-cyan-300 font-mono text-[9px] outline-none cursor-pointer"
+                      >
+                        {networkInterfaces.map((iface, idx) => (
+                          <option key={idx} value={iface.address} className="bg-slate-900 text-slate-200">
+                            {iface.name}: {iface.address}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="flex gap-1 items-center">
+                    <Input
+                      value={mobileLinkUrl}
+                      onChange={(e) => setCustomMobileUrl(e.target.value)}
+                      className="h-7 text-[10px] bg-slate-900 border-slate-700 font-mono text-slate-300"
+                      title="Editable phone connection URL (points to your PC's LAN IP)"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={handleCopyLink}
+                      className="h-7 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs shrink-0"
+                      title="Copy Link"
+                    >
+                      {copiedLink ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => window.open(mobileLinkUrl, "_blank")}
+                      className="h-7 px-2 border-slate-700 text-slate-300 hover:text-white text-xs shrink-0"
+                      title="Open in new tab"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                    </Button>
+                  </div>
+
+                  {/* Direct APK Download & Mobile Settings Buttons */}
+                  <div className="flex gap-1.5 pt-1 w-full">
+                    <Button
+                      size="sm"
+                      onClick={() => setIsApkModalOpen(true)}
+                      className="h-7 text-[10px] font-bold bg-indigo-600 hover:bg-indigo-500 text-white flex-1 gap-1 shadow-sm"
+                    >
+                      <Download className="w-3 h-3" />
+                      Download APK / PWA
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setIsMobileSettingsModalOpen(true)}
+                      className="h-7 px-2 text-[10px] font-bold border-slate-700 text-slate-300 hover:text-white gap-1"
+                      title="Open Mobile Stream Settings"
+                    >
+                      <Settings className="w-3 h-3 text-slate-400" />
+                      Settings
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -2133,6 +2160,41 @@ export function UniversalDeviceBridgeHub({
                       <Layers className="w-3 h-3 text-purple-400" />
                       <span>Forward to HUD</span>
                       <span className="text-[8px] opacity-70">[V]</span>
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      onClick={handleScanCurrentFrameBarcode}
+                      disabled={!mobileFrame || isScanningFrameBarcode}
+                      className="h-6 px-2 bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-500/60 text-[10px] font-bold font-mono gap-1 shadow-sm"
+                      title="Decode 1D/2D Barcodes or QR Codes in current mobile frame"
+                    >
+                      {isScanningFrameBarcode ? (
+                        <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
+                      ) : (
+                        <Scan className="w-3 h-3 text-emerald-400" />
+                      )}
+                      <span>Scan Barcode</span>
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      onClick={() => setIsBarcodeModalOpen(true)}
+                      className="h-6 px-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-bold font-mono gap-1 shadow-sm"
+                      title="Open Inventory Ledger & Barcode Scanner Hub"
+                    >
+                      <Package className="w-3 h-3 text-cyan-400" />
+                      <span>Inventory</span>
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      onClick={() => setIsMobileSettingsModalOpen(true)}
+                      className="h-6 px-2 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 hover:border-slate-500 text-[10px] font-bold font-mono gap-1 shadow-sm"
+                      title="Open Mobile Stream & Workspace Options (Dead route sensitivity, AI vision model, auto-record)"
+                    >
+                      <Settings className="w-3 h-3 text-slate-300" />
+                      <span>Settings</span>
                     </Button>
 
                     <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800">
@@ -4716,6 +4778,29 @@ export function UniversalDeviceBridgeHub({
           setAutonomousModalOpen(false);
           toast.success(`Active workflow set to "${wf.name}"`);
         }}
+      />
+
+      {/* Barcode & Inventory Scanner Hub Modal */}
+      <BarcodeInventoryScannerModal
+        isOpen={isBarcodeModalOpen}
+        onClose={() => setIsBarcodeModalOpen(false)}
+        initialBarcode={activeDecodedBarcode?.rawValue}
+        onBarcodeDetected={(barcode) => {
+          setActiveDecodedBarcode(barcode);
+        }}
+      />
+
+      {/* Mobile Stream & Workspace Settings Modal */}
+      <MobileSettingsModal
+        open={isMobileSettingsModalOpen}
+        onOpenChange={setIsMobileSettingsModalOpen}
+        onSettingsSaved={(newSettings) => setWorkspaceSettings(newSettings)}
+      />
+
+      {/* Standalone Android APK & PWA Modal */}
+      <ApkAndPwaModal
+        open={isApkModalOpen}
+        onOpenChange={setIsApkModalOpen}
       />
     </div>
   );

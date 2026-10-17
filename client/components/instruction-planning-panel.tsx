@@ -121,9 +121,9 @@ export function PlanReview({
         </div>
       </div>
       <div className="mt-4 space-y-3">
-        {plan.steps.map((step, idx) => (
+        {plan.steps.map((step) => (
           <div
-            key={`plan_step_${step.id || "step"}_${idx}`}
+            key={step.id}
             className="rounded-lg border border-white/10 bg-[#0d1528] p-3"
           >
             <div className="flex items-center gap-2 text-xs text-slate-500">

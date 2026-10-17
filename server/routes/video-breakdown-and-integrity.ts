@@ -3,8 +3,10 @@
  */
 
 import { RequestHandler } from "express";
-import { getGenAIClient, setGeminiCooldown } from "../ai-gemini-service";
+import { GoogleGenAI } from "@google/genai";
 import { addBridgeLog } from "./pyautogui-bridge";
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export interface ExtractedVideoStep {
   id: string;
@@ -53,8 +55,7 @@ export const handleBreakdownVideoSteps: RequestHandler = async (req, res) => {
     // If frames and mouse events provided, we use Gemini or visual-spatial perception analysis
     let analyzedSteps: ExtractedVideoStep[] = [];
 
-    const ai = getGenAIClient();
-    if (ai && videoFrames.length > 0) {
+    if (process.env.GEMINI_API_KEY && videoFrames.length > 0) {
       try {
         const sampleFrame = videoFrames[0];
         const mouseSummary = Array.isArray(mouseEvents) && mouseEvents.length > 0
@@ -127,8 +128,7 @@ Respond strictly in valid JSON format matching this array:
           }));
         }
       } catch (geminiErr: any) {
-        setGeminiCooldown(20);
-        console.warn("[Video Breakdown] Gemini breakdown error, falling back to algorithmic vision decomposition:", geminiErr?.message || geminiErr);
+        console.warn("Gemini breakdown error, falling back to algorithmic vision decomposition:", geminiErr.message);
       }
     }
 

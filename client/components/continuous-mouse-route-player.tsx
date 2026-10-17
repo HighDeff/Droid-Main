@@ -152,9 +152,18 @@ export const ContinuousMouseRoutePlayer: React.FC<
         setStatusLog(
           `✓ Physical OS mouse executed continuous route successfully.`,
         );
+      } else {
+        setStatusLog(
+          `❌ Execution failed: ${data.error || data.message || "Failed to execute route"}`,
+        );
+        setIsPlayingRoute(false);
+        return;
       }
     } catch (err) {
       console.error("Route playback error:", err);
+      setStatusLog(`❌ Network error while executing route`);
+      setIsPlayingRoute(false);
+      return;
     }
 
     // Also animate visual playback in frontend and global AI cursor overlay

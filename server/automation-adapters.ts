@@ -247,8 +247,8 @@ export class DesktopAutomationAdapter implements AutomationAdapter {
     if (!request.approved) throw new Error("Explicit approval is required");
     ensureEnabled(this.config, "desktop");
     if (request.action.type === "click") {
-      validatePoint(request.action as any, request.screen, "click coordinates");
-      await this.bridge.pointer(request.action as any);
+      validatePoint(request.action, request.screen, "click coordinates");
+      await this.bridge.pointer(request.action);
     } else if (request.action.type === "type") {
       if (!this.bridge.typeText)
         throw new AdapterUnavailableError(
@@ -292,15 +292,15 @@ export class AndroidAdbAutomationAdapter implements AutomationAdapter {
     const deviceId = validateDeviceId(request.deviceId);
     let args: string[];
     if (request.action.type === "click") {
-      validatePoint(request.action as any, request.screen, "tap coordinates");
+      validatePoint(request.action, request.screen, "tap coordinates");
       args = [
         "-s",
         deviceId,
         "shell",
         "input",
         "tap",
-        String(Math.floor((request.action as any).x)),
-        String(Math.floor((request.action as any).y)),
+        String(Math.floor(request.action.x)),
+        String(Math.floor(request.action.y)),
       ];
     } else if (request.action.type === "type") {
       args = [

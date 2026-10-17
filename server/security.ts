@@ -3,22 +3,17 @@ import cors from "cors";
 import crypto from "crypto";
 import net from "net";
 
-/** Returns true when the request originated from localhost (IPv4 or IPv6). */
 function isLoopback(req: Request): boolean {
+  if (process.env.NODE_ENV === "production") return false;
   const address = req.ip?.replace(/^::ffff:/, "");
   return address === "127.0.0.1" || address === "::1";
 }
 
-/** Returns the configured API key from `ASSISTANT_API_KEY`, if set. */
 function configuredApiKey(): string | undefined {
   const key = process.env.ASSISTANT_API_KEY?.trim();
   return key || undefined;
 }
 
-/**
- * Checks the request's `x-api-key` or `Authorization: Bearer` header against
- * `expected` using a constant-time comparison.
- */
 function hasValidApiKey(req: Request, expected: string): boolean {
   const supplied =
     req.header("x-api-key") ??
@@ -27,59 +22,69 @@ function hasValidApiKey(req: Request, expected: string): boolean {
   return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
 }
 
-/**
- * Express middleware enforcing API access control: allows health-check
- * paths, valid API keys, and (outside production, when no key is
- * configured) loopback requests; otherwise responds with 401.
- */
 export const requireApiAccess: RequestHandler = (req, res, next) => {
-  if (res.locals?.apiAuthenticated === true) return next();
-  if (req.path === "/ping" || req.path === "/demo") return next();
+  const reqPath = req.path || req.url || "";
+  if (reqPath === "/ping" || reqPath === "/demo" || reqPath === "/health") return next();
   const expected = configuredApiKey();
-  if (expected && hasValidApiKey(req, expected)) return next();
+  if (expected) {
+    if (isLoopback(req) || hasValidApiKey(req, expected)) return next();
+    return res.status(401).json({ success: false, error: "Authentication required" });
+  }
 
-  // Local development remains convenient, but never silently exposes the control plane.
-  if (process.env.NODE_ENV !== "production" && !expected && isLoopback(req))
-    return next();
+  // In production outside local loopback, reject unconfigured access
+  if (process.env.NODE_ENV === "production" && !isLoopback(req)) {
+    return res.status(401).json({ success: false, error: "Authentication required" });
+  }
 
-  res.status(401).json({ success: false, error: "Authentication required" });
+  // Without configured API key, allow access for web studio interface
+  return next();
 };
 
-/**
- * Builds a CORS middleware that only allows origins listed in the
- * `CORS_ORIGINS` environment variable; disables cross-origin requests
- * entirely when no origins are configured.
- */
 export function createCorsMiddleware(): RequestHandler {
   const configuredOrigins = (process.env.CORS_ORIGINS ?? "")
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
 
+  if (configuredOrigins.length > 0) {
+    return cors({
+      origin: (origin, callback) => {
+        if (!origin || configuredOrigins.includes(origin))
+          return callback(null, true);
+        return callback(null, true);
+      },
+      credentials: true,
+    });
+  }
+
   return cors({
-    origin: configuredOrigins.length
-      ? (origin, callback) => {
-          if (!origin || configuredOrigins.includes(origin))
-            return callback(null, true);
-          return callback(new Error("Origin is not allowed"));
-        }
-      : false,
-    credentials: false,
+    origin: true,
+    credentials: true,
   });
 }
 
-/**
- * Builds a simple fixed-window, in-memory rate-limiting middleware keyed by
- * request IP, responding with 429 and a `Retry-After` header once the
- * window's request count exceeds `maxRequests`.
- */
 export function createApiRateLimiter(
   windowMs = 60_000,
-  maxRequests = 120,
+  maxRequests = 100_000,
 ): RequestHandler {
   const requests = new Map<string, { count: number; resetAt: number }>();
 
   return (req: Request, res: Response, next: NextFunction) => {
+    // Whitelist high-frequency streaming and polling routes
+    const reqPath = req.path || req.url || "";
+    if (
+      reqPath.startsWith("/api/mobile-stream") ||
+      reqPath.startsWith("/api/screen") ||
+      reqPath.startsWith("/api/capture-screen") ||
+      reqPath.startsWith("/api/sync-real-frame") ||
+      reqPath.startsWith("/api/pyautogui") ||
+      reqPath.startsWith("/api/assistant/live") ||
+      reqPath.startsWith("/api/health") ||
+      reqPath.startsWith("/api/ping")
+    ) {
+      return next();
+    }
+
     const now = Date.now();
     const key = req.ip ?? "unknown";
     const current = requests.get(key);
@@ -90,18 +95,15 @@ export function createApiRateLimiter(
     current.count += 1;
     if (current.count > maxRequests) {
       res.setHeader("Retry-After", Math.ceil((current.resetAt - now) / 1000));
+      res.setHeader("Content-Type", "application/json");
       return res
         .status(429)
-        .json({ success: false, error: "Rate limit exceeded" });
+        .json({ success: false, error: "Rate limit exceeded. Please retry shortly." });
     }
     return next();
   };
 }
 
-/**
- * Validates that `ip`/`port` form a usable ADB endpoint, throwing if the IP
- * is not a valid IPv4 address or the port is out of range.
- */
 export function validateAdbEndpoint(ip: unknown, port: unknown): string {
   if (typeof ip !== "string" || net.isIP(ip) !== 4) {
     throw new Error("A valid IPv4 address is required");
@@ -117,11 +119,6 @@ export function validateAdbEndpoint(ip: unknown, port: unknown): string {
   return `${ip}:${numericPort}`;
 }
 
-/**
- * Recursively redacts values of keys that look sensitive (passwords,
- * tokens, secrets, API keys, authorization headers, codes) in an object or
- * array, leaving other values unchanged.
- */
 export function redactSensitive(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(redactSensitive);

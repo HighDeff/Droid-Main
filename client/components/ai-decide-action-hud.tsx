@@ -40,7 +40,6 @@ interface AIDecideActionHUDProps {
   deviceId?: string | null;
   onAddStep?: (step: Partial<SequenceStep> & { x: number; y: number }) => void;
   onRunSequence?: () => void;
-  onReplayStep?: (step: Partial<SequenceStep> & { x: number; y: number }) => void;
   onNavigate?: (x: number, y: number, label: string) => void;
   onTypeText?: (
     x: number,
@@ -48,10 +47,10 @@ interface AIDecideActionHUDProps {
     text: string,
     action?: "type_text" | "clear_and_type",
   ) => void;
+  onReplayStep?: (step: any) => void;
 }
 
 export const AIDecideActionHUD: React.FC<AIDecideActionHUDProps> = ({
-  onReplayStep,
   perceptionReport,
   sequence,
   activeStepId,
@@ -188,22 +187,135 @@ export const AIDecideActionHUD: React.FC<AIDecideActionHUDProps> = ({
   };
 
   const handleExecuteType = async () => {
-    if (!typeText.trim()) { setStatus("Enter text first"); return; }
-    if (!onReplayStep) { setStatus("Verified replay is unavailable here"); return; }
-    onReplayStep({ x: typeX, y: typeY, action: typeAction, text: typeText, name: `Type ${typeText.slice(0, 20)}` });
-    setStatus("Replay requested; inspect the agent monitor for the verified result.");
+    if (!typeText.trim()) {
+      setStatus("Enter text to type first");
+      return;
+    }
+    setExecuting(true);
+    setStatus(
+      `Typing "${typeText}" at (${typeX},${typeY}) via ${targetDevice}...`,
+    );
+    try {
+      const res = await fetch("/api/execute-task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetDevice,
+          deviceId,
+          task: {
+            id: `ai_type_${Date.now()}`,
+            name: `AI Type: ${typeText.slice(0, 20)}`,
+            action: typeAction,
+            targetPosition: { x: typeX, y: typeY },
+            textPayload: typeText,
+            text: typeText,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setStatus(`✗ Type failed: ${data.error || "Execution failed"}`);
+        return;
+      }
+      setStatus(`✓ Typed "${typeText}" @ (${typeX},${typeY})`);
+      onTypeText?.(typeX, typeY, typeText, typeAction);
+      // Also add as step for reusability
+      onAddStep?.({
+        x: typeX,
+        y: typeY,
+        action: typeAction,
+        text: typeText,
+        name: `AI Type: ${typeText.slice(0, 16)}`,
+      });
+    } catch (e) {
+      setStatus("Type error: " + String(e).slice(0, 60));
+    } finally {
+      setExecuting(false);
+    }
   };
 
   const handleExecuteSequence = async () => {
-    if (!sequence.length || !onRunSequence) { setStatus("Add steps and use Screen Hub replay"); return; }
-    onRunSequence();
-    setStatus("Replay requested; inspect the agent monitor for the verified result.");
+    if (sequence.length === 0) {
+      setStatus("No sequence to perform — create steps first");
+      return;
+    }
+    setExecuting(true);
+    setStatus(
+      `Performing ${sequence.length} step sequence via ${targetDevice}...`,
+    );
+    try {
+      if (onRunSequence) {
+        await onRunSequence();
+        setStatus(
+          `✓ Sequence of ${sequence.length} steps dispatched via pyautogui`,
+        );
+      } else {
+        // Fallback: dispatch each step directly
+        for (const s of sequence) {
+          await fetch("/api/execute-task", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              targetDevice,
+              deviceId,
+              task: {
+                id: s.id,
+                name: s.name,
+                action: s.action,
+                targetPosition: { x: s.x, y: s.y },
+                textPayload: s.text || "",
+              },
+            }),
+          });
+          await new Promise((r) => setTimeout(r, s.delayMs || 500));
+        }
+        setStatus(`✓ Sequence executed`);
+      }
+    } catch (e) {
+      setStatus("Sequence error: " + String(e).slice(0, 60));
+    } finally {
+      setExecuting(false);
+    }
   };
 
   const handleExecuteNavigate = async () => {
-    if (!onReplayStep) { setStatus("Verified replay is unavailable here"); return; }
-    onReplayStep({ x: navX, y: navY, action: "click", name: navLabel || "Navigate" });
-    setStatus("Replay requested; inspect the agent monitor for the verified result.");
+    setExecuting(true);
+    setStatus(
+      `Navigating to (${navX},${navY}) ${navLabel} via ${targetDevice}...`,
+    );
+    try {
+      const res = await fetch("/api/execute-task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetDevice,
+          deviceId,
+          task: {
+            id: `ai_nav_${Date.now()}`,
+            name: `Navigate: ${navLabel}`,
+            action: "click",
+            targetPosition: { x: navX, y: navY },
+          },
+        }),
+      });
+      const data = await res.json();
+      setStatus(
+        data.success
+          ? `✓ Navigated to (${navX},${navY})`
+          : `✗ Navigate failed: ${data.error}`,
+      );
+      onNavigate?.(navX, navY, navLabel);
+      onAddStep?.({
+        x: navX,
+        y: navY,
+        action: "click",
+        name: `Navigate: ${navLabel}`,
+      });
+    } catch (e) {
+      setStatus("Navigate error: " + String(e).slice(0, 60));
+    } finally {
+      setExecuting(false);
+    }
   };
 
   return (

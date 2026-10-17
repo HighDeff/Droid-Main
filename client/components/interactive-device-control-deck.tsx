@@ -349,7 +349,7 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
           text: textToSend,
           deviceMode: activeDevice === "android" ? "android_adb" : "desktop_mirror",
         }),
-      }).catch(() => {});
+      });
 
       // Forward to Mobile Stream Queue for connected phone
       fetch("/api/mobile-stream/action", {
@@ -412,7 +412,7 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
           key,
           deviceMode: activeDevice === "android" ? "android_adb" : "desktop_mirror",
         }),
-      }).catch(() => {});
+      });
 
       // Forward to Mobile Stream Queue for connected phone
       fetch("/api/mobile-stream/action", {
@@ -806,6 +806,7 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
                           onClick={() => handleCopyWorkflow("cot", wf)}
                           className="px-2 py-0.5 rounded bg-slate-950 border border-slate-700 text-purple-300 hover:text-white text-[10px]"
                           title="Copy CoT Prompt"
+                          aria-label={`Copy CoT Prompt for ${wf.name}`}
                         >
                           CoT Prompt
                         </button>
@@ -813,6 +814,7 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
                           onClick={() => handleCopyWorkflow("python", wf)}
                           className="px-2 py-0.5 rounded bg-slate-950 border border-slate-700 text-emerald-300 hover:text-white text-[10px]"
                           title="Copy Python Script"
+                          aria-label={`Copy Python Script for ${wf.name}`}
                         >
                           Python
                         </button>
@@ -821,6 +823,7 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
                       <Button
                         size="sm"
                         onClick={() => handleRunWorkflow(wf)}
+                        aria-label={`Run Test: ${wf.name}`}
                         className="h-6 px-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-[10px] flex items-center gap-1"
                       >
                         <Play className="w-3 h-3 fill-current" />

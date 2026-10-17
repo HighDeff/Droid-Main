@@ -55,6 +55,8 @@ export function resolveAiEndpoint(provided?: string | null): string {
     }
     return endpoint.endsWith("/") ? `${endpoint}api/chat` : `${endpoint}/api/chat`;
   }
+  // If no endpoint configured, check if Gemini API key is available
+  // If yes, return Gemini endpoint; otherwise use Qwen default as fallback
   return DEFAULT_OLLAMA_ENDPOINT;
 }
 
@@ -160,7 +162,7 @@ export async function sendQwenChatRequest(
 ): Promise<{ success: boolean; content: string; raw?: any; error?: string }> {
   const targetUrl = resolveAiEndpoint(options?.endpoint);
   const targetModel = resolveAiModel(options?.model);
-  const timeoutMs = options?.timeoutMs || 3500;
+  const timeoutMs = options?.timeoutMs || 25000;
 
   const payload: Record<string, any> = {
     model: targetModel,

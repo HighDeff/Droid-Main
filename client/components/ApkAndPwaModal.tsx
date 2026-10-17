@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -43,6 +43,26 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
   const { isInstallable, isInstalled, isIOS, isAndroid, install } = usePWAInstall();
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"quick" | "apk_build" | "guide">("quick");
+  const [networkHost, setNetworkHost] = useState<string>(typeof window !== "undefined" ? window.location.host : "localhost:3000");
+  const [lanIp, setLanIp] = useState<string>("");
+
+  useEffect(() => {
+    if (open) {
+      fetch("/api/mobile/network-info")
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.lanIp) {
+            setLanIp(data.lanIp);
+            const port = data.port || (typeof window !== "undefined" ? window.location.port || "3000" : "3000");
+            const hostWithLan = `${data.lanIp}:${port}`;
+            if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+              setNetworkHost(hostWithLan);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [open]);
 
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -81,7 +101,7 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
                   </Badge>
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-400">
-                  Browser installation and experimental WebView source. For full phone capture and control, use the paired ADB device panel.
+                  Solutions for browser restrictions, native WebAPK installation, and Android APK downloads.
                 </DialogDescription>
               </div>
             </div>
@@ -92,7 +112,7 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <span className="font-semibold text-amber-200">Why was screen share restricted? </span>
-              Standard mobile web browsers (Android Chrome / iOS Safari) restrict web tabs from capturing the whole OS screen for privacy. Installing the PWA does not remove this restriction. Use the native Android companion or paired ADB device panel for full phone capture.
+              Standard mobile web browsers (Android Chrome / iOS Safari) restrict web tabs from capturing the whole OS screen for privacy. Choose a native APK or live streaming alternative below:
             </div>
           </div>
 
@@ -206,15 +226,41 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
                     Download Standalone Android APK Source (.zip)
                   </h4>
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Native Android 11+ companion source with QR pairing, accessibility mirroring and control, and full display recording through a foreground MediaProjection service. Video stays on the phone and continues across apps. Build with Android Studio or Gradle 8.9.
+                    Full native Android Studio & Gradle project bundle including <code>MainActivity.java</code>, <code>AndroidManifest.xml</code>, Foreground MediaProjection service, and Wi-Fi cleartext network security config.
                   </p>
                 </div>
               </div>
+
+              {/* Server Host Override Input for LAN connectivity */}
+              <div className="mt-3 p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-300 font-medium">PC Server Host Address:</span>
+                  {lanIp && (
+                    <span className="text-[10px] text-emerald-400 font-mono">
+                      (LAN IP detected: {lanIp})
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={networkHost}
+                  onChange={(e) => setNetworkHost(e.target.value)}
+                  className="w-full h-7 px-2 text-xs bg-slate-900 border border-slate-700 rounded text-sky-300 font-mono focus:border-indigo-400 focus:outline-none"
+                  placeholder="e.g. 192.168.1.162:3000"
+                />
+                <p className="text-[10px] text-slate-500">
+                  Phone requires your PC's Wi-Fi IP address instead of "localhost" to connect.
+                </p>
+              </div>
+
               <div className="mt-3 flex gap-2">
-                <a href="/api/mobile/download-apk-bundle" download="sightline-mobile-apk-project.zip">
+                <a
+                  href={`/api/mobile/download-apk-bundle?host=${encodeURIComponent(networkHost)}`}
+                  download="sightline-mobile-apk-project.zip"
+                >
                   <Button
                     size="sm"
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs h-8 flex items-center gap-1.5"
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs h-8 flex items-center gap-1.5 shadow-md"
                   >
                     <Download className="w-3.5 h-3.5" />
                     Download APK Project (.zip)
@@ -287,12 +333,12 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
               </p>
               <div className="relative group">
                 <pre className="p-3 rounded-lg bg-slate-900 border border-slate-800 text-sky-300 font-mono text-xs overflow-x-auto">
-                  {`npx @bubblewrap/cli init --manifest="${window.location.origin}/manifest.webmanifest"\nnpx @bubblewrap/cli build`}
+                  {`npx @bubblewrap/cli init --manifest="http://${networkHost}/manifest.webmanifest"\nnpx @bubblewrap/cli build`}
                 </pre>
                 <button
                   onClick={() =>
                     copyToClipboard(
-                      `npx @bubblewrap/cli init --manifest="${window.location.origin}/manifest.webmanifest"\nnpx @bubblewrap/cli build`,
+                      `npx @bubblewrap/cli init --manifest="http://${networkHost}/manifest.webmanifest"\nnpx @bubblewrap/cli build`,
                       "bubblewrap"
                     )
                   }
@@ -309,16 +355,16 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
                 Gradle / Android Studio Build
               </h4>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Extract the downloaded ZIP and build in Android Studio or use the included Gradle 8.9 wrapper:
+                Extract the downloaded ZIP and compile with the Gradle wrapper:
               </p>
               <div className="relative group">
                 <pre className="p-3 rounded-lg bg-slate-900 border border-slate-800 text-indigo-300 font-mono text-xs overflow-x-auto">
-                  {`unzip sightline-mobile-apk-project.zip -d sightline-mobile-apk-project\ncd sightline-mobile-apk-project\n./gradlew assembleDebug\nadb install -r app/build/outputs/apk/debug/app-debug.apk`}
+                  {`unzip sightline-mobile-apk-project.zip\ncd sightline-mobile-apk-project\n./gradlew assembleDebug\nadb install -r app/build/outputs/apk/debug/app-debug.apk`}
                 </pre>
                 <button
                   onClick={() =>
                     copyToClipboard(
-                      `unzip sightline-mobile-apk-project.zip -d sightline-mobile-apk-project\ncd sightline-mobile-apk-project\n./gradlew assembleDebug\nadb install -r app/build/outputs/apk/debug/app-debug.apk`,
+                      `unzip sightline-mobile-apk-project.zip\ncd sightline-mobile-apk-project\n./gradlew assembleDebug\nadb install -r app/build/outputs/apk/debug/app-debug.apk`,
                       "gradle"
                     )
                   }
@@ -353,7 +399,7 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
                   <li>Open Chrome on your phone and browse to this page.</li>
                   <li>Tap the <strong>three dots (⋮)</strong> menu in the upper right.</li>
                   <li>Tap <strong>"Install app"</strong> or <strong>"Add to Home screen"</strong>.</li>
-                  <li>Confirm installation. The web app opens in a standalone window with the same browser permissions.</li>
+                  <li>Confirm installation. The app will launch as a standalone Android app with native performance!</li>
                 </ol>
               </div>
 
@@ -377,7 +423,7 @@ export const ApkAndPwaModal: React.FC<ApkAndPwaModalProps> = ({
         <div className="p-4 bg-slate-900 border-t border-slate-800/80 flex items-center justify-between">
           <div className="flex items-center gap-2 text-[11px] text-slate-400">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            Pair with your Sightline server • Native recording saved on phone
+            Zero external cloud dependencies • Local LAN & P2P sync
           </div>
           <Button
             variant="ghost"

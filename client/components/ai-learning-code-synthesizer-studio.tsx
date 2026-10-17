@@ -11,7 +11,7 @@ import {
   CheckCircle2,
   Copy,
   Layers,
-  ImageIcon,
+  Image,
   FolderOpen,
   Search,
   Filter,
@@ -442,7 +442,7 @@ def dismiss_and_bypass_overlay(bypass_x=620, bypass_y=380):
             <span>OCR Knowledge Base ({ocrTokens.length})</span>
           </TabsTrigger>
           <TabsTrigger value="images" className="gap-1 text-xs">
-            <ImageIcon className="w-3.5 h-3.5 text-pink-400" />
+            <Image className="w-3.5 h-3.5 text-pink-400" />
             <span>Semantic Image Gallery ({semanticImages.length})</span>
           </TabsTrigger>
           <TabsTrigger value="tools" className="gap-1 text-xs">
@@ -611,7 +611,7 @@ def dismiss_and_bypass_overlay(bypass_x=620, bypass_y=380):
           <Card className="bg-slate-900 border-slate-800 shadow-xl">
             <CardHeader className="p-3 bg-slate-950 border-b border-slate-800 flex flex-row items-center justify-between">
               <div className="flex items-center gap-2">
-                <ImageIcon className="w-4 h-4 text-pink-400" />
+                <Image className="w-4 h-4 text-pink-400" />
                 <CardTitle className="text-xs font-bold text-slate-100">
                   Organized Screenshot & Element Crops Gallery
                 </CardTitle>

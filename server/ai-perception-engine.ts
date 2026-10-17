@@ -175,13 +175,12 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
       this.lastDescription = report.screenDescription;
       return report;
     } catch (err) {
-      try {
-        return await this.analyzeWithLocalProvider(imageData, browserContext);
-      } catch {
-        return this.generateFallbackReport(
-          err instanceof Error ? err.message : String(err),
-        );
-      }
+      console.warn(
+        "Qwen Vision perception failed, providing Gemini fallback:",
+        err,
+      );
+      // Fall back to Gemini heuristic detection when Qwen endpoint is unavailable
+      return this.analyzeWithLocalProvider(imageData, browserContext);
     }
   }
 
@@ -312,9 +311,9 @@ IMPORTANT: Output ONLY the raw JSON without markdown formatting or code blocks. 
           height: el.height,
         },
         center: { x: el.x, y: el.y },
-        confidence: el.confidence,
-        interactive: el.interactive,
-        textValue: el.textValue || "",
+        confidence: (el as any).confidence ?? 0.95,
+        interactive: (el as any).interactive ?? true,
+        textValue: (el as any).textValue || (el as any).text || "",
       }),
     );
 

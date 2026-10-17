@@ -90,6 +90,13 @@ export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
     },
   ]);
 
+  const [habitSuggestion, setHabitSuggestion] = useState<{
+    zone: string;
+    count: number;
+    x: number;
+    y: number;
+  } | null>(null);
+
   // Live polling of logs and self-healing telemetry
   useEffect(() => {
     const interval = setInterval(async () => {
@@ -118,6 +125,34 @@ export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
             },
           ]);
         }
+
+        // Also poll habits & repetitive patterns
+        try {
+          const habitRes = await fetch("/api/learning/habits");
+          if (habitRes.ok) {
+            const hData = await habitRes.json();
+            if (hData.profile?.repetitiveActionDetected && hData.profile?.topClickZones?.length > 0) {
+              const topZ = hData.profile.topClickZones[0];
+              setHabitSuggestion({
+                zone: `${topZ.x}, ${topZ.y}`,
+                count: hData.profile.repetitiveActionCount || 3,
+                x: topZ.x,
+                y: topZ.y,
+              });
+              setAgents((prev) => [
+                {
+                  ...prev[0],
+                  status: "intervening",
+                  liveThought: `Habit Detected: ${hData.profile.repetitiveActionCount} repetitive actions in zone (${topZ.x}, ${topZ.y}). Auto-routine ready to dispatch.`,
+                },
+                prev[1],
+                prev[2],
+              ]);
+            } else {
+              setHabitSuggestion(null);
+            }
+          }
+        } catch {}
       } catch {}
     }, 3000);
     return () => clearInterval(interval);
@@ -133,7 +168,9 @@ export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
           timestamp: Date.now(),
         }),
       }).catch(() => {});
-      toast.success("🛠️ Auto-Corrector: Triggered action self-healing & fallback routines!");
+      // Also trigger ad dismissal heuristic
+      fetch("/api/ai/dismiss-ad", { method: "POST" }).catch(() => {});
+      toast.success("🛠️ Auto-Corrector: Triggered action self-healing & dismissed popups!");
       onDispatchFix?.("self_heal");
     } else if (agentId === "agent_log_reader") {
       toast.info("📜 Log Sentinel: Audited pipeline history and cleared error counters.");
@@ -161,6 +198,49 @@ export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
       </CardHeader>
 
       <CardContent className="p-3">
+        {/* Habit & Routine Detected Banner */}
+        {habitSuggestion && (
+          <div className="mb-3 p-2.5 rounded-xl bg-amber-950/80 border border-amber-500/80 flex items-center justify-between gap-3 text-xs text-amber-200 animate-pulse shadow-lg">
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                <strong>Repetitive Habit Detected:</strong> User performed {habitSuggestion.count} actions in area ({habitSuggestion.zone}). Automate as background routine?
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={async () => {
+                  toast.info("Automating routine for 5 cycles...");
+                  await fetch("/api/execute-task", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      task: {
+                        name: "Habit Routine Loop",
+                        action: "click",
+                        targetPosition: { x: habitSuggestion.x, y: habitSuggestion.y },
+                        delayMs: 400,
+                      },
+                      repeatCount: 5,
+                    }),
+                  });
+                  toast.success("Routine executed 5 cycles!");
+                  setHabitSuggestion(null);
+                }}
+                className="h-6 px-2.5 text-[10px] bg-amber-600 hover:bg-amber-500 text-white font-bold"
+              >
+                Automate Routine (5x)
+              </Button>
+              <button
+                onClick={() => setHabitSuggestion(null)}
+                className="text-xs text-amber-400 hover:text-white px-1"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {agents.map((agent) => (
             <div

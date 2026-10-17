@@ -22,18 +22,18 @@ export interface SystemLogEntry {
     | "Screen-Detection"
     | "Mobile-Automation"
     | "PC-PyAutoGUI"
+    | "AI-FileSummary"
+    | "Main AI Executive"
     | "System";
   level: "INFO" | "WARN" | "ERROR" | "SUCCESS";
   message: string;
   metadata?: Record<string, any>;
 }
 
-/** In-memory ring buffer that collects and serves system log entries. */
 class CentralLogHub {
   private logs: SystemLogEntry[] = [];
   private maxLogs = 500;
 
-  /** Creates the hub and records its own initialization as a log entry. */
   constructor() {
     this.addLog(
       "System",
@@ -42,7 +42,6 @@ class CentralLogHub {
     );
   }
 
-  /** Appends a new log entry to the front of the buffer, trimming to `maxLogs`. */
   addLog(
     source: SystemLogEntry["source"],
     level: SystemLogEntry["level"],
@@ -67,7 +66,6 @@ class CentralLogHub {
     return entry;
   }
 
-  /** Returns up to `limit` log entries, optionally filtered by source and level. */
   getLogs(limit = 100, source?: string, level?: string): SystemLogEntry[] {
     let filtered = this.logs;
     if (source && source !== "all") {
@@ -81,7 +79,6 @@ class CentralLogHub {
     return filtered.slice(0, limit);
   }
 
-  /** Clears all buffered log entries and records a reset notice. */
   clearLogs() {
     this.logs = [];
     this.addLog("System", "INFO", "Log buffer cleared");

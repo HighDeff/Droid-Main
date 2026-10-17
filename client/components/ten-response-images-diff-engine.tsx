@@ -279,6 +279,7 @@ export function TenResponseImagesDiffEngine({
           <div className="flex items-center gap-2 bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-800">
             <span className="text-[11px] font-mono text-slate-300 font-bold">Auto-Position Drift:</span>
             <Switch
+              aria-label="Auto-Position Drift"
               checked={autoRepositionEnabled}
               onCheckedChange={setAutoRepositionEnabled}
               className="data-[state=checked]:bg-cyan-600"
@@ -382,7 +383,7 @@ export function TenResponseImagesDiffEngine({
 
               return (
                 <div
-                  key={`diff_step_${step.id || "step"}_${slotIdx}`}
+                  key={step.id}
                   onClick={() => {
                     setSelectedSlotIndex(slotIdx);
                     onSelectStep(step.id);

@@ -1,3 +1,4 @@
+import { MobileSettingsModal } from "@/components/mobile-settings-modal";
 import type { ReplayRun } from "@shared/replay";
 import { ReplayMonitor } from "@/components/replay-monitor";
 import { generateDefaultMobileFrame, generateDefaultDesktopFrame } from "@/lib/mobile-screen-generator";
@@ -288,6 +289,7 @@ export default function Dashboard({
   const [goalsState, setGoalsState] = useState<any[]>([]);
   const [globalCursorState, setGlobalCursorState] = useState<GlobalAICursorState | null>(null);
   const [isApkModalOpen, setIsApkModalOpen] = useState(false);
+  const [isMobileSettingsModalOpen, setIsMobileSettingsModalOpen] = useState(false);
 
   // Listen for global AI cursor movement, tab switches, settings adjustments, workflow repairs and clear steps
   useEffect(() => {
@@ -778,7 +780,7 @@ export default function Dashboard({
     setIsSequenceRunning(active);
     setIsAutonomousRunning(active);
     setActiveStepId(active ? run.steps[run.currentStep]?.id : null);
-    setSequence(prev => prev.map(step => ({ ...step, status: run.steps.find(s => s.id === step.id)?.status || step.status })));
+    setSequence(prev => prev.map(step => ({ ...step, status: (run.steps.find(s => s.id === step.id)?.status as any) || step.status })));
     if (!active) { setAiThinking(null); setGlobalCursorState(null); }
   };
   useEffect(() => {
@@ -908,21 +910,45 @@ export default function Dashboard({
         );
     }
   }, [targetDevice]);
-  const handleTriggerDescribeScreen = async () => {
+  const handleTriggerDescribeScreen = async (signalOrEvent?: any) => {
     setIsPerceiving(true);
     try {
-      const capture = await replayRequest("/api/replay/capture", { targetDevice, deviceId: selectedAdbDevice || undefined });
-      setScreenshotUrl(capture.frame.image); setAiLiveUrl(capture.frame.image);
-      const data = await replayRequest("/api/ai/describe-screen", { imageData: capture.frame.image });
+      const signal = signalOrEvent && typeof signalOrEvent === "object" && "aborted" in signalOrEvent ? (signalOrEvent as AbortSignal) : undefined;
+      const timeoutSignal = AbortSignal.timeout(45000);
+      const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+
+      const capture = await replayRequest("/api/replay/capture", {
+        targetDevice,
+        deviceId: selectedAdbDevice || undefined,
+        signal: combinedSignal,
+      });
+      setScreenshotUrl(capture.frame.image);
+      setAiLiveUrl(capture.frame.image);
+      const data = await replayRequest("/api/ai/describe-screen", {
+        imageData: capture.frame.image,
+        signal: combinedSignal,
+      });
       if (!data.success || !data.report) throw new Error(data.error || "Perception unavailable");
       setPerceptionReport(data.report);
       setVerificationBadge({ status: "verifying", message: "Screen analyzed; actions still require outcome verification" });
       return data.report;
-    } catch (error) {
+    } catch (error: any) {
       setPerceptionReport(null);
-      setVerificationBadge({ status: "failed", message: error instanceof Error ? error.message : "Screen analysis failed" });
-    } finally { setIsPerceiving(false); }
+      const msg =
+        error?.name === "TimeoutError"
+          ? "Perceive timed out (45s) — vision model hung, aborted"
+          : error?.name === "AbortError"
+            ? "Perceive cancelled (Esc)"
+            : error instanceof Error
+              ? error.message
+              : "Screen analysis failed";
+      setVerificationBadge({ status: "failed", message: msg });
+    } finally {
+      setIsPerceiving(false);
+    }
   };
+  const describeScreenRef = useRef(handleTriggerDescribeScreen);
+  describeScreenRef.current = handleTriggerDescribeScreen;
   const handleTriggerPlanAndAct = async () => {
     await handleRunSequence();
   };
@@ -946,12 +972,12 @@ export default function Dashboard({
               <Brain className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-sm sm:text-base font-bold text-white tracking-wide flex items-center gap-2">
-                DroidVision AI Master Agent
+              <div className="text-sm sm:text-base font-bold text-white tracking-wide flex items-center gap-2">
+                <span>DroidVision AI Master Agent</span>{" "}
                 <span className="hidden sm:inline-block px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-700">
                   Autonomous Vision Hub
                 </span>
-              </h1>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -961,6 +987,7 @@ export default function Dashboard({
                 onClick={() => setIsApkModalOpen(true)}
                 className="h-8 text-xs font-mono font-bold gap-1.5 bg-gradient-to-r from-sky-600 to-cyan-600 hover:from-sky-500 hover:to-cyan-500 text-white shadow-sm"
                 title="Android APK / WebAPK Hub: Download build zip or install native companion"
+                aria-label="Download APK build project or install native companion"
               >
                 <Smartphone className="w-3.5 h-3.5 text-cyan-200" />
                 <span>Download APK (.zip)</span>
@@ -970,6 +997,7 @@ export default function Dashboard({
                 download="sightline-mobile-apk-project.zip"
                 className="h-8 px-2 flex items-center justify-center rounded-md text-xs font-mono font-bold bg-slate-950 hover:bg-slate-800 text-cyan-300 hover:text-white border border-slate-700 transition-colors"
                 title="Direct Download APK Build Project (.zip)"
+                aria-label="Direct Download APK Build Project zip file"
               >
                 <Download className="w-3.5 h-3.5 text-cyan-400" />
               </a>
@@ -978,6 +1006,7 @@ export default function Dashboard({
               size="sm"
               onClick={() => setAutonomousModalOpen(true)}
               className="h-8 text-xs font-mono font-bold gap-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md"
+              aria-label="Autonomous Director & Sentinels Manager"
             >
               <Bot className="w-3.5 h-3.5 text-purple-200 animate-pulse" /> Autonomous Director & Sentinels
             </Button>
@@ -985,6 +1014,7 @@ export default function Dashboard({
               variant="outline"
               size="sm"
               onClick={() => setCurrentTab("desc-refiner")}
+              aria-label="Switch to Text Constraints & Refiner tab"
               className={`h-8 text-xs font-mono font-bold gap-1.5 transition-all ${
                 currentTab === "desc-refiner"
                   ? "bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-md shadow-amber-500/20"
@@ -997,6 +1027,7 @@ export default function Dashboard({
               variant="outline"
               size="sm"
               onClick={() => setCurrentTab("screen")}
+              aria-label="Switch to Screen HUD tab"
               className={`h-8 text-xs font-mono font-bold gap-1.5 ${currentTab === "screen" ? "bg-cyan-600 text-white border-cyan-500" : "bg-slate-900 border-slate-700 text-slate-200 hover:text-white"}`}
             >
               <Monitor className="w-3.5 h-3.5 text-cyan-400" /> Screen HUD
@@ -1005,6 +1036,7 @@ export default function Dashboard({
               variant="outline"
               size="sm"
               onClick={() => setCurrentTab("movement")}
+              aria-label="Switch to Movement Mode tab"
               className={`h-8 text-xs font-mono font-bold gap-1.5 transition-all ${
                 currentTab === "movement"
                   ? "bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/30 font-black"
@@ -1019,6 +1051,7 @@ export default function Dashboard({
               onClick={() => {
                 setIsCalibrationModalOpen(true);
               }}
+              aria-label="Calibrate Mouse Coordinates (Header)"
               className="h-8 text-xs font-mono bg-slate-900/90 text-amber-300 hover:text-white border border-slate-700 hover:border-amber-400 hover:bg-slate-800 transition-all gap-1.5 shadow-sm px-2.5"
               title="Calibrate Mouse, PyAutoGUI & Touch Coordinates"
             >
@@ -1031,6 +1064,7 @@ export default function Dashboard({
               onClick={() => {
                 setIsSettingsModalOpen(true);
               }}
+              aria-label="Global System Settings (Header)"
               className="h-8 text-xs font-mono bg-slate-900/90 text-cyan-300 hover:text-white border border-slate-700 hover:border-cyan-400 hover:bg-slate-800 transition-all gap-1.5 shadow-sm px-2.5"
               title="Configure AI Model URL & System Settings"
             >
@@ -1055,14 +1089,24 @@ export default function Dashboard({
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1 bg-slate-950 p-1.5 rounded-lg border border-slate-800 shadow-inner">
+              <div
+                role="radiogroup"
+                aria-label="Target device"
+                className="flex items-center gap-1 bg-slate-950 p-1.5 rounded-lg border border-slate-800 shadow-inner"
+              >
                 <button
+                  role="radio"
+                  aria-checked={targetDevice === "desktop"}
+                  aria-label="Target Server Desktop"
                   onClick={() => setTargetDevice("desktop")}
                   className={`px-3 py-1 rounded-md text-xs font-mono font-bold flex items-center gap-1.5 transition-colors ${targetDevice === "desktop" ? "bg-cyan-600 text-white shadow-sm" : "text-slate-300 hover:text-white"}`}
                 >
                   <Monitor className="w-3.5 h-3.5" /> Server desktop
                 </button>
                 <button
+                  role="radio"
+                  aria-checked={targetDevice === "android"}
+                  aria-label="Target Android Mobile device via ADB"
                   onClick={() => {
                     setTargetDevice("android");
                     fetch("/api/adb/devices")
@@ -1316,10 +1360,17 @@ export default function Dashboard({
               <span className="text-xs font-mono font-extrabold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-500/70 flex items-center gap-1.5 shadow-sm tracking-wider">
                 <Compass className="w-4 h-4 text-cyan-400 animate-pulse" /> 2ND HUD | MOVEMENT MODE
               </span>
-              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-700 shadow-inner">
+              <div
+                role="radiogroup"
+                aria-label="Movement mode selection"
+                className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-700 shadow-inner"
+              >
                 {(["exact", "variation", "live"] as const).map((m) => (
                   <button
                     key={m}
+                    role="radio"
+                    aria-checked={movementMode === m}
+                    aria-label={`Movement mode: ${m}`}
                     onClick={() => setMovementMode(m)}
                     className={`px-3 py-1 rounded-md text-xs font-mono font-extrabold capitalize transition-all ${movementMode === m ? "bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/40" : "text-slate-100 hover:text-white hover:bg-slate-800"}`}
                   >
@@ -1407,177 +1458,197 @@ export default function Dashboard({
           <div className="mb-6">
             <MasterWorkflowOrchestrator run={replayRun} onRun={() => { void handleRunSequence(); }} onControl={handleReplayControl} />
           </div>
-          <TabsList className="flex flex-wrap h-auto gap-1.5 bg-slate-900 border border-slate-800 p-2 rounded-xl mb-4">
-            <span className="text-[10px] font-mono font-bold text-cyan-400 px-1 py-1">
-              VISION
-            </span>
-            <TabsTrigger value="screen" className="h-7 text-xs gap-1">
-              <Monitor className="w-3 h-3" />
-              Screen
-            </TabsTrigger>
-            <TabsTrigger value="layers" className="h-7 text-xs gap-1">
-              <Layers className="w-3 h-3" />
-              Layers
-            </TabsTrigger>
-            <TabsTrigger value="models" className="h-7 text-xs gap-1">
-              <Cpu className="w-3 h-3" />
-              Models
-            </TabsTrigger>
-            <TabsTrigger value="pack-builder" className="h-7 text-xs gap-1">
-              <Package className="w-3 h-3" />
-              Pack Builder
-            </TabsTrigger>
-            <TabsTrigger value="capture" className="h-7 text-xs gap-1">
-              <Camera className="w-3 h-3" />
-              Capture
-            </TabsTrigger>
-            <TabsTrigger value="entities" className="h-7 text-xs gap-1">
-              <Crosshair className="w-3 h-3" />
-              Entities
-            </TabsTrigger>
-            <TabsTrigger value="quantum" className="h-7 text-xs gap-1">
-              <Activity className="w-3 h-3" />
-              Quantum
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-emerald-400 px-1 py-1 ml-2">
-              OS & LINK
-            </span>
-            <TabsTrigger value="linker" className="h-7 text-xs gap-1">
-              <Link2 className="w-3 h-3" />
-              Linker
-            </TabsTrigger>
-            <TabsTrigger value="v-desktop" className="h-7 text-xs gap-1">
-              <AppWindow className="w-3 h-3" />
-              V-Desktop
-            </TabsTrigger>
-            <TabsTrigger value="code-editor" className="h-7 text-xs gap-1">
-              <Code2 className="w-3 h-3" />
-              Code Editor
-            </TabsTrigger>
-            <TabsTrigger value="gap-agent" className="h-7 text-xs gap-1">
-              <Bug className="w-3 h-3" />
-              Gap Agent
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-amber-400 px-1 py-1 ml-2">
-              INPUT & TOUCH
-            </span>
-            <TabsTrigger value="drag-drop" className="h-7 text-xs gap-1">
-              <MousePointer className="w-3 h-3" />
-              Drag-Drop
-            </TabsTrigger>
-            <TabsTrigger value="benchmark" className="h-7 text-xs gap-1">
-              <Scan className="w-3 h-3" />
-              Benchmark
-            </TabsTrigger>
-            <TabsTrigger
-              value="movement"
-              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-400 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-cyan-500/20 text-cyan-200 border border-cyan-500/80 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
-            >
-              <Compass className="w-3.5 h-3.5 text-cyan-300" />
-              Movement Mode (2nd HUD)
-            </TabsTrigger>
-            <TabsTrigger
-              value="typing-calc"
-              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-purple-500 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-purple-500/20 text-purple-200 border border-purple-500/80 bg-purple-950/80 hover:bg-purple-900/90 shadow-sm"
-            >
-              <Keyboard className="w-3.5 h-3.5 text-purple-300" />
-              Typing & Equations (Full View)
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-purple-400 px-1 py-1 ml-2">
-              ROUTES
-            </span>
-            <TabsTrigger value="mouse-route" className="h-7 text-xs gap-1">
-              <Route className="w-3 h-3" />
-              Mouse Route
-            </TabsTrigger>
-            <TabsTrigger value="backprop" className="h-7 text-xs gap-1">
-              <RotateCcw className="w-3 h-3" />
-              Backprop
-            </TabsTrigger>
-            <TabsTrigger value="code-learn" className="h-7 text-xs gap-1">
-              <BookOpen className="w-3 h-3" />
-              Code Learn
-            </TabsTrigger>
-            <TabsTrigger value="route-map" className="h-7 text-xs gap-1">
-              <Map className="w-3 h-3" />
-              Route Map
-            </TabsTrigger>
-            <TabsTrigger value="testpoints" className="h-7 text-xs gap-1">
-              <Target className="w-3 h-3" />
-              Testpoints
-            </TabsTrigger>
-            <TabsTrigger value="dedup" className="h-7 text-xs gap-1">
-              <ListChecks className="w-3 h-3" />
-              Dedup
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-pink-400 px-1 py-1 ml-2">
-              COGNITION
-            </span>
-            <TabsTrigger value="scenarios" className="h-7 text-xs gap-1">
-              <Film className="w-3 h-3" />
-              Scenarios
-            </TabsTrigger>
-            <TabsTrigger value="watchdog" className="h-7 text-xs gap-1">
-              <Watch className="w-3 h-3" />
-              Watchdog
-            </TabsTrigger>
-            <TabsTrigger value="cross-ref" className="h-7 text-xs gap-1">
-              <Scan className="w-3 h-3" />
-              Cross-Ref
-            </TabsTrigger>
-            <TabsTrigger value="rebound" className="h-7 text-xs gap-1">
-              <RotateCcw className="w-3 h-3" />
-              Rebound
-            </TabsTrigger>
-            <TabsTrigger value="story" className="h-7 text-xs gap-1">
-              <Film className="w-3 h-3" />
-              Story
-            </TabsTrigger>
-            <TabsTrigger value="aggressive" className="h-7 text-xs gap-1">
-              <Zap className="w-3 h-3" />
-              Aggressive
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-cyan-300 px-1 py-1 ml-2">
-              SWARM
-            </span>
-            <TabsTrigger value="dual-ai" className="h-7 text-xs gap-1">
-              <Brain className="w-3 h-3" />
-              Dual-AI
-            </TabsTrigger>
-            <TabsTrigger value="agents" className="h-7 text-xs gap-1">
-              <Users className="w-3 h-3" />
-              Agents
-            </TabsTrigger>
-            <TabsTrigger value="tasks" className="h-7 text-xs gap-1">
-              <ListChecks className="w-3 h-3" />
-              Tasks
-            </TabsTrigger>
-            <TabsTrigger value="goals" className="h-7 text-xs gap-1">
-              <Target className="w-3 h-3" />
-              Goals
-            </TabsTrigger>
-            <TabsTrigger value="logs" className="h-7 text-xs gap-1">
-              <Terminal className="w-3 h-3" />
-              Logs
-            </TabsTrigger>
-            <TabsTrigger
-              value="ai-chat"
-              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-500 data-[state=active]:text-slate-950 text-cyan-200 border border-cyan-500/80 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
-            >
-              <Bot className="w-3.5 h-3.5 text-cyan-400" />
-              Main AI Chat & Tools
-            </TabsTrigger>
-            <TabsTrigger
-              value="ai-monitor"
-              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-600 data-[state=active]:text-white text-cyan-300 border border-cyan-600/70 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
-            >
-              <Bot className="w-3.5 h-3.5 text-cyan-400" />
-              AI Monitor
-            </TabsTrigger>
-            <TabsTrigger value="settings" className="h-7 text-xs gap-1">
-              <Settings className="w-3 h-3" />
-              Settings
-            </TabsTrigger>
+          <TabsList aria-label="Main application tabs navigation" className="flex flex-wrap h-auto gap-1.5 bg-slate-900 border border-slate-800 p-2 rounded-xl mb-4">
+            <div role="group" aria-label="Vision feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-cyan-400 px-1 py-1" aria-hidden="true">
+                VISION
+              </span>
+              <TabsTrigger value="screen" className="h-7 text-xs gap-1">
+                <Monitor className="w-3 h-3" />
+                Screen
+              </TabsTrigger>
+              <TabsTrigger value="layers" className="h-7 text-xs gap-1">
+                <Layers className="w-3 h-3" />
+                Layers
+              </TabsTrigger>
+              <TabsTrigger value="models" className="h-7 text-xs gap-1">
+                <Cpu className="w-3 h-3" />
+                Models
+              </TabsTrigger>
+              <TabsTrigger value="pack-builder" className="h-7 text-xs gap-1">
+                <Package className="w-3 h-3" />
+                Pack Builder
+              </TabsTrigger>
+              <TabsTrigger value="capture" className="h-7 text-xs gap-1">
+                <Camera className="w-3 h-3" />
+                Capture
+              </TabsTrigger>
+              <TabsTrigger value="entities" className="h-7 text-xs gap-1">
+                <Crosshair className="w-3 h-3" />
+                Entities
+              </TabsTrigger>
+              <TabsTrigger value="quantum" className="h-7 text-xs gap-1">
+                <Activity className="w-3 h-3" />
+                Quantum
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="OS and link feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-emerald-400 px-1 py-1 ml-2" aria-hidden="true">
+                OS & LINK
+              </span>
+              <TabsTrigger value="linker" className="h-7 text-xs gap-1">
+                <Link2 className="w-3 h-3" />
+                Linker
+              </TabsTrigger>
+              <TabsTrigger value="v-desktop" className="h-7 text-xs gap-1">
+                <AppWindow className="w-3 h-3" />
+                V-Desktop
+              </TabsTrigger>
+              <TabsTrigger value="code-editor" className="h-7 text-xs gap-1">
+                <Code2 className="w-3 h-3" />
+                Code Editor
+              </TabsTrigger>
+              <TabsTrigger value="gap-agent" className="h-7 text-xs gap-1">
+                <Bug className="w-3 h-3" />
+                Gap Agent
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Input and touch feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-amber-400 px-1 py-1 ml-2" aria-hidden="true">
+                INPUT & TOUCH
+              </span>
+              <TabsTrigger value="drag-drop" className="h-7 text-xs gap-1">
+                <MousePointer className="w-3 h-3" />
+                Drag-Drop
+              </TabsTrigger>
+              <TabsTrigger value="benchmark" className="h-7 text-xs gap-1">
+                <Scan className="w-3 h-3" />
+                Benchmark
+              </TabsTrigger>
+              <TabsTrigger
+                value="movement"
+                aria-label="Movement Mode Tab"
+                className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-400 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-cyan-500/20 text-cyan-200 border border-cyan-500/80 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
+              >
+                <Compass className="w-3.5 h-3.5 text-cyan-300" />
+                Movement Mode (2nd HUD)
+              </TabsTrigger>
+              <TabsTrigger
+                value="typing-calc"
+                className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-purple-500 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-purple-500/20 text-purple-200 border border-purple-500/80 bg-purple-950/80 hover:bg-purple-900/90 shadow-sm"
+              >
+                <Keyboard className="w-3.5 h-3.5 text-purple-300" />
+                Typing & Equations (Full View)
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Route and navigation feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-purple-400 px-1 py-1 ml-2" aria-hidden="true">
+                ROUTES
+              </span>
+              <TabsTrigger value="mouse-route" className="h-7 text-xs gap-1">
+                <Route className="w-3 h-3" />
+                Mouse Route
+              </TabsTrigger>
+              <TabsTrigger value="backprop" className="h-7 text-xs gap-1">
+                <RotateCcw className="w-3 h-3" />
+                Backprop
+              </TabsTrigger>
+              <TabsTrigger value="code-learn" className="h-7 text-xs gap-1">
+                <BookOpen className="w-3 h-3" />
+                Code Learn
+              </TabsTrigger>
+              <TabsTrigger value="route-map" className="h-7 text-xs gap-1">
+                <Map className="w-3 h-3" />
+                Route Map
+              </TabsTrigger>
+              <TabsTrigger value="testpoints" className="h-7 text-xs gap-1">
+                <Target className="w-3 h-3" />
+                Testpoints
+              </TabsTrigger>
+              <TabsTrigger value="dedup" className="h-7 text-xs gap-1">
+                <ListChecks className="w-3 h-3" />
+                Dedup
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Cognition and memory feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-pink-400 px-1 py-1 ml-2" aria-hidden="true">
+                COGNITION
+              </span>
+              <TabsTrigger value="scenarios" className="h-7 text-xs gap-1">
+                <Film className="w-3 h-3" />
+                Scenarios
+              </TabsTrigger>
+              <TabsTrigger value="watchdog" className="h-7 text-xs gap-1">
+                <Watch className="w-3 h-3" />
+                Watchdog
+              </TabsTrigger>
+              <TabsTrigger value="cross-ref" className="h-7 text-xs gap-1">
+                <Scan className="w-3 h-3" />
+                Cross-Ref
+              </TabsTrigger>
+              <TabsTrigger value="rebound" className="h-7 text-xs gap-1">
+                <RotateCcw className="w-3 h-3" />
+                Rebound
+              </TabsTrigger>
+              <TabsTrigger value="story" className="h-7 text-xs gap-1">
+                <Film className="w-3 h-3" />
+                Story
+              </TabsTrigger>
+              <TabsTrigger value="aggressive" className="h-7 text-xs gap-1">
+                <Zap className="w-3 h-3" />
+                Aggressive
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Swarm and agent feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-cyan-300 px-1 py-1 ml-2" aria-hidden="true">
+                SWARM
+              </span>
+              <TabsTrigger value="dual-ai" className="h-7 text-xs gap-1">
+                <Brain className="w-3 h-3" />
+                Dual-AI
+              </TabsTrigger>
+              <TabsTrigger value="agents" className="h-7 text-xs gap-1">
+                <Users className="w-3 h-3" />
+                Agents
+              </TabsTrigger>
+              <TabsTrigger value="tasks" className="h-7 text-xs gap-1">
+                <ListChecks className="w-3 h-3" />
+                Tasks
+              </TabsTrigger>
+              <TabsTrigger value="goals" className="h-7 text-xs gap-1">
+                <Target className="w-3 h-3" />
+                Goals
+              </TabsTrigger>
+              <TabsTrigger value="logs" className="h-7 text-xs gap-1">
+                <Terminal className="w-3 h-3" />
+                Logs
+              </TabsTrigger>
+              <TabsTrigger
+                value="ai-chat"
+                className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-500 data-[state=active]:text-slate-950 text-cyan-200 border border-cyan-500/80 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
+              >
+                <Bot className="w-3.5 h-3.5 text-cyan-400" />
+                Main AI Chat & Tools
+              </TabsTrigger>
+              <TabsTrigger
+                value="ai-monitor"
+                className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-600 data-[state=active]:text-white text-cyan-300 border border-cyan-600/70 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
+              >
+                <Bot className="w-3.5 h-3.5 text-cyan-400" />
+                AI Monitor
+              </TabsTrigger>
+              <TabsTrigger value="settings" aria-label="Settings Tab" className="h-7 text-xs gap-1">
+                <Settings className="w-3 h-3" />
+                Settings
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Studio and inspector feature tabs" className="flex flex-wrap items-center gap-1.5">
             <TabsTrigger
               value="desc-refiner"
               className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-amber-500 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-amber-500/20 text-amber-200 border border-amber-500/80 bg-amber-950/80 hover:bg-amber-900/90 shadow-sm"
@@ -1641,6 +1712,7 @@ export default function Dashboard({
               <Sparkles className="w-3.5 h-3.5" />
               AI USER COLLAB
             </TabsTrigger>
+            </div>
           </TabsList>
 
           <TabsContent value="assistant-workspace" className="space-y-4 pb-8">
@@ -2229,22 +2301,10 @@ export default function Dashboard({
             <ScreenshotLayeringPanel
               currentScreenshot={aiLiveUrl || screenshotUrl}
               onSelectLayerTarget={(x, y, name) => handleAddSequenceStep(x, y)}
-              onExecuteLayerSequence={(id) =>
-                executeHubTask("/api/execute-task", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    targetDevice,
-                    deviceId: selectedAdbDevice,
-                    task: {
-                      id,
-                      name: "Layer Execute",
-                      action: "click",
-                      targetPosition: { x: 960, y: 540 },
-                    },
-                  }),
-                })
-              }
+              onExecuteLayerSequence={(id, x, y, action) => {
+                // ScreenshotLayeringPanel already dispatches each slide to the device internally; avoid double execution.
+                console.log(`Layer sequence executed: ${id} (${action || "action"}) at (${x ?? "-"}, ${y ?? "-"})`);
+              }}
             />
           </TabsContent>
           <TabsContent value="models" className="space-y-6">
@@ -2257,9 +2317,17 @@ export default function Dashboard({
           <TabsContent value="mouse-route" className="space-y-6">
             <ContinuousMouseRoutePlayer
               currentLiveScreenshot={aiLiveUrl || screenshotUrl}
-              onDispatchRouteToOS={(pts) =>
-                pts.forEach((p) => handleAddSequenceStep(p.x, p.y))
-              }
+              onDispatchRouteToOS={(pts) => {
+                const clicks = pts.filter((p: any) => p.is_click || p.isClick);
+                clicks.forEach((p: any, i: number) =>
+                  handleAddSequenceStep({
+                    x: Math.round(p.x),
+                    y: Math.round(p.y),
+                    name: `Route click ${i + 1}`,
+                    action: "click",
+                  } as any),
+                );
+              }}
             />
           </TabsContent>
           <TabsContent value="backprop" className="space-y-6">
@@ -3107,7 +3175,8 @@ export default function Dashboard({
         <GlobalAICursorOverlay enabled={true} cursorState={globalCursorState} theme="cyan" />
 
         {/* Android APK & WebAPK Standalone Build Modal */}
-        <ApkAndPwaModal
+        <MobileSettingsModal open={isMobileSettingsModalOpen} onOpenChange={setIsMobileSettingsModalOpen} />
+      <ApkAndPwaModal
           open={isApkModalOpen}
           onOpenChange={setIsApkModalOpen}
         />

@@ -16,7 +16,7 @@ const now = () => new Date().toISOString();
 const id = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-export const ACTION_TIMEOUT_MS = 5_000;
+export const ACTION_TIMEOUT_MS = 30_000;
 export const EXECUTION_TIMEOUT_MS = 30_000;
 
 export type SafeActionExecutor = (
@@ -119,6 +119,14 @@ export class ExecutionStateRepository {
     return execution;
   }
 
+  private cancelHooks = new Map<string, Array<() => void>>();
+
+  addCancelHook(executionId: string, hook: () => void) {
+    const list = this.cancelHooks.get(executionId) || [];
+    list.push(hook);
+    this.cancelHooks.set(executionId, list);
+  }
+
   cancel(executionId: string): AssistantExecution | undefined {
     this.load();
     const execution = this.executions.get(executionId);
@@ -135,10 +143,23 @@ export class ExecutionStateRepository {
     execution.completedAt = now();
     this.addEvent(execution, "info", "Execution cancelled");
     this.persist();
+
+    const hooks = this.cancelHooks.get(executionId);
+    if (hooks) {
+      for (const h of hooks) {
+        try { h(); } catch {}
+      }
+      this.cancelHooks.delete(executionId);
+    }
+
     return execution;
   }
 
-  async start(execution: AssistantExecution, plan: AssistantPlan) {
+  async start(
+    execution: AssistantExecution,
+    plan: AssistantPlan,
+    customExecutor?: SafeActionExecutor
+  ) {
     this.load();
     const storedExecution = this.executions.get(execution.id);
     if (storedExecution && storedExecution !== execution) {
@@ -190,9 +211,12 @@ export class ExecutionStateRepository {
           }
         }
 
-        let result = await this.runAction(action);
+        let result = customExecutor
+          ? await customExecutor(action)
+          : await this.runAction(action);
         execution.results.push(result);
         this.persist();
+        if (control.cancelled || (execution.status as string) === "cancelled") return execution;
         if (!result.success) return this.fail(execution, result.message);
         this.addEvent(execution, "completed", result.message, step.id, result);
 
@@ -228,12 +252,16 @@ export class ExecutionStateRepository {
             const delay = Math.min(step.adaptive.retry?.backoffMs ?? 0, 5_000);
             if (delay > 0)
               await new Promise((resolve) => setTimeout(resolve, delay));
-            result = await this.runAction(action);
+            result = customExecutor
+              ? await customExecutor(action)
+              : await this.runAction(action);
             execution.results.push(result);
+            if (control.cancelled || (execution.status as string) === "cancelled") return execution;
             if (!result.success) return this.fail(execution, result.message);
           }
         }
       } catch (error) {
+        if (control.cancelled || (execution.status as string) === "cancelled") return execution;
         return this.fail(
           execution,
           error instanceof Error ? error.message : "Action failed",

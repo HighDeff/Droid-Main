@@ -70,7 +70,7 @@ import { VideoRecordingBreakdownModal } from "./video-recording-breakdown-modal"
 import { ReplaySessionsModal } from "./ReplaySessionsModal";
 import { RecordingSessionManager } from "./RecordingSessionManager";
 import { FocusAttentionOverlay, FocusAttentionConfig } from "./focus-attention-overlay";
-import { MouseTrajectoryStore, MouseRecordingSession } from "../../src/services/mouseTrajectoryStore";
+import { MouseTrajectoryStore, MouseRecordingSession } from "@/lib/mouse-trajectory-store";
 import { compareFramesPixelLevel } from "../utils/pixelDiffEngine";
 import { ActionExecutionLog, ActionLogEntry } from "./action-execution-log";
 import { StepCorrectionModal, StepCorrectionData } from "./step-correction-modal";
@@ -1915,12 +1915,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
   // Record continuous trajectory as user moves
   const recordMovementPoint = (x: number, y: number) => {
-    if (isRecordingMouseTrail || isRecordMode) {
-      setLiveMouseTrail((prev) => [...prev, { x, y, time: Date.now(), isClick: false }]);
+    const isActivelyRecording = isRecordingMouseTrail || isRecordMode;
+    const cap = isActivelyRecording ? 2000 : 500;
+    if (isActivelyRecording) {
+      setLiveMouseTrail((prev) => [...prev.slice(-cap), { x, y, time: Date.now(), isClick: false }]);
     }
     if (isRecordMode) {
       setRecordedTrajectory((prev) => [
-        ...prev.slice(-100),
+        ...prev.slice(-cap),
         { x, y, time: Date.now() },
       ]);
     }
@@ -3541,6 +3543,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           <Button
             size="sm"
             onClick={handleStopAllExecution}
+            aria-label="Stop all background agent subprocesses and sequence execution"
             className="h-8 px-3 text-xs font-mono font-bold bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 text-white border border-red-400/80 shadow-lg shadow-red-950 gap-1.5 ring-1 ring-red-400"
             title="Emergency Stop: Instantly aborts any active sequence, auto-play, subprocess execution, and turns off recording"
           >
@@ -3584,6 +3587,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           <Button
             size="sm"
             onClick={handleToggleBridgePause}
+            aria-label={isBridgePaused ? "Resume execution bridge subprocess" : "Pause active execution bridge subprocess"}
             className={`h-8 px-3 text-xs font-mono font-bold transition-all border ${
               isBridgePaused
                 ? "bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-300 shadow-lg shadow-amber-950 ring-2 ring-amber-400 animate-pulse"
@@ -5002,7 +5006,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       />
 
         {/* Floating Live Step Forwarding, Progression & Template Mutation HUD Bar */}
-        <div className="absolute bottom-3 inset-x-4 mx-auto max-w-2xl bg-slate-950/90 backdrop-blur-md border border-cyan-500/60 rounded-xl p-2 shadow-2xl z-30 flex items-center justify-between gap-2 text-xs font-mono">
+        <div onClick={(e) => e.stopPropagation()} className="absolute bottom-3 inset-x-4 mx-auto max-w-2xl bg-slate-950/90 backdrop-blur-md border border-cyan-500/60 rounded-xl p-2 shadow-2xl z-30 flex items-center justify-between gap-2 text-xs font-mono">
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-6 h-6 rounded-lg bg-cyan-600/30 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shrink-0 font-bold text-[11px]">
               {sequence.length === 0 ? "0" : (sequence.findIndex((s) => s.id === activeStepId) >= 0 ? sequence.findIndex((s) => s.id === activeStepId) + 1 : 1)}

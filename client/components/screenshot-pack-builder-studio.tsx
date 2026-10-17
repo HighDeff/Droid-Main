@@ -288,6 +288,40 @@ export const ScreenshotPackBuilderStudio: React.FC<
 
   // Dispatch Action on Live Screen via PyAutoGUI
   const handleExecuteOnLiveScreen = async () => {
+    if (selectedFrame.action === "ocr_verify") {
+      const expected = (selectedFrame.payloadText || "").trim();
+      setStatusLog(
+        `🔍 Running OCR verify for "${expected}" on ${targetDevice}...`,
+      );
+      try {
+        const captureUrl =
+          targetDevice === "android" ? "/api/adb/capture" : "/api/capture-screen";
+        const capRes = await fetch(captureUrl);
+        const capData = await capRes.json();
+        const screenImg = capData.imageData || capData.image;
+        if (!screenImg) {
+          setStatusLog(`✗ OCR failed: unable to capture ${targetDevice} screen.`);
+          return;
+        }
+        const ocrRes = await fetch("/api/ocr/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: screenImg }),
+        });
+        const ocrData = await ocrRes.json();
+        const haystack = (ocrData.text || "").toLowerCase();
+        const found = expected ? haystack.includes(expected.toLowerCase()) : false;
+        if (found) {
+          setStatusLog(`✓ OCR verified: found "${expected}" on ${targetDevice} screen.`);
+        } else {
+          setStatusLog(`✗ OCR did not find "${expected}" on screen.`);
+        }
+      } catch (err) {
+        setStatusLog(`✗ OCR verify failed: ${err}`);
+      }
+      return;
+    }
+
     setStatusLog(
       `⚡ Dispatching "${selectedFrame.action.toUpperCase()}" at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}) to Live OS...`,
     );
@@ -298,6 +332,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
         body: JSON.stringify({
           targetDevice,
           aggressiveRetry: isAggressiveTrying,
+          frameSize: { width: 1920, height: 1080 },
           task: {
             id: `pack_act_${Date.now()}`,
             name: selectedFrame.title,
@@ -305,6 +340,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
             action: selectedFrame.action,
             targetPosition: selectedFrame.targetCoords,
             textPayload: selectedFrame.payloadText,
+            frameSize: { width: 1920, height: 1080 },
           },
         }),
       });
@@ -613,10 +649,10 @@ export const ScreenshotPackBuilderStudio: React.FC<
                 </div>
               </div>
 
-              {selectedFrame.action === "type" && (
+              {(selectedFrame.action === "type" || selectedFrame.action === "ocr_verify") && (
                 <div className="space-y-1">
                   <label className="text-[10px] text-slate-300 font-bold">
-                    Text to Type:
+                    {selectedFrame.action === "ocr_verify" ? "Expected OCR Text:" : "Text to Type:"}
                   </label>
                   <Input
                     value={selectedFrame.payloadText || ""}
@@ -629,7 +665,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
                         ),
                       )
                     }
-                    placeholder="Enter string..."
+                    placeholder={selectedFrame.action === "ocr_verify" ? "Expected text on screen..." : "Enter string..."}
                     className="h-8 text-xs bg-slate-950 border-slate-800 font-mono"
                   />
                 </div>

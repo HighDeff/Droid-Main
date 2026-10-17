@@ -173,10 +173,9 @@ export function createPhoneRouter(
   // Hold the lock until the handler finishes, even if the client disconnects.
   const exclusive = (handler: (req: any, res: any) => Promise<any>) => async (req, res, next) => {
     const device = res.locals.session.device;
-    if (deviceLocks.has(`android:${device}`)) return res.status(409).json({ error: "Phone is busy; wait for the current operation" });
-    deviceLocks.add(`android:${device}`);
+    if (!deviceLocks.acquire(`android:${device}`)) return res.status(409).json({ error: "Phone is busy; wait for the current operation" });
     try { await handler(req, res); } catch (error) { next(error); }
-    finally { deviceLocks.delete(`android:${device}`); }
+    finally { deviceLocks.release(`android:${device}`); }
   };
   router.post("/action", exclusive(async (req, res) => {
     const s: Session = res.locals.session;

@@ -52,7 +52,7 @@ async function finished(engine: ReplayEngine, id: string) {
   return engine.get(id)!;
 }
 afterEach(() => {
-  deviceLocks.clear();
+  deviceLocks.release("desktop");
 });
 describe("verified replay", () => {
   it("uses before and fresh after evidence, preserves zero coordinates, and confirms only after review", async () => {

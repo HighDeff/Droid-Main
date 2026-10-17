@@ -108,8 +108,6 @@ export class ReplayEngine {
       request.targetDevice === "desktop"
         ? "desktop"
         : `android:${request.deviceId}`;
-    if (this.locks.has(target))
-      throw new Error("Device already has an active replay");
     // Keep bounded screenshot memory; finished evidence is ephemeral.
     for (const [id, item] of this.runs)
       if (!["running", "paused"].includes(item.run.status))
@@ -136,8 +134,9 @@ export class ReplayEngine {
       pause: false,
       evidence: new Map(),
     };
+    if (!this.locks.acquire(target))
+      throw new Error("Device already has an active replay");
     this.runs.set(run.id, item);
-    this.locks.add(target);
     void this.execute(item);
     return this.get(run.id)!;
   }
@@ -350,7 +349,7 @@ export class ReplayEngine {
         run.steps[run.currentStep].status = "failed";
       this.event(item, "system", run.error);
     } finally {
-      this.locks.delete(run.target);
+      this.locks.release(run.target);
       aiMonitorStore.setStatus({ status: "idle", currentAction: null });
     }
   }

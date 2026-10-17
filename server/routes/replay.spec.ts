@@ -34,7 +34,7 @@ describe("replay API boundaries", () => {
     base = `http://127.0.0.1:${(server.address() as any).port}`;
   });
   afterEach(async () => {
-    deviceLocks.clear();
+    deviceLocks.release("desktop");
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     vi.unstubAllEnvs();
@@ -81,7 +81,7 @@ describe("replay API boundaries", () => {
     expect(deviceLocks.has("desktop")).toBe(false);
   });
   it("prevents a manual action from racing with replay on the same device", async () => {
-    deviceLocks.add("desktop");
+    deviceLocks.acquire("desktop");
     const response = await post("/api/execute-task", {
       task: { action: "click", x: 0, y: 0 },
     });

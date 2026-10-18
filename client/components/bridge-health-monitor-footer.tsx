@@ -316,8 +316,8 @@ export const BridgeHealthMonitorFooter: React.FC<{ className?: string }> = ({ cl
               />
             </span>
 
-            <span className="font-bold tracking-tight text-slate-200">
-              BRIDGE STATUS:
+            <span className="font-semibold tracking-tight text-slate-300 text-xs whitespace-nowrap">
+              Bridge Status:
             </span>
 
             <Badge

@@ -536,3 +536,15 @@ export interface CaptureSourceFrame {
   imageData: string;
   capturedAt: string;
 }
+
+export interface VisualLookout {
+  id?: string;
+  label: string;
+  region: { x: number; y: number; width: number; height: number };
+  expectation: "changed" | "present" | "absent";
+  expectedText?: string;
+  minConfidence: number;
+  onMatch?: "continue" | "stop" | "retry";
+  onMiss?: "continue" | "stop" | "retry";
+}
+

@@ -29,7 +29,7 @@ export async function safeFetchJson<T = any>(
 
 export async function safePostJson<T = any>(
   url: string,
-  body: any,
+  body: any = {},
   options?: Omit<RequestInit, "body" | "method">
 ): Promise<SafeApiResponse<T>> {
   return safeFetchJson<T>(url, {

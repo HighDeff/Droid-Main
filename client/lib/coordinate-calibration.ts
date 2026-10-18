@@ -12,6 +12,11 @@ export interface CoordinateCalibrationProfile {
   dpiScale: number;
   resolutionWidth?: number;
   resolutionHeight?: number;
+  screenWidth?: number;
+  screenHeight?: number;
+  jitterDamping?: number;
+  aspectRatioMode?: string;
+  lastCalibratedAt?: number;
 }
 
 export const DEFAULT_CALIBRATION_PROFILE: CoordinateCalibrationProfile = {
@@ -22,6 +27,11 @@ export const DEFAULT_CALIBRATION_PROFILE: CoordinateCalibrationProfile = {
   dpiScale: 1.0,
   resolutionWidth: 1920,
   resolutionHeight: 1080,
+  screenWidth: 1920,
+  screenHeight: 1080,
+  jitterDamping: 1.0,
+  aspectRatioMode: "16:9",
+  lastCalibratedAt: Date.now(),
 };
 
 const STORAGE_KEY = "sightline_coordinate_calibration_profile";
@@ -45,7 +55,8 @@ export function saveStoredCalibration(profile: CoordinateCalibrationProfile): vo
 
 export function calibrateCoordinates(
   xOrCoords: number | { x: number; y: number },
-  yOrOffset?: number | { x?: number; y?: number } | CoordinateCalibrationProfile
+  yOrOffset?: number | { x?: number; y?: number } | CoordinateCalibrationProfile,
+  profileArg?: CoordinateCalibrationProfile
 ): CalibrationCoordinates {
   const x = typeof xOrCoords === "number" ? xOrCoords : xOrCoords.x;
   const y = typeof xOrCoords === "number" ? (typeof yOrOffset === "number" ? yOrOffset : 0) : xOrCoords.y;
@@ -54,11 +65,12 @@ export function calibrateCoordinates(
   let scaleX = 1.0;
   let scaleY = 1.0;
 
-  if (typeof yOrOffset === "object" && yOrOffset !== null) {
-    offX = "offsetX" in yOrOffset ? yOrOffset.offsetX : (yOrOffset.x || 0);
-    offY = "offsetY" in yOrOffset ? yOrOffset.offsetY : (yOrOffset.y || 0);
-    scaleX = "scaleX" in yOrOffset ? yOrOffset.scaleX : 1.0;
-    scaleY = "scaleY" in yOrOffset ? yOrOffset.scaleY : 1.0;
+  const prof = profileArg || (typeof yOrOffset === "object" && yOrOffset !== null ? yOrOffset : undefined);
+  if (prof) {
+    offX = "offsetX" in prof ? prof.offsetX : ((prof as any).x || 0);
+    offY = "offsetY" in prof ? prof.offsetY : ((prof as any).y || 0);
+    scaleX = "scaleX" in prof ? prof.scaleX : 1.0;
+    scaleY = "scaleY" in prof ? prof.scaleY : 1.0;
   }
 
   const finalX = Math.round((x + offX) * scaleX);

@@ -3801,7 +3801,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                   </div>
 
                   <h3 className="text-lg font-bold font-mono text-slate-100 mb-1 group-hover:text-cyan-300 transition-colors">
-                    CLICK TO START LIVE SCREEN STREAM 📺
+                    Start Live Screen Stream
                   </h3>
                   <p className="text-xs font-mono text-slate-300 max-w-md mb-4">
                     Direct 60 FPS zero-latency hardware desktop mirror for AI mouse
@@ -5983,7 +5983,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
               <div className="flex items-center gap-2">
                 <Activity className="w-5 h-5 text-cyan-400" />
                 <h3 className="text-base font-bold font-mono text-cyan-300">
-                  OVERSEER AI & REAL-TIME LATENCY TELEMETRY
+                  Overseer AI &amp; Real-Time Telemetry
                 </h3>
               </div>
               <Button
@@ -6016,7 +6016,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-purple-300">
-                    🧪 TEST MODE: CLEAN STATE RESET & CoT WORKFLOW PERSISTENCE
+                    Test Baseline &amp; Chain-of-Thought Persistence
                   </h3>
                   <p className="text-[11px] text-slate-400 font-sans">
                     Resets app state to pristine baseline for deterministic AI Chain-of-Thought (CoT) reasoning and saveable workflows
@@ -6268,7 +6268,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 <Layers className="w-5 h-5 text-purple-400" />
                 <div>
                   <h3 className="text-sm font-bold font-mono text-purple-300">
-                    WORKFLOW FLOWCHART & LOGIC BRANCH VISUALIZER
+                    Workflow Flowchart &amp; Logic Visualizer
                   </h3>
                   <p className="text-[11px] text-slate-400 font-mono">
                     Visual action sequences, decision forks, and auto-recovery paths powered by React Flow

@@ -18,6 +18,8 @@ export function useWorkflowLayoutSync<N = any, E = any>(
   const [isSynced, setIsSynced] = useState(true);
   const [isDirty, setIsDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [isAutoSyncEnabled, setIsAutoSyncEnabled] = useState(true);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -29,24 +31,28 @@ export function useWorkflowLayoutSync<N = any, E = any>(
         if (parsed.edges) setEdges(parsed.edges);
         setLastSavedAt(parsed.savedAt || null);
       }
-    } catch {}
+    } catch {} finally {
+      setIsLoaded(true);
+    }
   }, [storageKey]);
 
   const saveLayout = useCallback(
-    (newNodes: N[], newEdges: E[]) => {
+    (newNodes?: N[], newEdges?: E[], _immediate?: boolean) => {
       if (typeof window === "undefined") return;
+      const targetNodes = newNodes || nodes;
+      const targetEdges = newEdges || edges;
       const now = new Date().toLocaleTimeString();
       try {
         localStorage.setItem(
           storageKey,
-          JSON.stringify({ nodes: newNodes, edges: newEdges, savedAt: now })
+          JSON.stringify({ nodes: targetNodes, edges: targetEdges, savedAt: now })
         );
         setIsSynced(true);
         setIsDirty(false);
         setLastSavedAt(now);
       } catch {}
     },
-    [storageKey]
+    [storageKey, nodes, edges]
   );
 
   const updateNodePosition = useCallback(
@@ -109,7 +115,12 @@ export function useWorkflowLayoutSync<N = any, E = any>(
     setEdges,
     isSynced,
     isDirty,
+    isLoaded,
     lastSavedAt,
+    lastSavedTimestamp: lastSavedAt,
+    isAutoSyncEnabled,
+    setIsAutoSyncEnabled,
+    saveLayout,
     resetLayout,
     updateNodePosition,
     updateNodeData,

@@ -22,7 +22,7 @@ export const replayStepSchema = z.object({
   referenceScreenshotUrl: z
     .string()
     .max(8_000_000)
-    .regex(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/)
+    .regex(/^data:image\/(?:png|jpeg|svg\+xml);base64,[A-Za-z0-9+/=]+$/)
     .optional(),
   targetOcrLabel: z.string().max(500).optional(),
   expectedOutcome: z.string().max(1000).optional(),

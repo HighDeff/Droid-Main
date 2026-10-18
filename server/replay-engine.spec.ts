@@ -180,6 +180,13 @@ describe("verified replay", () => {
     expect(engine.get(run.id)?.status).toBe("failed");
     expect(adapter.execute).not.toHaveBeenCalled();
   });
+  it("accepts local raster and SVG reference screenshots but rejects remote URLs", () => {
+    const raster = "data:image/png;base64,aGVsbG8=";
+    const svg = "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=";
+    expect(replayRequestSchema.safeParse({ ...request, steps: [{ ...step, referenceScreenshotUrl: raster }] }).success).toBe(true);
+    expect(replayRequestSchema.safeParse({ ...request, steps: [{ ...step, referenceScreenshotUrl: svg }] }).success).toBe(true);
+    expect(replayRequestSchema.safeParse({ ...request, steps: [{ ...step, referenceScreenshotUrl: "https://example.com/frame.png" }] }).success).toBe(false);
+  });
   it("validates action budgets, device selection, unique IDs and unsupported branches", () => {
     for (const bad of [
       { ...request, confirmation: false },

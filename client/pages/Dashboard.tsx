@@ -964,38 +964,38 @@ export default function Dashboard({
   const handleTriggerAutoLoop = handleToggleAutonomousLoop;
   const toggleCapture = () => setIsCapturing((v) => !v);
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border/80 bg-slate-950/90 backdrop-blur sticky top-0 z-50">
-        <div className="container flex h-14 items-center justify-between px-4">
-          <div className="flex items-center gap-3">
-            <div className="p-1.5 rounded-lg bg-cyan-950 border border-cyan-600 text-cyan-400 shadow-sm">
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800/80 bg-slate-950/95 backdrop-blur sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto flex h-14 items-center justify-between px-4 sm:px-6 gap-4">
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="p-1.5 rounded-lg bg-cyan-950/80 border border-cyan-500/50 text-cyan-400 shadow-sm">
               <Brain className="w-5 h-5" />
             </div>
-            <div>
-              <div className="text-sm sm:text-base font-bold text-white tracking-wide flex items-center gap-2">
-                <span>DroidVision AI Master Agent</span>{" "}
-                <span className="hidden sm:inline-block px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-700">
-                  Autonomous Vision Hub
-                </span>
-              </div>
+            <div className="flex items-center gap-2">
+              <span className="text-base font-bold text-white tracking-tight whitespace-nowrap">
+                DroidVision AI
+              </span>
+              <span className="hidden sm:inline-block text-xs text-slate-400 font-medium">
+                · Automation &amp; Vision Hub
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 bg-slate-900 border border-cyan-500/40 rounded-lg p-0.5 shadow-sm">
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1 bg-slate-900 border border-cyan-500/30 rounded-lg p-0.5 shadow-sm">
               <Button
                 size="sm"
                 onClick={() => setIsApkModalOpen(true)}
-                className="h-8 text-xs font-mono font-bold gap-1.5 bg-gradient-to-r from-sky-600 to-cyan-600 hover:from-sky-500 hover:to-cyan-500 text-white shadow-sm"
+                className="h-8 text-xs font-mono font-medium gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white whitespace-nowrap"
                 title="Android APK / WebAPK Hub: Download build zip or install native companion"
                 aria-label="Download APK build project or install native companion"
               >
-                <Smartphone className="w-3.5 h-3.5 text-cyan-200" />
-                <span>Download APK (.zip)</span>
+                <Smartphone className="w-3.5 h-3.5 text-cyan-100" />
+                <span>APK (.zip)</span>
               </Button>
               <a
                 href="/api/mobile/download-apk-bundle"
                 download="sightline-mobile-apk-project.zip"
-                className="h-8 px-2 flex items-center justify-center rounded-md text-xs font-mono font-bold bg-slate-950 hover:bg-slate-800 text-cyan-300 hover:text-white border border-slate-700 transition-colors"
+                className="h-8 px-2 flex items-center justify-center rounded-md text-xs font-mono font-medium bg-slate-950 hover:bg-slate-800 text-cyan-300 hover:text-white border border-slate-800 transition-colors"
                 title="Direct Download APK Build Project (.zip)"
                 aria-label="Direct Download APK Build Project zip file"
               >
@@ -1005,88 +1005,57 @@ export default function Dashboard({
             <Button
               size="sm"
               onClick={() => setAutonomousModalOpen(true)}
-              className="h-8 text-xs font-mono font-bold gap-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md"
+              className="h-8 text-xs font-medium gap-1.5 bg-purple-600 hover:bg-purple-500 text-white whitespace-nowrap shadow-sm"
               aria-label="Autonomous Director & Sentinels Manager"
             >
-              <Bot className="w-3.5 h-3.5 text-purple-200 animate-pulse" /> Autonomous Director & Sentinels
+              <Bot className="w-3.5 h-3.5 text-purple-200" />
+              <span className="hidden md:inline">Autonomous</span> Director
             </Button>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentTab("desc-refiner")}
-              aria-label="Switch to Text Constraints & Refiner tab"
-              className={`h-8 text-xs font-mono font-bold gap-1.5 transition-all ${
-                currentTab === "desc-refiner"
-                  ? "bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-md shadow-amber-500/20"
-                  : "bg-amber-950/70 border-amber-500/60 text-amber-200 hover:bg-amber-900/90 hover:text-white"
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Text Constraints & Refiner
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentTab("screen")}
-              aria-label="Switch to Screen HUD tab"
-              className={`h-8 text-xs font-mono font-bold gap-1.5 ${currentTab === "screen" ? "bg-cyan-600 text-white border-cyan-500" : "bg-slate-900 border-slate-700 text-slate-200 hover:text-white"}`}
-            >
-              <Monitor className="w-3.5 h-3.5 text-cyan-400" /> Screen HUD
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentTab("movement")}
-              aria-label="Switch to Movement Mode tab"
-              className={`h-8 text-xs font-mono font-bold gap-1.5 transition-all ${
-                currentTab === "movement"
-                  ? "bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/30 font-black"
-                  : "bg-cyan-950/80 border-cyan-500/80 text-cyan-200 hover:bg-cyan-900 hover:text-white"
-              }`}
-            >
-              <Compass className="w-3.5 h-3.5 text-cyan-300" /> Movement Mode (2nd HUD)
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                setIsCalibrationModalOpen(true);
-              }}
-              aria-label="Calibrate Mouse Coordinates (Header)"
-              className="h-8 text-xs font-mono bg-slate-900/90 text-amber-300 hover:text-white border border-slate-700 hover:border-amber-400 hover:bg-slate-800 transition-all gap-1.5 shadow-sm px-2.5"
+              onClick={() => setIsCalibrationModalOpen(true)}
+              aria-label="Calibrate Mouse Coordinates"
+              className="h-8 text-xs font-mono bg-slate-900 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700 hover:bg-slate-850 gap-1.5 whitespace-nowrap px-2.5"
               title="Calibrate Mouse, PyAutoGUI & Touch Coordinates"
             >
               <Target className="w-3.5 h-3.5 text-amber-400" />
-              <span className="font-bold">Calibrate Mouse</span>
+              <span className="hidden sm:inline">Calibrate</span>
             </Button>
             <Button
-              variant="secondary"
+              variant="ghost"
               size="sm"
-              onClick={() => {
-                setIsSettingsModalOpen(true);
-              }}
-              aria-label="Global System Settings (Header)"
-              className="h-8 text-xs font-mono bg-slate-900/90 text-cyan-300 hover:text-white border border-slate-700 hover:border-cyan-400 hover:bg-slate-800 transition-all gap-1.5 shadow-sm px-2.5"
+              onClick={() => setIsSettingsModalOpen(true)}
+              aria-label="Global System Settings"
+              className="h-8 w-8 p-0 text-slate-400 hover:text-white hover:bg-slate-800"
               title="Configure AI Model URL & System Settings"
             >
-              <Settings className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="font-bold">Settings</span>
+              <Settings className="w-4 h-4" />
             </Button>
           </div>
         </div>
       </header>
-      <main className="container py-6 px-4">
-        <div className="space-y-3 mb-6">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-4 rounded-xl bg-slate-900/80 border border-slate-800 shadow-md">
-            <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-2xl font-bold text-white tracking-tight">AI Game Automation & Vision Hub</h1>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
-                  REAL PYAUTOGUI
+      <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6">
+        <div className="space-y-4 mb-6">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 rounded-xl bg-slate-900/70 border border-slate-800 shadow-sm">
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                  Automation &amp; Vision Control Hub
+                </h1>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800/80">
+                  PyAutoGUI Ready
                 </span>
               </div>
-              <p className="text-slate-300 text-xs font-mono mt-1">
-                Real pyautogui • Anti-loop frozen preview • 60FPS screen stream • Cross-platform desktop & mobile
-              </p>
+              <div className="flex items-center gap-2 text-xs text-slate-400 font-mono flex-wrap">
+                <span>60 FPS Stream</span>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span>Anti-Loop Protection</span>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span>Sub-Pixel Precision</span>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span>Desktop &amp; Android ADB</span>
+              </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <div
@@ -1315,7 +1284,7 @@ export default function Dashboard({
           <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-900/95 border border-cyan-700/60 shadow-lg">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-mono font-bold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950/80 border border-cyan-800/80 flex items-center gap-1.5 shadow-sm">
-                <Brain className="w-4 h-4 text-cyan-400 animate-pulse" /> 1ST HUD | AI CONTROL & PERCEPTION
+                <Brain className="w-4 h-4 text-cyan-400" /> AI Perception &amp; Control
               </span>
               <Button
                 size="sm"
@@ -1334,7 +1303,7 @@ export default function Dashboard({
                 onClick={handleTriggerPlanAndAct}
                 className="h-7 text-xs font-mono font-bold bg-purple-600 hover:bg-purple-500 text-white gap-1.5 shadow-sm"
               >
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Plan & Act (AI #2 → Execute)
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Plan &amp; Act (AI #2)
               </Button>
               <Button
                 size="sm"
@@ -1342,7 +1311,7 @@ export default function Dashboard({
                 className="h-7 text-xs font-mono font-bold bg-gradient-to-r from-red-600 via-amber-600 to-red-600 hover:from-red-500 hover:to-amber-500 text-white border border-amber-300 gap-1.5 shadow-md"
               >
                 <Zap className="w-3.5 h-3.5 text-yellow-200" /> Execute on{" "}
-                {targetDevice === "android" ? "Phone" : "PC"} (pyautogui)
+                {targetDevice === "android" ? "Phone" : "PC"}
               </Button>
             </div>
             {verificationBadge && (
@@ -1354,11 +1323,11 @@ export default function Dashboard({
             )}
           </div>
 
-          {/* 2nd HUD: Movement Mode & Trajectory Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-950 border-2 border-cyan-600/70 shadow-xl shadow-cyan-950/30">
+          {/* Movement Mode & Trajectory Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-950 border border-cyan-600/60 shadow-lg">
             <div className="flex flex-wrap items-center gap-3">
-              <span className="text-xs font-mono font-extrabold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-500/70 flex items-center gap-1.5 shadow-sm tracking-wider">
-                <Compass className="w-4 h-4 text-cyan-400 animate-pulse" /> 2ND HUD | MOVEMENT MODE
+              <span className="text-xs font-mono font-bold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-500/70 flex items-center gap-1.5 shadow-sm">
+                <Compass className="w-4 h-4 text-cyan-400" /> Trajectory &amp; Movement Mode
               </span>
               <div
                 role="radiogroup"

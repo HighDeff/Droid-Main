@@ -26,6 +26,23 @@ export interface AiMonitorStatus {
   [key: string]: any;
 }
 
+export interface AiMonitorBrowserElement {
+  id: string;
+  name: string;
+  type: string;
+  selector?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  text?: string;
+  tag?: string;
+  role?: string;
+  attributes?: Record<string, string>;
+  childrenCount?: number;
+  [key: string]: any;
+}
+
 export interface AiMonitorBrowserContext {
   updatedAt: number;
   source: "cdp" | "extension";
@@ -36,17 +53,7 @@ export interface AiMonitorBrowserContext {
     url?: string;
     viewport?: { width: number; height: number };
   };
-  elements: Array<{
-    id: string;
-    name: string;
-    type: string;
-    selector?: string;
-    x?: number;
-    y?: number;
-    width?: number;
-    height?: number;
-    text?: string;
-  }>;
+  elements: AiMonitorBrowserElement[];
 }
 
 class AiMonitorStore {

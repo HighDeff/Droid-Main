@@ -4,6 +4,7 @@ import {
   framePointAsPercent,
   framePointFromClient,
   getContainedFrameViewport,
+  getFrameViewport,
 } from "./frame-viewport";
 
 describe("frame viewport mapping", () => {
@@ -22,6 +23,23 @@ describe("frame viewport mapping", () => {
       height: 450,
       scale: 800 / 1920,
     });
+  });
+
+  it("maps pointer coordinates through a cropped cover frame", () => {
+    const viewport = getFrameViewport(
+      { left: 0, top: 0, width: 800, height: 800 },
+      frame,
+      "cover",
+    );
+
+    expect(viewport).toEqual({
+      left: -311.1111111111111,
+      top: 0,
+      width: 1422.2222222222222,
+      height: 800,
+      scale: 800 / 1080,
+    });
+    expect(framePointFromClient(400, 400, viewport, frame)).toEqual({ x: 960, y: 540 });
   });
 
   it("maps pointer coordinates through letterboxing", () => {

@@ -87,8 +87,10 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
     const stored = getStoredCalibration();
     setProfile(stored.targetDevice === targetDevice ? stored : { ...DEFAULT_CALIBRATION_PROFILE, targetDevice });
     setActiveStepIndex(0);
+    setTargets((current) => current.map((target) => ({ ...target, clickedNormX: undefined, clickedNormY: undefined, driftPx: undefined })));
     setTestClicks([]);
-  }, [isOpen]);
+    setHardwareTestActive(false);
+  }, [isOpen, targetDevice]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -211,23 +213,25 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
     };
     setProfile(autoProfile);
     saveStoredCalibration(autoProfile);
-    toast.success(`⚡ Auto-Calibrated to display resolution ${autoProfile.screenWidth}×${autoProfile.screenHeight} @ ${dpi}x DPI!`);
+    toast.success(`Saved a zero-offset baseline for ${autoProfile.screenWidth}×${autoProfile.screenHeight}. Use guided calibration to measure drift.`);
   };
 
   // Save changes
   const handleSaveProfile = () => {
-    saveStoredCalibration(profile);
-    toast.success("✅ Mouse & Coordinate Calibration Profile Saved!");
+    const scopedProfile = { ...profile, targetDevice, screenWidth: frameSize.width, screenHeight: frameSize.height, resolutionWidth: frameSize.width, resolutionHeight: frameSize.height };
+    setProfile(scopedProfile);
+    saveStoredCalibration(scopedProfile);
+    toast.success("Mouse & coordinate calibration profile saved for this frame and device.");
     onClose();
   };
 
   // Reset to default
   const handleResetProfile = () => {
-    const defaultProfile = { ...DEFAULT_CALIBRATION_PROFILE, targetDevice };
+    const defaultProfile = { ...DEFAULT_CALIBRATION_PROFILE, targetDevice, screenWidth: frameSize.width, screenHeight: frameSize.height, resolutionWidth: frameSize.width, resolutionHeight: frameSize.height };
     setProfile(defaultProfile);
     saveStoredCalibration(defaultProfile);
     setActiveStepIndex(0);
-    setTargets(targets.map((t) => ({ ...t, clickedNormX: undefined, clickedNormY: undefined, driftPx: undefined })));
+    setTargets((current) => current.map((target) => ({ ...target, clickedNormX: undefined, clickedNormY: undefined, driftPx: undefined })));
     toast.info("Calibration reset to factory default (1920×1080 1:1)");
   };
 
@@ -252,7 +256,7 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
               onClick={handleAutoCalibrate}
               className="h-8 text-xs font-mono font-bold bg-cyan-600 hover:bg-cyan-500 text-white gap-1.5 shadow-md shadow-cyan-950"
             >
-              <Sparkles className="w-3.5 h-3.5" /> 1-Click Auto Calibrate
+              <Sparkles className="w-3.5 h-3.5" /> Use Current Frame
             </Button>
             <Button
               size="sm"

@@ -80,6 +80,7 @@ import { calibrateCoordinates, getStoredCalibration, type CoordinateCalibrationP
 import { DetectGoalModal } from "./detect-goal-modal";
 import { ThreeAiAgentsSquad } from "./three-ai-agents-squad";
 import { recordTemporalAction, captureSnapshotWith10sBuffer } from "@/lib/temporal-action-buffer";
+import { prepareAiReviewFrame } from "@/lib/ai-review-frame";
 import {
   calculateEuclideanDistance,
   getAlignmentStatus,
@@ -106,7 +107,7 @@ import { toast } from "sonner";
 import {
   framePointAsPercent,
   framePointFromClient,
-  getContainedFrameViewport,
+  getFrameViewport,
 } from "@/lib/frame-viewport";
 
 export interface SequenceStep {
@@ -240,7 +241,6 @@ interface LiveScreenHUDProps {
   onRunSequence?: () => void;
   onReplaySteps?: (steps: SequenceStep[]) => void;
   onExecuteTask?: (url: string, options: RequestInit) => Promise<Response>;
-  onReviewStepsWithAI?: () => void;
 }
 
 export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
@@ -279,7 +279,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   onRunSequence,
   onReplaySteps,
   onExecuteTask,
-  onReviewStepsWithAI,
 }) => {
   const executeVerifiedTask = (url: string, options: RequestInit) => {
     if (!onExecuteTask) return Promise.reject(new Error("Open Screen Hub to use verified device execution"));
@@ -683,13 +682,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     setAiReviewResult(null);
 
     try {
-      const snap = handleCaptureFreshFrame() || screenshotUrl || frozenSnapshotUrl;
+      const frame = await prepareAiReviewFrame(handleCaptureFreshFrame() || screenshotUrl || frozenSnapshotUrl);
       const res = await fetch("/api/ai/review-steps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           steps: sequence,
-          screenshotUrl: snap,
+          screenshotUrl: frame.screenshotUrl,
+          frameSize: frame.frameSize,
           userObjective: "Automate task with conscious operator reasoning and visual coordinate verification",
         }),
       });
@@ -1054,12 +1054,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     setIsQwenOrchestrating(true);
     setQwenThinkingStatus("AI is reviewing workflow steps against the current screen...");
     try {
+      const frame = await prepareAiReviewFrame(handleCaptureFreshFrame() || screenshotUrl || frozenSnapshotUrl);
       const response = await fetch("/api/ai/review-steps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           steps: sequence,
-          screenshotUrl: screenshotUrl || frozenSnapshotUrl,
+          screenshotUrl: frame.screenshotUrl,
+          frameSize: frame.frameSize,
           userObjective: activeWorkflowName || "Review the current workflow",
         }),
       });
@@ -1852,10 +1854,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   const getNativeCoordinates = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = viewportRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0, pctX: 50, pctY: 50 };
-    const viewport = getContainedFrameViewport(rect, {
+    const viewport = getFrameViewport(rect, {
       width: NATIVE_WIDTH,
       height: NATIVE_HEIGHT,
-    });
+    }, hudFitMode === "fill" ? "cover" : "contain");
     const rawPoint = framePointFromClient(e.clientX, e.clientY, viewport, {
       width: NATIVE_WIDTH,
       height: NATIVE_HEIGHT,

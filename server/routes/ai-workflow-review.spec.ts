@@ -42,7 +42,7 @@ describe("AI workflow review endpoint", () => {
 
   it("reviews the supplied workflow against current and reference screenshots", async () => {
     sendQwenChatRequest.mockResolvedValue({ success: true, content: JSON.stringify(review) });
-    const response = await post({ steps: [{ ...step, referenceScreenshotUrl: "data:image/jpeg;base64,aGVsbG8=" }], screenshotUrl, userObjective: "Open settings" });
+    const response = await post({ steps: [{ ...step, referenceScreenshotUrl: "data:image/jpeg;base64,aGVsbG8=" }], screenshotUrl, frameSize: { width: 1920, height: 1080 }, userObjective: "Open settings" });
     const data = await response.json();
     expect(response.status).toBe(200);
     expect(data.reviewedSteps[0]).toMatchObject({ stepNumber: 1, name: step.name, action: step.action, originalCoords: { x: 500, y: 300 }, recommendedCoords: { x: 520, y: 310 } });
@@ -52,14 +52,24 @@ describe("AI workflow review endpoint", () => {
   });
 
   it("rejects non-raster current screenshots without calling the model", async () => {
-    const response = await post({ steps: [step], screenshotUrl: "data:image/svg+xml;base64,PHN2Zz4=" });
+    const response = await post({ steps: [step], screenshotUrl: "data:image/svg+xml;base64,PHN2Zz4=", frameSize: { width: 1920, height: 1080 } });
     expect(response.status).toBe(400);
     expect(sendQwenChatRequest).not.toHaveBeenCalled();
   });
 
   it("does not report success when the model returns an incomplete review", async () => {
     sendQwenChatRequest.mockResolvedValue({ success: true, content: JSON.stringify({ ...review, reviewedSteps: [] }) });
-    const response = await post({ steps: [step], screenshotUrl });
+    const response = await post({ steps: [step], screenshotUrl, frameSize: { width: 1920, height: 1080 } });
+    expect(response.status).toBe(502);
+    expect((await response.json()).success).toBe(false);
+  });
+
+  it("rejects AI coordinates outside the current screenshot bounds", async () => {
+    sendQwenChatRequest.mockResolvedValue({ success: true, content: JSON.stringify({
+      ...review,
+      reviewedSteps: [{ ...review.reviewedSteps[0], recommendedCoords: { x: 1920, y: 1080 } }],
+    }) });
+    const response = await post({ steps: [step], screenshotUrl, frameSize: { width: 1920, height: 1080 } });
     expect(response.status).toBe(502);
     expect((await response.json()).success).toBe(false);
   });

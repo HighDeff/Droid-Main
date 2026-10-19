@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   RefreshCw,
-  Zap,
   Play,
   Pause,
   Clock,
@@ -41,12 +40,14 @@ export interface SquadAgent {
 
 interface ThreeAiAgentsSquadProps {
   className?: string;
-  onDispatchFix?: (action: string) => void;
+  onDispatchFix?: () => Promise<void>;
+  onRefreshScreen?: () => Promise<{ screenDescription?: string }>;
 }
 
 export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
   className = "",
   onDispatchFix,
+  onRefreshScreen,
 }) => {
   const [agents, setAgents] = useState<SquadAgent[]>([
     {
@@ -55,12 +56,12 @@ export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
       roleTitle: "Proactive Workflow Guide",
       avatar: "🤖",
       themeColor: "cyan",
-      status: "active",
-      liveThought: "Tracking current workflow steps. Suggesting next optimal action and goal alignment.",
-      interventions: 18,
-      lastAction: "Guided user to search bar",
-      lastActionTime: new Date().toLocaleTimeString(),
-      metrics: { "Guidance Accuracy": "99.2%", "Next Step ETA": "< 120ms" },
+      status: "idle",
+      liveThought: "Refresh screen AI to inspect the current screenshot and workflow context.",
+      interventions: 0,
+      lastAction: "Waiting for current-screen perception",
+      lastActionTime: "—",
+      metrics: {},
     },
     {
       id: "agent_log_reader",
@@ -69,11 +70,11 @@ export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
       avatar: "📜",
       themeColor: "emerald",
       status: "monitoring",
-      liveThought: "Reading /api/central-logs stream. Zero critical unhandled rejections detected in pipeline.",
-      interventions: 42,
-      lastAction: "Audited PyAutoGUI execution logs",
-      lastActionTime: new Date().toLocaleTimeString(),
-      metrics: { "Log Rate": "14 ev/s", "System Health": "100% OK" },
+      liveThought: "Polling the interaction log endpoint for current activity.",
+      interventions: 0,
+      lastAction: "Waiting for interaction events",
+      lastActionTime: "—",
+      metrics: {},
     },
     {
       id: "agent_corrector",
@@ -81,101 +82,68 @@ export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
       roleTitle: "Adaptive Action Recovery & Scheduler",
       avatar: "🛠️",
       themeColor: "amber",
-      status: "intervening",
-      liveThought: "Self-healing ready: auto-switches to keypress fallback (Tab+Enter) if click drifts > 15px.",
-      interventions: 7,
-      lastAction: "Applied drift recalibration offset Δ(2px, -1px)",
-      lastActionTime: new Date().toLocaleTimeString(),
-      metrics: { "Recovery Rate": "98.7%", "Fallback Methods": "4 Ready" },
+      status: "idle",
+      liveThought: "Retry is available only for a failed step and uses fresh perception before verified replay.",
+      interventions: 0,
+      lastAction: "Waiting for a failed workflow step",
+      lastActionTime: "—",
+      metrics: {},
     },
   ]);
 
-  const [habitSuggestion, setHabitSuggestion] = useState<{
-    zone: string;
-    count: number;
-    x: number;
-    y: number;
-  } | null>(null);
+  const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
+
+  const refreshInteractions = async () => {
+    const res = await fetch("/api/interactions");
+    if (!res.ok) throw new Error("Could not refresh interaction telemetry.");
+    const data = await res.json();
+    const interactions = data.interactions || [];
+    const errCount = interactions.filter((i: any) => i.status === "error" || i.status === "failed").length;
+    setAgents((prev) => [
+      prev[0],
+      {
+        ...prev[1],
+        liveThought: `Inspected ${interactions.length} interactions. ${errCount === 0 ? "All commands healthy." : `${errCount} warning(s) found.`}`,
+        metrics: { "Logged Interactions": interactions.length, "Health Score": errCount === 0 ? "100%" : "Warnings" },
+      },
+      prev[2],
+    ]);
+    return interactions.length;
+  };
 
   // Live polling of logs and self-healing telemetry
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch("/api/interactions");
-        if (res.ok) {
-          const data = await res.json();
-          const interactions = data.interactions || [];
-          const errCount = interactions.filter((i: any) => i.status === "error" || i.status === "failed").length;
-
-          setAgents((prev) => [
-            {
-              ...prev[0],
-              liveThought: "Formulating sequence checkpoints and asserting screen stability.",
-              lastActionTime: new Date().toLocaleTimeString(),
-            },
-            {
-              ...prev[1],
-              liveThought: `Inspected ${interactions.length} interactions. ${errCount === 0 ? "All commands healthy." : `${errCount} warning caught.`}`,
-              metrics: { "Logged Interactions": interactions.length, "Health Score": errCount === 0 ? "100%" : "96%" },
-            },
-            {
-              ...prev[2],
-              liveThought: "Monitoring coordinate drift and scheduling automated recovery routines.",
-              interventions: prev[2].interventions + (errCount > 0 ? 1 : 0),
-            },
-          ]);
-        }
-
-        // Also poll habits & repetitive patterns
-        try {
-          const habitRes = await fetch("/api/learning/habits");
-          if (habitRes.ok) {
-            const hData = await habitRes.json();
-            if (hData.profile?.repetitiveActionDetected && hData.profile?.topClickZones?.length > 0) {
-              const topZ = hData.profile.topClickZones[0];
-              setHabitSuggestion({
-                zone: `${topZ.x}, ${topZ.y}`,
-                count: hData.profile.repetitiveActionCount || 3,
-                x: topZ.x,
-                y: topZ.y,
-              });
-              setAgents((prev) => [
-                {
-                  ...prev[0],
-                  status: "intervening",
-                  liveThought: `Habit Detected: ${hData.profile.repetitiveActionCount} repetitive actions in zone (${topZ.x}, ${topZ.y}). Auto-routine ready to dispatch.`,
-                },
-                prev[1],
-                prev[2],
-              ]);
-            } else {
-              setHabitSuggestion(null);
-            }
-          }
-        } catch {}
+        await refreshInteractions();
       } catch {}
     }, 3000);
     return () => clearInterval(interval);
   }, []);
 
-  const handleManualHealTrigger = (agentId: string) => {
-    if (agentId === "agent_corrector") {
-      fetch("/api/ai/adaptive-retry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          strategy: "fallback_keys_and_recalibrate",
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // Also trigger ad dismissal heuristic
-      fetch("/api/ai/dismiss-ad", { method: "POST" }).catch(() => {});
-      toast.success("🛠️ Auto-Corrector: Triggered action self-healing & dismissed popups!");
-      onDispatchFix?.("self_heal");
-    } else if (agentId === "agent_log_reader") {
-      toast.info("📜 Log Sentinel: Audited pipeline history and cleared error counters.");
-    } else {
-      toast.success("🤖 Assistant Agent: Refreshed next-step suggestions and goal queue.");
+  const handleManualHealTrigger = async (agentId: string) => {
+    setBusyAgentId(agentId);
+    try {
+      if (agentId === "agent_corrector") {
+        if (!onDispatchFix) throw new Error("Verified retry is unavailable.");
+        await onDispatchFix();
+      } else if (agentId === "agent_log_reader") {
+        const count = await refreshInteractions();
+        toast.success(`Refreshed telemetry from ${count} interaction(s).`);
+      } else {
+        if (!onRefreshScreen) throw new Error("Screen perception is unavailable.");
+        const report = await onRefreshScreen();
+        setAgents((prev) => [
+          { ...prev[0], liveThought: report?.screenDescription || "Current screen perception refreshed." },
+          prev[1],
+          prev[2],
+        ]);
+        toast.success("Refreshed AI perception from the current screen.");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Agent action failed.");
+    } finally {
+      setBusyAgentId(null);
     }
   };
 
@@ -198,49 +166,6 @@ export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
       </CardHeader>
 
       <CardContent className="p-3">
-        {/* Habit & Routine Detected Banner */}
-        {habitSuggestion && (
-          <div className="mb-3 p-2.5 rounded-xl bg-amber-950/80 border border-amber-500/80 flex items-center justify-between gap-3 text-xs text-amber-200 animate-pulse shadow-lg">
-            <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>
-                <strong>Repetitive Habit Detected:</strong> User performed {habitSuggestion.count} actions in area ({habitSuggestion.zone}). Automate as background routine?
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                onClick={async () => {
-                  toast.info("Automating routine for 5 cycles...");
-                  await fetch("/api/execute-task", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      task: {
-                        name: "Habit Routine Loop",
-                        action: "click",
-                        targetPosition: { x: habitSuggestion.x, y: habitSuggestion.y },
-                        delayMs: 400,
-                      },
-                      repeatCount: 5,
-                    }),
-                  });
-                  toast.success("Routine executed 5 cycles!");
-                  setHabitSuggestion(null);
-                }}
-                className="h-6 px-2.5 text-[10px] bg-amber-600 hover:bg-amber-500 text-white font-bold"
-              >
-                Automate Routine (5x)
-              </Button>
-              <button
-                onClick={() => setHabitSuggestion(null)}
-                className="text-xs text-amber-400 hover:text-white px-1"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        )}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {agents.map((agent) => (
             <div
@@ -298,14 +223,15 @@ export const ThreeAiAgentsSquad: React.FC<ThreeAiAgentsSquadProps> = ({
                 <span className="text-slate-500 truncate">Interventions: {agent.interventions}</span>
                 <Button
                   size="sm"
-                  onClick={() => handleManualHealTrigger(agent.id)}
+                  onClick={() => void handleManualHealTrigger(agent.id)}
+                  disabled={busyAgentId === agent.id}
                   className={`h-6 px-2 text-[9px] font-bold ${
                     agent.themeColor === "amber"
                       ? "bg-amber-600 hover:bg-amber-500 text-white"
                       : "bg-slate-800 hover:bg-slate-700 text-slate-200"
                   }`}
                 >
-                  {agent.id === "agent_corrector" ? "Auto-Heal Action" : "Refresh"}
+                  {busyAgentId === agent.id ? "Working…" : agent.id === "agent_corrector" ? "Retry Failed Step" : agent.id === "agent_log_reader" ? "Refresh Logs" : "Refresh Screen AI"}
                 </Button>
               </div>
             </div>

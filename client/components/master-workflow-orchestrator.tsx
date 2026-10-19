@@ -109,7 +109,8 @@ export const MasterWorkflowOrchestrator = ({ run, stepCount, onRun, onControl, o
           {stageDefinitions.map((stage) => {
             const stageEvents = (run?.events || []).filter((event) => phaseStage[event.phase] === stage.id);
             const isCurrent = active && stage.id === currentStage;
-            const isDone = run?.status === "completed" || stageEvents.some((event) => event.phase === "verification") && stage.id < currentStage;
+            const isSkipped = stage.id === 4 && !!run && ["running", "paused", "completed"].includes(run.status) && currentStage > stage.id && stageEvents.length === 0;
+            const isDone = run?.status === "completed" || (stage.id <= 5 && stage.id < currentStage && stageEvents.length > 0) || (stage.id === 6 && !!run?.steps.some((step) => step.status === "completed"));
             const failed = run?.status === "failed" && isCurrent;
             const detail = stageEvents.at(-1)?.detail;
             return (
@@ -117,13 +118,13 @@ export const MasterWorkflowOrchestrator = ({ run, stepCount, onRun, onControl, o
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className={failed ? "text-red-300 border-red-700" : isDone ? "text-emerald-300 border-emerald-800" : isCurrent ? "text-cyan-300 border-cyan-500" : "text-slate-400 border-slate-800"}>
-                      {failed ? "failed" : isDone ? "verified" : isCurrent ? run?.status === "paused" ? "paused" : "active" : run ? "pending" : "idle"}
+                      {failed ? "failed" : isDone ? "verified" : isSkipped ? "not needed" : isCurrent ? run?.status === "paused" ? "paused" : "active" : run ? "pending" : "idle"}
                     </Badge>
                     <span className="font-bold text-slate-100">{stage.id}. {stage.name}</span>
                   </div>
                   <p className="text-[10px] text-slate-300">{detail || stage.description}</p>
                 </div>
-                <span className="text-[10px] text-slate-400">{stageEvents.length} evidence event(s)</span>
+                <span className="text-[10px] text-slate-400">{stage.id === 6 ? `${run?.steps.filter((step) => step.status === "completed").length || 0} committed step(s)` : `${stageEvents.length} evidence event(s)`}</span>
               </div>
             );
           })}

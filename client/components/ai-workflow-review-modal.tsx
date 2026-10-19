@@ -139,7 +139,7 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
                 <DialogTitle className="text-sm font-bold flex items-center gap-2 text-white">
                   <span>AI Conscious Operator: Workflow & Screen Review</span>
                   <Badge className="bg-purple-950 text-purple-300 border-purple-600 text-[10px] font-mono">
-                    QWEN & GEMINI DUAL-AI
+                    {reviewResult?.aiModelUsed || "VISION MODEL"}
                   </Badge>
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-400">
@@ -163,7 +163,7 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
             <div className="space-y-1">
               <p className="text-sm font-bold text-cyan-300">Auditing Sequence & Screen Frame...</p>
               <p className="text-xs text-slate-400 max-w-sm">
-                Cross-referencing coordinates against 1920x1080 visual viewport, checking UI element bounding boxes, and validating execution paths.
+                Cross-referencing coordinates against the current screenshot and selected workflow steps.
               </p>
             </div>
           </div>

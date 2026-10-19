@@ -2,6 +2,7 @@ import { MobileSettingsModal } from "@/components/mobile-settings-modal";
 import type { ReplayRun } from "@shared/replay";
 import { ReplayMonitor } from "@/components/replay-monitor";
 import { generateDefaultMobileFrame, generateDefaultDesktopFrame } from "@/lib/mobile-screen-generator";
+import { prepareAiReviewFrame } from "@/lib/ai-review-frame";
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -219,6 +220,7 @@ export default function Dashboard({
     useState<RecalibrationNotice | null>(null);
   const [perceptionReport, setPerceptionReport] =
     useState<ScreenPerceptionReport | null>(null);
+  const perceptionScreenshotRef = useRef<string | null>(null);
   const [verificationBadge, setVerificationBadge] =
     useState<VerificationBadgeState | null>(null);
   const [isAutonomousRunning, setIsAutonomousRunning] = useState(false);
@@ -238,13 +240,15 @@ export default function Dashboard({
     setDashboardAiReviewResult(null);
 
     try {
-      const snap = aiLiveUrl || screenshotUrl;
+      const capture = await replayRequest("/api/replay/capture", { targetDevice, deviceId: selectedAdbDevice || undefined });
+      const frame = await prepareAiReviewFrame(capture.frame.image);
       const res = await fetch("/api/ai/review-steps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           steps: sequence,
-          screenshotUrl: snap,
+          screenshotUrl: frame.screenshotUrl,
+          frameSize: frame.frameSize,
           userObjective: userObjective || "Execute automated desktop task",
         }),
       });
@@ -938,6 +942,7 @@ export default function Dashboard({
       });
       setScreenshotUrl(capture.frame.image);
       setAiLiveUrl(capture.frame.image);
+      perceptionScreenshotRef.current = capture.frame.image;
       const data = await replayRequest("/api/ai/describe-screen", {
         imageData: capture.frame.image,
         signal: combinedSignal,
@@ -948,6 +953,7 @@ export default function Dashboard({
       return data.report;
     } catch (error: any) {
       setPerceptionReport(null);
+      perceptionScreenshotRef.current = null;
       const msg =
         error?.name === "TimeoutError"
           ? "Perceive timed out (45s) — vision model hung, aborted"
@@ -1830,8 +1836,41 @@ export default function Dashboard({
             {/* Tri-Agent Cooperative Operations Squad: 1 Assists User, 1 Reads Logs, 1 Corrects AI Actions & Heals */}
             <ThreeAiAgentsSquad
               className="border-cyan-500/50 shadow-2xl"
-              onDispatchFix={(action) => {
-                toast.success(`Autonomous Agent Corrector: Dispatched self-healing fix (${action})`);
+              onRefreshScreen={async () => {
+                const report = await handleTriggerDescribeScreen();
+                if (!report) throw new Error("Fresh screen perception failed.");
+                return report;
+              }}
+              onDispatchFix={async () => {
+                const failedStep = sequence.find((step) => step.status === "failed");
+                if (!failedStep) throw new Error("No failed workflow step is available to retry.");
+                const report = await handleTriggerDescribeScreen();
+                if (!report) throw new Error("Fresh screen perception failed; retry was not prepared.");
+                const retryResponse = await replayRequest("/api/ai/adaptive-retry", {
+                  stepId: failedStep.id,
+                  actionType: failedStep.action,
+                  targetName: failedStep.targetOcrLabel || failedStep.name,
+                  currentX: failedStep.x,
+                  currentY: failedStep.y,
+                  textPayload: failedStep.text,
+                  perception: report,
+                });
+                const retryPlan = retryResponse.retryPlan;
+                if (!retryPlan?.retryNeeded) throw new Error("The retry limit for this step has been reached.");
+                const retryStep = {
+                  ...failedStep,
+                  action: retryPlan.adaptedActionType,
+                  x: retryPlan.newCoordinates.x,
+                  y: retryPlan.newCoordinates.y,
+                  delayMs: retryPlan.delayMs,
+                  text: retryPlan.textPayload ?? failedStep.text,
+                  keyPayload: retryPlan.keyPayload ?? failedStep.keyPayload,
+                  status: "pending" as const,
+                  referenceScreenshotUrl: perceptionScreenshotRef.current || failedStep.referenceScreenshotUrl,
+                };
+                const runId = await handleRunSequence([retryStep]);
+                if (!runId) throw new Error("Verified retry could not start.");
+                toast.info(retryPlan.strategyRationale);
               }}
             />
 

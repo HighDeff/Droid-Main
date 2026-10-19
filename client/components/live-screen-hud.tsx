@@ -695,12 +695,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       });
 
       const data = await res.json();
-      if (data.success) {
-        setAiReviewResult(data);
+      if (!res.ok || !data.success) throw new Error(data.error || "AI workflow review failed.");
+      if (!Array.isArray(data.reviewedSteps)) throw new Error("AI review returned an incomplete response. Please retry.");
+      setAiReviewResult(data);
         toast.success(`🧠 AI Review: ${data.overallScore}% Viability Score (${data.overallStatus.toUpperCase()})`);
-      } else {
-        toast.error(`Review failed: ${data.error || "Unknown error"}`);
-      }
     } catch (err: any) {
       toast.error(`AI Review error: ${err.message}`);
     } finally {
@@ -771,7 +769,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         fetch("/api/pyautogui/interactive-action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, x, y, toX: extra?.toX, toY: extra?.toY, text: extra?.text, key: extra?.key, deviceMode: "desktop" }),
+          body: JSON.stringify({ action, x, y, toX: extra?.toX, toY: extra?.toY, frameWidth: NATIVE_WIDTH, frameHeight: NATIVE_HEIGHT, text: extra?.text, key: extra?.key, deviceMode: "desktop" }),
         }).catch(() => {});
       } else {
         const normX = Math.max(0, Math.min(1, x / NATIVE_WIDTH));
@@ -1067,6 +1065,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || "AI workflow review failed");
+      if (!Array.isArray(data.reviewedSteps)) throw new Error("AI review returned an incomplete response. Please retry.");
       if (data.overallStatus !== "ready") {
         setQwenThinkingStatus(data.summary);
         toast.warning("AI review recommends manual correction before applying changes.", { description: data.summary });

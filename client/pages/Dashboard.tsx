@@ -253,12 +253,10 @@ export default function Dashboard({
         }),
       });
       const data = await res.json();
-      if (data.success) {
-        setDashboardAiReviewResult(data);
+      if (!res.ok || !data.success) throw new Error(data.error || "AI workflow review failed.");
+      if (!Array.isArray(data.reviewedSteps)) throw new Error("AI review returned an incomplete response. Please retry.");
+      setDashboardAiReviewResult(data);
         toast.success(`🧠 AI Review: Score ${data.overallScore}%`);
-      } else {
-        toast.error(`Review failed: ${data.error || "Unknown error"}`);
-      }
     } catch (err: any) {
       toast.error(`Review error: ${err.message}`);
     } finally {

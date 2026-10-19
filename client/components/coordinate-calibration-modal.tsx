@@ -182,7 +182,7 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
         ? fetch("/api/pyautogui/interactive-action", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "click", x: cal.x, y: cal.y, deviceMode: "desktop" }),
+            body: JSON.stringify({ action: "click", x: cal.x, y: cal.y, frameWidth: frameSize.width, frameHeight: frameSize.height, deviceMode: "desktop" }),
           })
         : fetch("/api/mobile-stream/action", {
             method: "POST",

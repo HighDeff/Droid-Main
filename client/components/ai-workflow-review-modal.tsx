@@ -74,10 +74,11 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
   screenshotUrl,
 }) => {
   const [isSavingToMemory, setIsSavingToMemory] = useState(false);
+  const reviewedSteps = Array.isArray(reviewResult?.reviewedSteps) ? reviewResult.reviewedSteps : [];
 
   const handleApply = () => {
-    if (!reviewResult?.reviewedSteps.length) return;
-    const reviewedById = new Map(reviewResult.reviewedSteps.map((step) => [step.stepId, step]));
+    if (!reviewedSteps.length) return;
+    const reviewedById = new Map(reviewedSteps.map((step) => [step.stepId, step]));
     const updated: SequenceStep[] = currentSteps.map((original) => {
       const reviewed = reviewedById.get(original.id);
       if (!reviewed) return original;
@@ -199,12 +200,12 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
             {/* Step-by-Step Breakdown */}
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-bold text-slate-300 px-1">
-                <span>Audited Step Sequence ({reviewResult.reviewedSteps.length} Steps)</span>
+                <span>Audited Step Sequence ({reviewedSteps.length} Steps)</span>
                 <span className="text-[11px] text-slate-400">Target UI & Coordinate Verification</span>
               </div>
 
               <div className="space-y-2">
-                {reviewResult.reviewedSteps.map((step, sIdx) => {
+                {reviewedSteps.map((step, sIdx) => {
                   const hasShift =
                     step.originalCoords &&
                     step.recommendedCoords &&
@@ -305,7 +306,7 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
               Close
             </Button>
 
-            {onApplyOptimizations && reviewResult && reviewResult.reviewedSteps.length > 0 && (
+            {onApplyOptimizations && reviewResult && reviewedSteps.length > 0 && (
               <Button
                 size="sm"
                 onClick={handleApply}

@@ -16,6 +16,7 @@ export interface CoordinateCalibrationProfile {
   screenHeight?: number;
   jitterDamping?: number;
   aspectRatioMode?: string;
+  targetDevice?: "desktop" | "android";
   lastCalibratedAt?: number;
 }
 
@@ -50,6 +51,7 @@ export function saveStoredCalibration(profile: CoordinateCalibrationProfile): vo
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+    window.dispatchEvent(new Event("coordinate-calibration-updated"));
   } catch {}
 }
 

@@ -810,6 +810,7 @@ export default function Dashboard({
     if (sequenceRunningRef.current) return;
     const steps = Array.isArray(stepsToRun) ? stepsToRun : sequence;
     if (!steps.length) { toast.info("Add or record steps first."); return; }
+    if (steps.length * iterations > 100) { toast.error("A replay may include at most 100 actions. Reduce the step selection or iteration count."); return; }
     sequenceRunningRef.current = true;
     replayStopRequested.current = false;
     setIsSequenceRunning(true);
@@ -836,6 +837,19 @@ export default function Dashboard({
     await handleReplayControl("cancel");
     setIsRecordMode(false);
     toast.info("Stop requested. In-flight device actions cannot be undone; the monitor confirms when replay stops.");
+  };
+  const handleResetMasterWorkflow = async () => {
+    if (replayRun && ["running", "paused"].includes(replayRun.status)) {
+      await handleReplayControl("cancel");
+    }
+    replayIdRef.current = null;
+    sessionStorage.removeItem("screen-replay-id");
+    setReplayRun(null);
+    sequenceRunningRef.current = false;
+    setIsSequenceRunning(false);
+    setIsAutonomousRunning(false);
+    setActiveStepId(null);
+    setSequence((steps) => steps.map((step) => ({ ...step, status: "pending" })));
   };
   const executeHubTask = async (_url: string, options: RequestInit) => {
     const body = JSON.parse(String(options.body));
@@ -1425,7 +1439,7 @@ export default function Dashboard({
           className="w-full"
         >
           <div className="mb-6">
-            <MasterWorkflowOrchestrator run={replayRun} onRun={() => { void handleRunSequence(); }} onControl={handleReplayControl} />
+            <MasterWorkflowOrchestrator run={replayRun} stepCount={sequence.length} onRun={(iterations) => { void handleRunSequence(undefined, iterations); }} onControl={handleReplayControl} onReset={handleResetMasterWorkflow} />
           </div>
           <TabsList aria-label="Main application tabs navigation" className="flex flex-wrap h-auto gap-1.5 bg-slate-900 border border-slate-800 p-2 rounded-xl mb-4">
             <div role="group" aria-label="Vision feature tabs" className="flex flex-wrap items-center gap-1.5">
@@ -1900,6 +1914,7 @@ export default function Dashboard({
                   onReplaySteps={steps => { void handleRunSequence(steps); }}
                   onExecuteTask={executeHubTask}
                   screenshotUrl={activeCanvasUrl || screenshotUrl}
+                  targetDevice={targetDevice}
                   isCapturing={isCapturing}
                   aiThinking={aiThinking}
                   entities={[]}
@@ -2029,7 +2044,7 @@ export default function Dashboard({
                   isRunning={isSequenceRunning}
                   isRecordMode={isRecordMode}
                   onToggleRecordMode={() => setIsRecordMode(!isRecordMode)}
-                  onRunSequence={() => { void handleRunSequence(); }}
+                  onRunSequence={(repeatCount) => { void handleRunSequence(undefined, repeatCount || 1); }}
                   onStopSequence={handleStopSequence}
                   onResetSequence={() =>
                     setSequence((prev) =>
@@ -3154,6 +3169,8 @@ export default function Dashboard({
         <CoordinateCalibrationModal
           isOpen={isCalibrationModalOpen}
           onClose={() => setIsCalibrationModalOpen(false)}
+          screenshotUrl={activeCanvasUrl || screenshotUrl}
+          targetDevice={targetDevice}
         />
 
         {/* Global System & AI Model Settings Modal */}

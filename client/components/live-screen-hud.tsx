@@ -76,7 +76,7 @@ import { ActionExecutionLog, ActionLogEntry } from "./action-execution-log";
 import { StepCorrectionModal, StepCorrectionData } from "./step-correction-modal";
 import { ReplayOverlayLayer } from "./replay-overlay-layer";
 import { InteractiveContextMenu, ContextMenuTarget } from "./interactive-context-menu";
-import { calibrateCoordinates } from "@/lib/coordinate-calibration";
+import { calibrateCoordinates, getStoredCalibration, type CoordinateCalibrationProfile } from "@/lib/coordinate-calibration";
 import { DetectGoalModal } from "./detect-goal-modal";
 import { ThreeAiAgentsSquad } from "./three-ai-agents-squad";
 import { recordTemporalAction, captureSnapshotWith10sBuffer } from "@/lib/temporal-action-buffer";
@@ -192,6 +192,7 @@ export interface RecalibrationNotice {
 
 interface LiveScreenHUDProps {
   screenshotUrl: string;
+  targetDevice?: "desktop" | "android";
   isCapturing: boolean;
   aiThinking: AIThinkingState | null;
   entities: DetectedEntity[];
@@ -244,6 +245,7 @@ interface LiveScreenHUDProps {
 
 export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   screenshotUrl,
+  targetDevice = "desktop",
   isCapturing,
   aiThinking,
   entities,
@@ -559,10 +561,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     text: string;
   } | null>(null);
 
-  // Qwen AI Agent Guide State
   const [qwenGuideEnabled, setQwenGuideEnabled] = useState<boolean>(true);
   const [qwenLiveThought, setQwenLiveThought] = useState<string | null>(
-    "Qwen Agent Guide active: Monitoring trajectories, assisted movement, and action completion."
+    "Workflow guard active: checking step order, travel distance, and delays locally."
   );
   const [qwenIncompleteTypingAlert, setQwenIncompleteTypingAlert] = useState<string | null>(null);
 
@@ -766,44 +767,27 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       });
       setTimeout(() => setHudActiveClickPoint(null), 600);
 
-      // Direct PC/Device Hardware Dispatch
-      fetch("/api/pyautogui/interactive-action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action,
-          x,
-          y,
-          toX: extra?.toX,
-          toY: extra?.toY,
-          text: extra?.text,
-          key: extra?.key,
-          deviceMode: "android_studio_mirror",
-        }),
-      }).catch(() => {});
-
-      // Also dispatch to Mobile Stream & ADB bridge
-      const normX = x > 1 ? Math.min(1, x / 1920) : x;
-      const normY = y > 1 ? Math.min(1, y / 1080) : y;
-      const normToX = extra?.toX !== undefined ? (extra.toX > 1 ? Math.min(1, extra.toX / 1920) : extra.toX) : undefined;
-      const normToY = extra?.toY !== undefined ? (extra.toY > 1 ? Math.min(1, extra.toY / 1080) : extra.toY) : undefined;
-
-      fetch("/api/mobile-stream/action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: {
+      if (targetDevice === "desktop") {
+        fetch("/api/pyautogui/interactive-action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, x, y, toX: extra?.toX, toY: extra?.toY, text: extra?.text, key: extra?.key, deviceMode: "desktop" }),
+        }).catch(() => {});
+      } else {
+        const normX = Math.max(0, Math.min(1, x / NATIVE_WIDTH));
+        const normY = Math.max(0, Math.min(1, y / NATIVE_HEIGHT));
+        const normToX = extra?.toX === undefined ? undefined : Math.max(0, Math.min(1, extra.toX / NATIVE_WIDTH));
+        const normToY = extra?.toY === undefined ? undefined : Math.max(0, Math.min(1, extra.toY / NATIVE_HEIGHT));
+        fetch("/api/mobile-stream/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: {
             type: action === "drag" ? "swipe" : action === "double_click" ? "double_tap" : action === "type" ? "type_text" : action === "press_key" ? "key" : "tap",
-            x: normX,
-            y: normY,
-            toX: normToX,
-            toY: normToY,
-            text: extra?.text,
-            key: extra?.key,
+            x: normX, y: normY, toX: normToX, toY: normToY, text: extra?.text, key: extra?.key,
             description: `Live HUD ${action.toUpperCase()} @ (${Math.round(x)}, ${Math.round(y)})`,
-          },
-        }),
-      }).catch(() => {});
+          } }),
+        }).catch(() => {});
+      }
 
       // AI Step Auto-Recording during usage
       if (autoRecordDuringUsage) {
@@ -987,7 +971,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     if (!sequence || sequence.length === 0) {
       setQwenDetectedErrors([]);
       if (qwenGuideEnabled) {
-        setQwenLiveThought("Qwen Agent Guide: Ready for step recording. No actions loaded.");
+        setQwenLiveThought("Workflow guard: Ready for step recording. No actions loaded.");
       }
       return;
     }
@@ -1055,68 +1039,51 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     if (qwenGuideEnabled) {
       if (issues.length > 0) {
         setQwenLiveThought(
-          `⚠️ Qwen Sentinel: Detected ${issues.length} workflow issue(s) (${issues[0].message}). Click [⚡ Qwen Fix & Orchestrate] to calibrate.`
+          `Workflow guard found ${issues.length} issue(s): ${issues[0].message}. Run AI Review & Auto-Apply to inspect screenshot evidence.`
         );
       } else {
         setQwenLiveThought(
-          `✓ Qwen Sentinel: All ${sequence.length} steps verified • Trajectories aligned & ready for playback.`
+          `Local checks found no obvious spacing or long-travel issues across ${sequence.length} steps.`
         );
       }
     }
   }, [sequence, qwenGuideEnabled]);
 
   const handleQwenAutoFixAndOrchestrate = async () => {
-    if (sequence.length === 0) {
-      toast.info("No steps to orchestrate. Record or add steps first.");
-      return;
-    }
+    if (!sequence.length) { toast.info("No steps to review. Record or add steps first."); return; }
     setIsQwenOrchestrating(true);
-    setQwenThinkingStatus("🤖 Qwen Orchestrator: Analyzing step geometry, smoothing paths, and resolving overlaps...");
+    setQwenThinkingStatus("AI is reviewing workflow steps against the current screen...");
     try {
-      const res = await fetch("/api/ai/apply-suggestions-with-qwen", {
+      const response = await fetch("/api/ai/review-steps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           steps: sequence,
-          userObjective: activeWorkflowName || "Calibrate smooth desktop sequence",
+          screenshotUrl: screenshotUrl || frozenSnapshotUrl,
+          userObjective: activeWorkflowName || "Review the current workflow",
         }),
       });
-      const data = await res.json();
-      if (data.success && Array.isArray(data.optimizedSteps)) {
-        if (onReorderSteps) {
-          onReorderSteps(data.optimizedSteps);
-        }
-        setQwenThinkingStatus(`✓ Qwen Orchestrated: Applied ${data.adjustmentsMade || 0} adjustments.`);
-        toast.success(`⚡ Qwen Orchestrator: Calibrated ${data.optimizedSteps.length} Steps!`, {
-          description: `${data.adjustmentsMade || 0} adjustments applied: ${data.qwenExplanation || "Smooth curves and timings calibrated."}`,
-        });
-
-        // Visibly render the orchestrated trajectory trail on screen!
-        if (data.optimizedSteps.length > 1) {
-          const trailPoints: Array<{ x: number; y: number; time: number; isClick?: boolean }> = [];
-          for (let i = 0; i < data.optimizedSteps.length - 1; i++) {
-            const p1 = data.optimizedSteps[i];
-            const p2 = data.optimizedSteps[i + 1];
-            for (let t = 0; t <= 1; t += 0.2) {
-              const curX = Math.round(p1.x + (p2.x - p1.x) * t);
-              const curY = Math.round(p1.y + (p2.y - p1.y) * t);
-              trailPoints.push({ x: curX, y: curY, time: Date.now() + i * 100, isClick: t === 1 });
-            }
-          }
-          setLiveMouseTrail(trailPoints);
-          setSplineMotionTrail(trailPoints.map((p) => ({ x: p.x, y: p.y })));
-          const lastPt = data.optimizedSteps[0];
-          setReplayingCursorPos({ x: lastPt.x, y: lastPt.y });
-          setMousePos({ x: lastPt.x, y: lastPt.y });
-        }
-      } else {
-        toast.error("Qwen orchestration returned unexpected format");
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || "AI workflow review failed");
+      if (data.overallStatus !== "ready") {
+        setQwenThinkingStatus(data.summary);
+        toast.warning("AI review recommends manual correction before applying changes.", { description: data.summary });
+        return;
       }
-    } catch (e: any) {
-      toast.error(`Qwen orchestration error: ${e.message}`);
+      const reviews = new Map(data.reviewedSteps.map((item: any) => [item.stepId, item]));
+      const updated = sequence.map((step) => {
+        const review = reviews.get(step.id) as any;
+        return review ? { ...step, x: review.recommendedCoords.x, y: review.recommendedCoords.y, delayMs: review.recommendedDelayMs ?? step.delayMs, confidence: review.confidence } : step;
+      });
+      onReorderSteps?.(updated);
+      setQwenThinkingStatus(data.summary);
+      toast.success(`AI reviewed and applied recommendations to ${updated.length} steps.`, { description: data.consciousGuidance });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setQwenThinkingStatus(message);
+      toast.error(`AI review failed: ${message}`);
     } finally {
       setIsQwenOrchestrating(false);
-      setTimeout(() => setQwenThinkingStatus(null), 3500);
     }
   };
 
@@ -1298,6 +1265,31 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasCaptureRef = useRef<HTMLCanvasElement | null>(null);
+  const [frameSize, setFrameSize] = useState({ width: 1920, height: 1080 });
+  const [calibrationProfile, setCalibrationProfile] = useState<CoordinateCalibrationProfile>(getStoredCalibration);
+
+  useEffect(() => {
+    const updateCalibration = () => setCalibrationProfile(getStoredCalibration());
+    window.addEventListener("coordinate-calibration-updated", updateCalibration);
+    return () => window.removeEventListener("coordinate-calibration-updated", updateCalibration);
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (isLiveStreamActive && video) {
+      const updateSize = () => {
+        if (video.videoWidth && video.videoHeight) setFrameSize({ width: video.videoWidth, height: video.videoHeight });
+      };
+      video.addEventListener("loadedmetadata", updateSize);
+      updateSize();
+      return () => video.removeEventListener("loadedmetadata", updateSize);
+    }
+    const image = new Image();
+    image.onload = () => {
+      if (image.naturalWidth && image.naturalHeight) setFrameSize({ width: image.naturalWidth, height: image.naturalHeight });
+    };
+    image.src = screenshotUrl;
+  }, [screenshotUrl, isLiveStreamActive]);
 
   // Allow parent (Dashboard header Share) to trigger HUD share via custom event
   React.useEffect(() => {
@@ -1854,8 +1846,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   >("auto_fixup");
   const [fixupExplanation, setFixupExplanation] = useState<string>("");
 
-  const NATIVE_WIDTH = 1920;
-  const NATIVE_HEIGHT = 1080;
+  const NATIVE_WIDTH = frameSize.width;
+  const NATIVE_HEIGHT = frameSize.height;
 
   const getNativeCoordinates = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -1864,10 +1856,16 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       width: NATIVE_WIDTH,
       height: NATIVE_HEIGHT,
     });
-    const point = framePointFromClient(e.clientX, e.clientY, viewport, {
+    const rawPoint = framePointFromClient(e.clientX, e.clientY, viewport, {
       width: NATIVE_WIDTH,
       height: NATIVE_HEIGHT,
     });
+    const hasMatchingCalibration = calibrationProfile.targetDevice === targetDevice && calibrationProfile.screenWidth === NATIVE_WIDTH && calibrationProfile.screenHeight === NATIVE_HEIGHT;
+    const mappedPoint = hasMatchingCalibration ? calibrateCoordinates(rawPoint, calibrationProfile) : rawPoint;
+    const point = {
+      x: Math.max(0, Math.min(NATIVE_WIDTH - 1, mappedPoint.x)),
+      y: Math.max(0, Math.min(NATIVE_HEIGHT - 1, mappedPoint.y)),
+    };
 
     return {
       ...point,
@@ -1884,9 +1882,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   const toPercent = (nativeX: number, nativeY: number) => {
     const rawX = typeof nativeX === "number" ? nativeX : 0;
     const rawY = typeof nativeY === "number" ? nativeY : 0;
-    // Auto-normalize if coordinate is 0..1 or 0..1920 / 0..1080
-    const normX = rawX <= 1 && rawX > 0 ? rawX * 100 : (rawX / (isMobileMode && rawX <= 1080 ? 1080 : NATIVE_WIDTH)) * 100;
-    const normY = rawY <= 1 && rawY > 0 ? rawY * 100 : (rawY / (isMobileMode && rawY <= 1920 ? 1920 : NATIVE_HEIGHT)) * 100;
+    const normX = rawX <= 1 && rawX > 0 ? rawX * 100 : (rawX / NATIVE_WIDTH) * 100;
+    const normY = rawY <= 1 && rawY > 0 ? rawY * 100 : (rawY / NATIVE_HEIGHT) * 100;
     return {
       left: `${Math.max(0, Math.min(100, normX))}%`,
       top: `${Math.max(0, Math.min(100, normY))}%`,
@@ -1899,8 +1896,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     width: number;
     height: number;
   }) => {
-    const baseW = isMobileMode ? 1080 : NATIVE_WIDTH;
-    const baseH = isMobileMode ? 1920 : NATIVE_HEIGHT;
+    const baseW = NATIVE_WIDTH;
+    const baseH = NATIVE_HEIGHT;
     const rawX = box.x <= 1 && box.x > 0 ? box.x * 100 : (box.x / baseW) * 100;
     const rawY = box.y <= 1 && box.y > 0 ? box.y * 100 : (box.y / baseH) * 100;
     const rawW = box.width <= 1 && box.width > 0 ? box.width * 100 : (box.width / baseW) * 100;
@@ -3533,10 +3530,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 ? "bg-cyan-700 hover:bg-cyan-600 text-white ring-2 ring-cyan-400 shadow-md shadow-cyan-950"
                 : "bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700"
             }`}
-            title="Enable Qwen AI Agent to guide movements, adjust paths, and backtrack to finish incomplete typing"
+            title="Show local step-spacing and travel-distance checks; no model call is made"
           >
             <Brain className={`w-3.5 h-3.5 mr-1.5 ${qwenGuideEnabled ? "text-cyan-300 animate-pulse" : "text-slate-500"}`} />
-            QWEN AGENT GUIDE ({qwenGuideEnabled ? "ON" : "OFF"})
+            WORKFLOW CHECKS ({qwenGuideEnabled ? "ON" : "OFF"})
           </Button>
 
           {/* High-Visibility Emergency STOP Button */}
@@ -5143,14 +5140,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                   ? "bg-amber-600 hover:bg-amber-500 text-white border-amber-400 animate-pulse"
                   : "bg-indigo-700 hover:bg-indigo-600 text-white border-indigo-400/60"
               }`}
-              title="Qwen AI: Checks sequence for errors, overlaps, and orchestrates smooth movements & delays"
+              title="Review the current workflow against its screenshot; apply AI coordinates only when the review is ready"
             >
               <Sparkles className="w-2.5 h-2.5 text-yellow-300" />
               {isQwenOrchestrating
-                ? "Orchestrating..."
+                ? "Reviewing..."
                 : qwenDetectedErrors.length > 0
-                ? `⚡ Qwen Fix (${qwenDetectedErrors.length})`
-                : "⚡ Qwen Orchestrate"}
+                ? `AI Review & Apply (${qwenDetectedErrors.length})`
+                : "AI Review & Apply"}
             </Button>
 
             {/* Emergency STOP Button */}
@@ -5180,18 +5177,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             >
               <Crosshair className="w-2.5 h-2.5 mr-0.5" />
               {isRecordMode ? "Rec ON" : "Record"}
-            </Button>
-
-            {/* AI Review Steps */}
-            <Button
-              size="sm"
-              onClick={handleTriggerAiReviewSteps}
-              disabled={isAiReviewLoading}
-              className="h-6 px-2 text-[10px] font-bold bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-500 text-white border border-purple-400/50 gap-0.5 shadow-sm"
-              title="AI Review: Audits workflow steps and coordinates using Qwen / AI logic"
-            >
-              <Brain className="w-2.5 h-2.5 text-purple-200" />
-              AI Review
             </Button>
 
             {/* Manual Pack Creator */}

@@ -74,56 +74,23 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
   screenshotUrl,
 }) => {
   const [isSavingToMemory, setIsSavingToMemory] = useState(false);
-  const [isApplyingWithQwen, setIsApplyingWithQwen] = useState(false);
 
-  const handleApply = async () => {
-    if (!reviewResult || !reviewResult.reviewedSteps.length) return;
-
-    setIsApplyingWithQwen(true);
-    try {
-      const res = await fetch("/api/ai/apply-suggestions-with-qwen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          steps: currentSteps,
-          reviewResult,
-          userObjective: reviewResult.summary || "Calibrate workflow sequence",
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success && Array.isArray(data.optimizedSteps)) {
-        onApplyOptimizations?.(data.optimizedSteps);
-        toast.success(
-          `🤖 Qwen Orchestrator: Applied & calibrated ${data.optimizedSteps.length} steps!`,
-          {
-            description: `${data.adjustmentsMade || 0} movement adjustments made. ${data.qwenExplanation || ""}`,
-          }
-        );
-        onClose();
-        return;
-      }
-    } catch (e) {
-      console.warn("Qwen apply suggestion fallback:", e);
-    } finally {
-      setIsApplyingWithQwen(false);
-    }
-
-    // Direct fallback if endpoint unreachable
-    const updated: SequenceStep[] = currentSteps.map((orig, idx) => {
-      const reviewed = reviewResult.reviewedSteps.find((r) => r.stepId === orig.id) || reviewResult.reviewedSteps[idx];
-      if (!reviewed) return orig;
+  const handleApply = () => {
+    if (!reviewResult?.reviewedSteps.length) return;
+    const reviewedById = new Map(reviewResult.reviewedSteps.map((step) => [step.stepId, step]));
+    const updated: SequenceStep[] = currentSteps.map((original) => {
+      const reviewed = reviewedById.get(original.id);
+      if (!reviewed) return original;
       return {
-        ...orig,
-        x: reviewed.recommendedCoords?.x ?? orig.x,
-        y: reviewed.recommendedCoords?.y ?? orig.y,
-        delayMs: reviewed.recommendedDelayMs ?? orig.delayMs ?? 400,
-        confidence: reviewed.confidence ?? orig.confidence ?? 0.95,
+        ...original,
+        x: reviewed.recommendedCoords.x,
+        y: reviewed.recommendedCoords.y,
+        delayMs: reviewed.recommendedDelayMs ?? original.delayMs,
+        confidence: reviewed.confidence,
       };
     });
-
     onApplyOptimizations?.(updated);
-    toast.success(`Applied AI optimizations to ${updated.length} workflow steps!`);
+    toast.success(`Applied the AI review to ${updated.length} workflow steps.`);
     onClose();
   };
 
@@ -342,15 +309,10 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
               <Button
                 size="sm"
                 onClick={handleApply}
-                disabled={isApplyingWithQwen}
                 className="h-8 text-xs font-mono font-bold bg-cyan-700 hover:bg-cyan-600 text-white gap-1.5 shadow-md"
               >
-                {isApplyingWithQwen ? (
-                  <Brain className="w-3.5 h-3.5 text-cyan-300 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-cyan-300" />
-                )}
-                {isApplyingWithQwen ? "Qwen Orchestrating..." : "Apply AI Suggestions"}
+                <CheckCircle2 className="w-3.5 h-3.5 text-cyan-300" />
+                Apply AI Suggestions
               </Button>
             )}
 

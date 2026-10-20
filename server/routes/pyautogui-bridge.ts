@@ -1327,7 +1327,7 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
   pythonScript += `; print(f'ACTION_RESULT_{x}_{y}_{_sw}_{_sh}')`;
 
   try {
-    const py = spawn("python3", ["-c", pythonScript], {
+    const py = spawn(process.env.PYTHON_CMD || (process.platform === "win32" ? "python" : "python3"), [pythonScript], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, DISPLAY: process.env.DISPLAY || ":0" },
     });
@@ -1336,6 +1336,8 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
     let stderr = "";
     py.stdout.on("data", (d) => (stdout += d.toString()));
     py.stderr.on("data", (d) => (stderr += d.toString()));
+    py.stdin.on("error", () => {});
+    py.stdin.end(JSON.stringify(parsed.data));
 
     // Guard so the process `close` and `error` events can never both respond
     // (e.g. python3 missing -> `error` fires, then `close` fires too).
@@ -1343,17 +1345,20 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
     const sendOnce = (payload: any) => {
       if (responded) return;
       responded = true;
-      res.json(payload);
+      res.status(payload.success ? 200 : 409).json(payload);
     };
 
     py.on("close", (code) => {
       const durationMs = Date.now() - startTime;
-      const success = code === 0 || !stderr.includes("Error");
+      let result: any;
+      try { result = JSON.parse(stdout); } catch {}
+      const success = code === 0 && result?.success === true;
+      const message = success ? `Desktop ${action} completed.` : result?.error || stderr || "Desktop action failed before execution.";
 
       addBridgeLog(
         "INTERACTIVE_DEVICE_MIRROR_ACTION",
         success ? "success" : "warning",
-        `[Device Bridge] Dispatched ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)})${text ? ` Text: "${text}"` : ""}${key ? ` Key: "${key}"` : ""}. Duration: ${durationMs}ms.`,
+        `[Device Bridge] ${message} Duration: ${durationMs}ms.`,
         {
           action,
           type: "command",
@@ -1366,50 +1371,25 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
       );
 
       sendOnce({
-        success: true,
+        success,
         action,
-        x: Math.round(x),
-        y: Math.round(y),
-        toX: toX !== undefined ? Math.round(toX) : undefined,
-        toY: toY !== undefined ? Math.round(toY) : undefined,
-        text,
-        key,
-        deviceMode,
+        targetPosition: result?.targetPosition,
+        positionCheck: result?.positionCheck,
+        screenResolution: result?.screenResolution,
         durationMs,
-        executedOnPC: true,
-        message: `Interactive action ${action.toUpperCase()} executed at (${Math.round(x)}, ${Math.round(y)}).`,
+        executedOnPC: success,
+        message,
+        error: success ? undefined : message,
         timestamp: Date.now(),
       });
     });
 
-    py.on("error", () => {
-      // Fallback response for environments without X11 server
-      addBridgeLog(
-        "INTERACTIVE_DEVICE_MIRROR_ACTION_SIMULATED",
-        "success",
-        `[Device Bridge Virtual] Emulated ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)}) across mirror viewport.`,
-        { action }
-      );
-      sendOnce({
-        success: true,
-        action,
-        x: Math.round(x),
-        y: Math.round(y),
-        deviceMode,
-        simulated: true,
-        message: `Virtual interaction executed: ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)}).`,
-        timestamp: Date.now(),
-      });
+    py.on("error", (error) => {
+      addBridgeLog("INTERACTIVE_DEVICE_MIRROR_ACTION", "error", `Desktop action unavailable: ${error.message}`, { action });
+      sendOnce({ success: false, action, error: `Desktop action unavailable: ${error.message}`, timestamp: Date.now() });
     });
   } catch (err: any) {
-    res.json({
-      success: true,
-      action,
-      x: Math.round(x),
-      y: Math.round(y),
-      simulated: true,
-      error: err.message,
-    });
+    res.status(500).json({ success: false, action, error: err instanceof Error ? err.message : String(err) });
   }
 };
 

@@ -1950,6 +1950,12 @@ export default function Dashboard({
                 <LiveScreenHUD
                   onReplaySteps={steps => { void handleRunSequence(steps); }}
                   onExecuteTask={executeHubTask}
+                  onPointerAlignmentFailure={() => {
+                    setVerificationBadge({ status: "failed", message: "Pointer alignment failed; capturing and re-perceiving the current screen." });
+                    void handleTriggerDescribeScreen().then((report) => {
+                      if (report) setVerificationBadge({ status: "failed", message: `Pointer retry blocked. AI recommends: ${report.primarySuggestion}` });
+                    });
+                  }}
                   screenshotUrl={activeCanvasUrl || screenshotUrl}
                   targetDevice={targetDevice}
                   isCapturing={isCapturing}

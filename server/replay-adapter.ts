@@ -9,6 +9,13 @@ export interface ReplayAdapter {
   capture(): Promise<PhoneFrame>;
   execute(step: ReplayStep, frame: PhoneFrame): Promise<void>;
 }
+export class PointerAlignmentError extends Error {
+  readonly code = "POINTER_ALIGNMENT_FAILED";
+  constructor(message: string, readonly positionCheck: unknown) {
+    super(message);
+    this.name = "PointerAlignmentError";
+  }
+}
 export function desktopOperation(payload: unknown): Promise<any> {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -45,6 +52,8 @@ export function desktopOperation(payload: unknown): Promise<any> {
     child.once("close", (code) => {
       try {
         const result = JSON.parse(output);
+        if (result.positionCheck?.aligned === false)
+          throw new PointerAlignmentError(result.error || "Desktop pointer could not align with the target", result.positionCheck);
         if (code !== 0 || result.success !== true || result.simulated)
           throw new Error(result.error || error || "Desktop execution failed");
         finish(undefined, result);

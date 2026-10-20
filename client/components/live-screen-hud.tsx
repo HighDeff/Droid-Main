@@ -241,6 +241,7 @@ interface LiveScreenHUDProps {
   onRunSequence?: () => void;
   onReplaySteps?: (steps: SequenceStep[]) => void;
   onExecuteTask?: (url: string, options: RequestInit) => Promise<Response>;
+  onPointerAlignmentFailure?: (positionCheck: unknown) => void;
 }
 
 export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
@@ -279,6 +280,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   onRunSequence,
   onReplaySteps,
   onExecuteTask,
+  onPointerAlignmentFailure,
 }) => {
   const executeVerifiedTask = (url: string, options: RequestInit) => {
     if (!onExecuteTask) return Promise.reject(new Error("Open Screen Hub to use verified device execution"));
@@ -750,7 +752,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     x: number,
     y: number,
     extra?: { toX?: number; toY?: number; text?: string; key?: string }
-  ) => {
+  ): Promise<boolean> => {
     try {
       playClickPip();
       setClickRipples((prev) => [
@@ -765,18 +767,19 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       });
       setTimeout(() => setHudActiveClickPoint(null), 600);
 
+      let response: Response;
       if (targetDevice === "desktop") {
-        fetch("/api/pyautogui/interactive-action", {
+        response = await fetch("/api/pyautogui/interactive-action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action, x, y, toX: extra?.toX, toY: extra?.toY, frameWidth: NATIVE_WIDTH, frameHeight: NATIVE_HEIGHT, text: extra?.text, key: extra?.key, deviceMode: "desktop" }),
-        }).catch(() => {});
+        });
       } else {
         const normX = Math.max(0, Math.min(1, x / NATIVE_WIDTH));
         const normY = Math.max(0, Math.min(1, y / NATIVE_HEIGHT));
         const normToX = extra?.toX === undefined ? undefined : Math.max(0, Math.min(1, extra.toX / NATIVE_WIDTH));
         const normToY = extra?.toY === undefined ? undefined : Math.max(0, Math.min(1, extra.toY / NATIVE_HEIGHT));
-        fetch("/api/mobile-stream/action", {
+        response = await fetch("/api/mobile-stream/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: {
@@ -784,7 +787,26 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             x: normX, y: normY, toX: normToX, toY: normToY, text: extra?.text, key: extra?.key,
             description: `Live HUD ${action.toUpperCase()} @ (${Math.round(x)}, ${Math.round(y)})`,
           } }),
-        }).catch(() => {});
+        });
+      }
+      const result = await response.json();
+      if (!response.ok || result.success === false) {
+        const message = result.error || result.message || "Device action failed its position check.";
+        setAiCheckStatus({ status: "stuck", message });
+        if (result.positionCheck) onPointerAlignmentFailure?.(result.positionCheck);
+        toast.error(message);
+        return false;
+      }
+      if (result.positionCheck?.recalibrated) {
+        const message = `Pointer realigned by (${result.positionCheck.correction.x}, ${result.positionCheck.correction.y})px before ${action}.`;
+        setAiCheckStatus({ status: "verified", message });
+        logActionExecution({
+          message,
+          targetCoords: result.positionCheck.targetPosition,
+          detectedCoords: result.positionCheck.initialPosition,
+          driftPx: result.positionCheck.initialDriftPx,
+          rawPayload: result.positionCheck,
+        });
       }
 
       // AI Step Auto-Recording during usage
@@ -809,8 +831,11 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           description: `Dispatched to hardware @ (${x}, ${y})`,
         });
       }
+      return true;
     } catch (err: any) {
       console.error("Interactive device bridge error:", err);
+      toast.error(err instanceof Error ? err.message : "Device action failed.");
+      return false;
     }
   };
 
@@ -2184,7 +2209,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     setIsDrawingOverlayOpen(false);
   };
 
-  const handleContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleContainerClick = async (e: React.MouseEvent<HTMLDivElement>) => {
     if (draggingStepId) return;
     const coords = getNativeCoordinates(e);
 
@@ -2206,8 +2231,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       setLiveMouseTrail((prev) => [...prev, { x: coords.x, y: coords.y, time: Date.now(), isClick: true }]);
     }
 
-    // Always dispatch hardware click to active device / PC
-    dispatchInteractiveHardwareAction("click", coords.x, coords.y);
+    const dispatched = await dispatchInteractiveHardwareAction("click", coords.x, coords.y);
+    if (!dispatched) return;
 
     if (isRecordMode) {
       const stepNumber = sequence.length + 1;
@@ -2253,7 +2278,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     }
   };
 
-  const handleContainerDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleContainerDoubleClick = async (e: React.MouseEvent<HTMLDivElement>) => {
     if (draggingStepId) return;
     const coords = getNativeCoordinates(e);
 
@@ -2270,7 +2295,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     });
     setTimeout(() => setHudActiveClickPoint(null), 600);
 
-    dispatchInteractiveHardwareAction("double_click", coords.x, coords.y);
+    const dispatched = await dispatchInteractiveHardwareAction("double_click", coords.x, coords.y);
+    if (!dispatched) return;
 
     if (isRecordMode) {
       const stepNumber = sequence.length + 1;

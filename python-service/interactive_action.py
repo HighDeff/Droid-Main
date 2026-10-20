@@ -17,7 +17,7 @@ def main():
     action = request["action"]
     position_check = None
 
-    if action in ("click", "double_click", "right_click", "drag", "swipe_up", "swipe_down", "swipe_left", "swipe_right"):
+    if action in ("click", "double_click", "right_click", "drag", "type", "press_key", "hotkey", "swipe_up", "swipe_down", "swipe_left", "swipe_right"):
         position_check = align_pointer(gui, x, y)
         if not position_check["aligned"]:
             print(json.dumps({"success": False, "error": "Pointer did not align with the intended position; action was not executed.", "positionCheck": position_check}))
@@ -32,7 +32,16 @@ def main():
     elif action == "drag":
         end_x = max(0, min(width - 1, round(request["toX"] * width / frame_width)))
         end_y = max(0, min(height - 1, round(request["toY"] * height / frame_height)))
+        end_check = align_pointer(gui, end_x, end_y)
+        if not end_check["aligned"]:
+            print(json.dumps({"success": False, "error": "Pointer did not align with the drag endpoint; drag was not executed.", "positionCheck": end_check}))
+            sys.exit(2)
+        start_check = align_pointer(gui, x, y)
+        if not start_check["aligned"]:
+            print(json.dumps({"success": False, "error": "Pointer did not return to the drag start; drag was not executed.", "positionCheck": start_check}))
+            sys.exit(2)
         gui.dragTo(end_x, end_y, duration=0.25)
+        position_check["endpointCheck"] = end_check
     elif action == "type":
         gui.write(request["text"], interval=0.01)
     elif action == "press_key":

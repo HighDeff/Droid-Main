@@ -1,7 +1,7 @@
 import math
 
 
-def align_pointer(gui, x, y, tolerance_px=1, max_attempts=3):
+def align_pointer(gui, x, y, tolerance_px=0, max_attempts=3):
     screen_width, screen_height = gui.size()
     target_x = int(round(x))
     target_y = int(round(y))
@@ -11,6 +11,8 @@ def align_pointer(gui, x, y, tolerance_px=1, max_attempts=3):
     start_x, start_y = gui.position()
     actual_x, actual_y = int(start_x), int(start_y)
     initial_drift_px = math.hypot(target_x - actual_x, target_y - actual_y)
+    initial_offset_x = target_x - actual_x
+    initial_offset_y = target_y - actual_y
     correction_x = 0
     correction_y = 0
     drift_px = initial_drift_px
@@ -32,9 +34,9 @@ def align_pointer(gui, x, y, tolerance_px=1, max_attempts=3):
                 "initialPosition": {"x": int(start_x), "y": int(start_y)},
                 "initialDriftPx": round(initial_drift_px, 2),
                 "driftPx": round(drift_px, 2),
-                "correction": {"x": correction_x, "y": correction_y},
+                "correction": {"x": initial_offset_x, "y": initial_offset_y},
                 "attempts": attempt,
-                "recalibrated": attempt > 1,
+                "recalibrated": initial_drift_px > tolerance_px,
                 "screenResolution": {"width": screen_width, "height": screen_height},
             }
 
@@ -45,8 +47,8 @@ def align_pointer(gui, x, y, tolerance_px=1, max_attempts=3):
         "initialPosition": {"x": int(start_x), "y": int(start_y)},
         "initialDriftPx": round(initial_drift_px, 2),
         "driftPx": round(drift_px, 2),
-        "correction": {"x": correction_x, "y": correction_y},
+        "correction": {"x": initial_offset_x, "y": initial_offset_y},
         "attempts": max_attempts,
-        "recalibrated": True,
+        "recalibrated": initial_drift_px > tolerance_px,
         "screenResolution": {"width": screen_width, "height": screen_height},
     }

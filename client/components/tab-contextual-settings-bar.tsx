@@ -28,6 +28,7 @@ export interface TabSettingItem {
   step?: number;
   unit?: string;
   description?: string;
+  options?: Array<{ label: string; value: string }>;
 }
 
 export interface TabContextualSettingsBarProps {
@@ -179,6 +180,28 @@ export const TabContextualSettingsBar: React.FC<
                         {String(st.value)} {st.unit || ""}
                       </span>
                     </div>
+                  )}
+
+                  {st.type === "select" && (
+                    <select
+                      value={String(st.value)}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setSettings((prev) =>
+                          prev.map((item) =>
+                            item.id === st.id ? { ...item, value } : item,
+                          ),
+                        );
+                        onSettingChange?.(st.id, value);
+                      }}
+                      className="h-7 rounded border border-slate-700 bg-slate-900 px-2 text-[10px] font-mono text-cyan-200"
+                    >
+                      {st.options?.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   )}
                 </div>
               </div>

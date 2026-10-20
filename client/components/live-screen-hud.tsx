@@ -4758,7 +4758,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       )}
 
       {/* Interactive Quick Action Recording Popover */}
-      {recordingClickPos && isRecordMode && (
+      {recordingClickPos && (
         <div
           style={{
             left: `${Math.min(75, Math.max(25, recordingClickPos.pctX))}%`,
@@ -4770,7 +4770,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <div className="flex items-center gap-1.5 text-amber-400 font-bold font-mono text-xs">
               <Plus className="w-3.5 h-3.5" />
-              <span>Record Action Step</span>
+              <span>AI Action at Screen Target</span>
             </div>
             <button
               onClick={() => setRecordingClickPos(null)}
@@ -4781,7 +4781,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           </div>
 
           <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
-            <span>Coordinates:</span>
+            <span>Target coordinates:</span>
             <span className="text-cyan-300 font-bold">
               ({recordingClickPos.x}, {recordingClickPos.y})
             </span>
@@ -4789,10 +4789,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
           <div>
             <label className="text-[10px] font-mono text-slate-300 mb-1 block">
-              Action Type:{" "}
-              <span className="text-amber-400">
-                (Left click = click • Right-click canvas = right_click)
-              </span>
+              Action for this target:
             </label>
             <Select
               value={popoverAction}
@@ -4829,6 +4826,18 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 respects Exact/Variation mode
               </p>
             )}
+          </div>
+
+          <div>
+            <label className="text-[10px] font-mono text-slate-300 mb-1 block">
+              AI instruction or target section:
+            </label>
+            <Input
+              value={popoverName}
+              onChange={(e) => setPopoverName(e.target.value)}
+              placeholder="e.g. Open Settings, type username, go to checkout"
+              className="h-7 text-xs bg-slate-900 border-slate-700 text-slate-200"
+            />
           </div>
 
           {/* Dynamic Payload Inputs for Type / Key */}
@@ -4937,7 +4946,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
               onClick={handleCommitRecordStep}
               className="w-full h-7 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black shadow-md"
             >
-              Add Step #{sequence.length + 1}{" "}
+              Add AI Action #{sequence.length + 1}{" "}
               {popoverAction === "right_click"
                 ? "• Right Click"
                 : popoverAction === "clear_and_type"

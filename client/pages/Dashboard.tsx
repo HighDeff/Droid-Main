@@ -198,6 +198,8 @@ export default function Dashboard({
   const [driftPerStepVariate, setDriftPerStepVariate] = useState(true);
   const [driftRandomInterval, setDriftRandomInterval] = useState(true);
   const [saveScreenshotWithStep, setSaveScreenshotWithStep] = useState(true);
+  const [autoCrossReference, setAutoCrossReference] = useState(true);
+  const [continuousPerception, setContinuousPerception] = useState(true);
   const [collabInstruction, setCollabInstruction] = useState("");
   const [collabChat, setCollabChat] = useState<
     { role: "user" | "ai"; text: string }[]
@@ -789,6 +791,80 @@ export default function Dashboard({
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
+        let liveReview: ScreenPerceptionReport | null = null;
+        if (autoCrossReference) {
+          liveReview = await handleTriggerDescribeScreen();
+          if (liveReview?.feedbackPosition) {
+            setAiThinking({
+              x: liveReview.feedbackPosition.x,
+              y: liveReview.feedbackPosition.y,
+              action: liveReview.primarySuggestion || current.name,
+              confidence: liveReview.confidence,
+              isThinking: true,
+              targetLabel: liveReview.activeWindow,
+            });
+          }
+        }
+        setLiveMouseTrail((prev) => [
+          ...prev.slice(-119),
+          { x: current.x, y: current.y, time: Date.now(), isClick: true },
+        ]);
+        let taskDescription = `Click at ${current.x}, ${current.y}`;
+        if (current.action === "right_click")
+          taskDescription = `Right click at ${current.x}, ${current.y}`;
+        else if (current.action === "clear_and_type")
+          taskDescription = `Clear and type "${current.text || ""}" at ${current.x}, ${current.y}`;
+        else if (current.action === "type_text")
+          taskDescription = `Type "${current.text || ""}" at ${current.x}, ${current.y}`;
+        const baseDrift = movementMode === "exact" ? 0 : driftPx;
+        const variedDrift =
+          driftPerStepVariate && baseDrift > 0
+            ? Math.max(
+                0,
+                baseDrift + Math.floor((Math.random() - 0.5) * baseDrift),
+              )
+            : baseDrift;
+        const driftToSend =
+          movementMode === "live" ? Math.max(variedDrift, 6) : variedDrift;
+        const response = await fetch("/api/execute-task", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            targetDevice,
+            deviceId: selectedAdbDevice,
+            task: {
+              id: current.id,
+              name: current.name,
+              description: taskDescription,
+              action: current.action,
+              x: current.x,
+              y: current.y,
+              targetPosition: { x: current.x, y: current.y },
+              textPayload: current.text || "",
+              keyPayload: current.keyPayload || "enter",
+              delayMs: current.delayMs,
+              driftPx: driftToSend,
+              variationMode: movementMode,
+              perception: liveReview,
+            },
+          }),
+        });
+        const execution = await response.json();
+        if (!response.ok || !execution.success) {
+          throw new Error(execution.error || "Device execution failed");
+        }
+        setSequence((prev) =>
+          prev.map((s) =>
+            s.id === current.id ? { ...s, status: "completed" } : s,
+          ),
+        );
+      } catch {
+        setSequence((prev) =>
+          prev.map((s) =>
+            s.id === current.id ? { ...s, status: "failed" } : s,
+          ),
+        );
+      }
         const data = await replayRequest(`/api/replay/${replayRun.id}`);
         if (!disposed) applyReplay(data.run);
       } catch (error) { if (!disposed) setAutoActFeedback(`Monitor disconnected: ${error instanceof Error ? error.message : error}. Stop is available; reconnect to confirm status.`); }
@@ -922,6 +998,43 @@ export default function Dashboard({
         deviceId: selectedAdbDevice || undefined,
         signal: combinedSignal,
       });
+      const data = await res.json();
+      if (data.success && data.report) {
+        setPerceptionReport(data.report);
+        setExecutionHistory((prev) => [
+          {
+            stepName: `AI #1: ${data.report.activeWindow || "Live screen"}`,
+            status: "perceived",
+            timestamp: Date.now(),
+            thought: `${data.report.primarySuggestion || "Monitoring"} • ${data.report.screenDescription || ""}`,
+          },
+          ...prev,
+        ].slice(0, 30));
+        setVerificationBadge({
+          status: "verified",
+          message: `Perceived: ${data.report.screenDescription.slice(0, 40)}...`,
+        });
+        setTimeout(() => setVerificationBadge(null), 3000);
+        setAiThinking({
+          x: data.report.feedbackPosition.x,
+          y: data.report.feedbackPosition.y,
+          action: data.report.primarySuggestion.slice(0, 40),
+          confidence: data.report.confidence,
+          isThinking: true,
+          targetLabel: data.report.activeWindow,
+        });
+        return data.report;
+      } else {
+        setVerificationBadge({
+          status: "failed",
+          message: "Perceive failed: " + (data.error || "unknown"),
+        });
+        setTimeout(() => setVerificationBadge(null), 3000);
+      }
+    } catch (e) {
+      setVerificationBadge({
+        status: "failed",
+        message: "Perceive error: " + String(e).slice(0, 50),
       setScreenshotUrl(capture.frame.image);
       setAiLiveUrl(capture.frame.image);
       const data = await replayRequest("/api/ai/describe-screen", {
@@ -1347,6 +1460,24 @@ export default function Dashboard({
                   </button>
                 ))}
               </div>
+              <label className="flex items-center gap-2 text-xs font-mono font-bold text-slate-100 hover:text-white cursor-pointer select-none bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={autoCrossReference}
+                  onChange={(e) => setAutoCrossReference(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded text-cyan-500 accent-cyan-500"
+                />
+                <span>Auto cross-reference replay</span>
+              </label>
+              <label className="flex items-center gap-2 text-xs font-mono font-bold text-slate-100 hover:text-white cursor-pointer select-none bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={continuousPerception}
+                  onChange={(e) => setContinuousPerception(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded text-cyan-500 accent-cyan-500"
+                />
+                <span>Continuous AI #1 logs</span>
+              </label>
               <label className="flex items-center gap-2 text-xs font-mono font-bold text-slate-100 hover:text-white cursor-pointer select-none bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
                 <input
                   type="checkbox"
@@ -2322,7 +2453,13 @@ export default function Dashboard({
           </TabsContent>
           <TabsContent value="pack-builder" className="space-y-6">
             <ScreenshotPackBuilderStudio
-              currentLiveScreenshot={aiLiveUrl || screenshotUrl}
+              currentLiveScreenshot={activeCanvasUrl || aiLiveUrl || screenshotUrl}
+              frozenLiveSnapshot={frozenLiveSnapshot}
+              targetDevice={targetDevice}
+              deviceId={selectedAdbDevice}
+              isLive={isLiveDesktopActive}
+              liveMouseTrail={liveMouseTrail}
+              onStatusChange={setWifiStatus}
             />
           </TabsContent>
           <TabsContent value="capture" className="space-y-6">
@@ -2881,7 +3018,185 @@ export default function Dashboard({
               </CardContent>
             </Card>
           </TabsContent>
-          <TabsContent value="collab" className="space-y-4">
+          <TabsContent value="collab" className="space-y-4 pb-8">
+            <TabContextualSettingsBar
+              tabType="collab"
+              title="AI Collaboration Controls"
+              badge={isLiveDesktopActive ? "SCREEN LIVE" : "SCREEN IDLE"}
+              settings={[
+                {
+                  id: "movement_mode",
+                  label: "Movement Mode",
+                  type: "select",
+                  value: movementMode,
+                  options: [
+                    { label: "Exact", value: "exact" },
+                    { label: "Variation", value: "variation" },
+                    { label: "Live", value: "live" },
+                  ],
+                  description: "Choose how AI actions move to targets",
+                },
+                {
+                  id: "drift",
+                  label: "Drift Tolerance",
+                  type: "slider",
+                  value: driftPx,
+                  min: 0,
+                  max: 30,
+                  step: 1,
+                  unit: "px",
+                  description: "Allowed movement variation",
+                },
+                {
+                  id: "anti_loop",
+                  label: "Anti-Loop Protection",
+                  type: "switch",
+                  value: antiLoopEnabled,
+                  description: "Freeze repeated visual states",
+                },
+                {
+                  id: "auto_actor",
+                  label: "Auto-Actor Verification",
+                  type: "switch",
+                  value: autoActEnabled,
+                  description: "Verify the target before dispatch",
+                },
+              ]}
+              onSettingChange={(id, value) => {
+                if (id === "movement_mode") setMovementMode(value as typeof movementMode);
+                if (id === "drift") setDriftPx(value as number);
+                if (id === "anti_loop") setAntiLoopEnabled(value as boolean);
+                if (id === "auto_actor") setAutoActEnabled(value as boolean);
+              }}
+              quickActions={[
+                {
+                  label: isLiveDesktopActive ? "Stop Screen Share" : "Share Screen",
+                  action: () => window.dispatchEvent(new CustomEvent("trigger-hud-share")),
+                  variant: isLiveDesktopActive ? "secondary" : "default",
+                },
+                {
+                  label: isRecordMode ? "Stop Recording" : "Record Actions",
+                  action: () => setIsRecordMode((value) => !value),
+                  variant: "secondary",
+                },
+              ]}
+            />
+
+            <AICanvasScreenManager
+              currentLiveScreenshotUrl={screenshotUrl}
+              screenshots={[
+                { id: "live", name: "Current Live Screen", url: screenshotUrl, sourceType: "live" },
+                ...sequence
+                  .filter((s) => (s as any).referenceScreenshotUrl)
+                  .map((s) => ({
+                    id: `step_${s.id}`,
+                    name: `Step #${s.stepNumber}: ${s.name}`,
+                    url: (s as any).referenceScreenshotUrl,
+                    stepNumber: s.stepNumber,
+                    sourceType: "step" as const,
+                  })),
+                ...liveHistory30.slice(0, 8).map((url, idx) => ({
+                  id: `history_${idx}`,
+                  name: `Frame Bank #${idx + 1}`,
+                  url,
+                  sourceType: "strip" as const,
+                })),
+              ]}
+              activeCanvasSourceId={activeCanvasSourceId}
+              onSelectCanvasSource={(sourceId, url) => {
+                setActiveCanvasSourceId(sourceId);
+                setActiveCanvasUrl(url);
+              }}
+              selectedTab={currentTab}
+              onTabChange={handleTabSwitch}
+              onAddSequenceStep={handleAddSequenceStep}
+              show2ndHudOverlay={show2ndHudOverlay}
+              onToggle2ndHudOverlay={setShow2ndHudOverlay}
+              showLiveIn2ndHud={showLiveIn2ndHud}
+              onToggleLiveIn2ndHud={setShowLiveIn2ndHud}
+              autoActEnabled={autoActEnabled}
+              onToggleAutoAct={setAutoActEnabled}
+              activeSequenceStep={sequence[0]}
+              isRecordMode={isRecordMode}
+              liveMouseTrailCount={liveMouseTrail.length}
+            />
+
+            <Card className="bg-slate-900 border-cyan-500/40 shadow-2xl overflow-hidden">
+              <CardHeader className="p-3 bg-slate-950 border-b border-slate-800 flex flex-row items-center justify-between">
+                <CardTitle className="text-xs font-bold text-slate-100">
+                  <Monitor className="w-4 h-4 inline mr-2 text-cyan-400" />
+                  Live Screen Share & AI Targeting
+                </CardTitle>
+                <span className="text-[10px] font-mono text-cyan-300">
+                  {sequence.length} sequence steps • {targetDevice}
+                </span>
+              </CardHeader>
+              <CardContent className="p-2">
+                <LiveScreenHUD
+                  screenshotUrl={activeCanvasUrl || screenshotUrl}
+                  isCapturing={isCapturing}
+                  aiThinking={aiThinking}
+                  entities={[]}
+                  uiElements={perceptionReport?.elements || []}
+                  perceptionFeedback={perceptionReport ? {
+                    x: perceptionReport.feedbackPosition.x,
+                    y: perceptionReport.feedbackPosition.y,
+                    label: perceptionReport.primarySuggestion,
+                  } : null}
+                  verificationBadge={verificationBadge}
+                  recalibrationNotice={recalibrationNotice}
+                  sequence={sequence}
+                  activeStepId={activeStepId}
+                  isRecordMode={isRecordMode}
+                  onAddStep={handleAddSequenceStep}
+                  onRepositionStep={handleRepositionStep}
+                  onSelectStep={setActiveStepId}
+                  onLiveStreamChange={handleHudLiveChange}
+                  showSecondHudOverlay={show2ndHudOverlay}
+                  onToggleSecondHudOverlay={setShow2ndHudOverlay}
+                  secondHudActivePath={secondHudActivePath}
+                  selectedCanvasTitle={activeCanvasSourceId === "live" ? "Current Live Screen" : `Selected Screenshot (${activeCanvasSourceId})`}
+                  selectedTabName={currentTab}
+                  onMouseTrailChange={setLiveMouseTrail}
+                />
+              </CardContent>
+            </Card>
+
+            <ClickSequenceRegister
+              sequence={sequence}
+              activeStepId={activeStepId}
+              isRunning={isSequenceRunning}
+              isRecordMode={isRecordMode}
+              onToggleRecordMode={() => setIsRecordMode((value) => !value)}
+              onRunSequence={handleRunSequence}
+              onStopSequence={handleStopSequence}
+              onResetSequence={() => setSequence((prev) => prev.map((s) => ({ ...s, status: "pending" })))}
+              onAddStep={() => handleAddSequenceStep({ x: 960, y: 540, action: "click", name: `Step ${sequence.length + 1}` })}
+              onUpdateStep={handleUpdateStep}
+              onDeleteStep={handleDeleteStep}
+              onMoveStep={handleMoveStep}
+              onClearSequence={() => setSequence([])}
+              onSelectStep={setActiveStepId}
+            />
+
+            <DualAICopilotPanel
+              perception={perceptionReport}
+              plannerDecision={plannerDecision}
+              isAutonomousRunning={isAutonomousRunning}
+              isAnalyzing={isPerceiving}
+              userObjective={userObjective}
+              loopIntervalMs={loopIntervalMs}
+              onUserObjectiveChange={setUserObjective}
+              onLoopIntervalChange={setLoopIntervalMs}
+              onTriggerDescribe={handleTriggerDescribeScreen}
+              onTriggerPlanAndAct={handleTriggerPlanAndAct}
+              onToggleAutonomousLoop={handleToggleAutonomousLoop}
+              onSelectElementTarget={(x, y, name) => {
+                handleAddSequenceStep(x, y);
+                setAiThinking({ x, y, action: name, confidence: 0.93, isThinking: true, targetLabel: name });
+              }}
+            />
+
             <Card className="bg-gradient-to-r from-cyan-950/40 via-purple-950/40 to-slate-900 border-cyan-700/50 shadow-xl">
               <CardHeader className="p-4 bg-slate-950/60 border-b border-slate-800 flex flex-row items-center justify-between">
                 <CardTitle className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -2952,9 +3267,10 @@ export default function Dashboard({
                             },
                           ]);
                           handleAddSequenceStep({
-                            x: aiThinking?.x || 960,
-                            y: aiThinking?.y || 540,
+                            x: m ? parseInt(m[1]) : 960,
+                            y: m ? parseInt(m[2]) : 540,
                             name: `Collab: ${collabInstruction.slice(0, 24)}`,
+                            action: "click",
                           } as any);
                           setCollabInstruction("");
                         }}

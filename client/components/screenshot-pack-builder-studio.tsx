@@ -46,9 +46,14 @@ export interface ActionFrame {
   screenshotUrl: string;
   action:
     | "click"
+    | "right_click"
     | "double_click"
     | "type"
+    | "clear_and_type"
+    | "tap"
+    | "swipe"
     | "drag"
+    | "stream_mouse_route"
     | "scroll"
     | "hotkey"
     | "ocr_verify";
@@ -72,11 +77,25 @@ export interface AutomationPack {
 
 interface ScreenshotPackBuilderStudioProps {
   currentLiveScreenshot?: string;
+  frozenLiveSnapshot?: string | null;
+  targetDevice?: "desktop" | "android";
+  deviceId?: string | null;
+  isLive?: boolean;
+  onStatusChange?: (status: string) => void;
+  liveMouseTrail?: Array<{ x: number; y: number; time: number; isClick?: boolean }>;
 }
 
 export const ScreenshotPackBuilderStudio: React.FC<
   ScreenshotPackBuilderStudioProps
-> = ({ currentLiveScreenshot }) => {
+> = ({
+  currentLiveScreenshot,
+  frozenLiveSnapshot,
+  targetDevice: targetDeviceProp = "desktop",
+  deviceId,
+  isLive = false,
+  onStatusChange,
+  liveMouseTrail = [],
+}) => {
   const [packName, setPackName] = useState("User_Authentication_Action_Pack");
   const [targetApp, setTargetApp] = useState("Web Portal / Desktop Client");
   const [frames, setFrames] = useState<ActionFrame[]>([
@@ -85,6 +104,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
       frameIndex: 1,
       title: "Frame 1: Focus Username Input Field",
       screenshotUrl:
+        currentLiveScreenshot ||
         "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=60",
       action: "click",
       targetCoords: { x: 420, y: 360 },
@@ -125,12 +145,50 @@ export const ScreenshotPackBuilderStudio: React.FC<
   const [statusLog, setStatusLog] = useState<string>(
     "Pack Builder ready. Click on image to position AI action targets.",
   );
-  const [targetDevice, setTargetDevice] = useState<"desktop" | "android">(
-    "desktop",
-  );
+  const targetDevice = targetDeviceProp;
   const [isAggressiveTrying, setIsAggressiveTrying] = useState<boolean>(true);
+  const [isRecordingTrail, setIsRecordingTrail] = useState(false);
+  const [repeatCount, setRepeatCount] = useState(1);
+  const [autoGenerateTyping, setAutoGenerateTyping] = useState(true);
+  const [savedMethodCount, setSavedMethodCount] = useState(0);
+  const [savedMethods, setSavedMethods] = useState<AutomationPack[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("pack_builder_methods") || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const [selectedMethodIndex, setSelectedMethodIndex] = useState(0);
   const [improvementExplanation, setImprovementExplanation] =
     useState<string>("");
+
+  React.useEffect(() => {
+    const syncSavedMethods = (event: StorageEvent) => {
+      if (event.key !== "pack_builder_methods") return;
+      try {
+        setSavedMethods(JSON.parse(event.newValue || "[]"));
+      } catch {
+        setSavedMethods([]);
+      }
+    };
+    window.addEventListener("storage", syncSavedMethods);
+    return () => window.removeEventListener("storage", syncSavedMethods);
+  }, []);
+
+  React.useEffect(() => {
+    if (currentLiveScreenshot && selectedFrameId === "f_1") {
+      setFrames((prev) =>
+        prev.map((frame) =>
+          frame.id === "f_1" ? { ...frame, screenshotUrl: currentLiveScreenshot } : frame,
+        ),
+      );
+    }
+  }, [currentLiveScreenshot, selectedFrameId]);
+
+  const updateStatus = (status: string) => {
+    setStatusLog(status);
+    onStatusChange?.(status);
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const selectedFrame =
@@ -214,13 +272,97 @@ export const ScreenshotPackBuilderStudio: React.FC<
   };
 
   const handleAggressiveRetry = async () => {
-    setStatusLog(
-      `⚡ Aggressive Trying Mode: Dispatching with ±10px differential on ${targetDevice.toUpperCase()}...`,
+    updateStatus(
+      `⚡ Retrying ${targetDevice.toUpperCase()} with adaptive AI recovery...`,
     );
-    await handleExecuteOnLiveScreen();
+    try {
+      const response = await fetch("/api/ai/adaptive-retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stepId: selectedFrame.id,
+          actionType: selectedFrame.action,
+          targetName: selectedFrame.title,
+          currentX: selectedFrame.targetCoords.x,
+          currentY: selectedFrame.targetCoords.y,
+          textPayload: selectedFrame.payloadText,
+        }),
+      });
+      const result = await response.json();
+      if (result.newCoordinates) {
+        setFrames((prev) =>
+          prev.map((frame) =>
+            frame.id === selectedFrameId
+              ? { ...frame, targetCoords: result.newCoordinates }
+              : frame,
+          ),
+        );
+      }
+      updateStatus(result.strategyRationale || "AI recovery target recalibrated.");
+      await handleExecuteOnLiveScreen();
+    } catch {
+      updateStatus("AI recovery failed; action was not simulated.");
+    }
   };
 
   // Snap Live Screenshot as a new Frame
+  const handleSaveMethod = () => {
+    const method: AutomationPack = {
+      packName,
+      version: "2.0.0",
+      author: "Master AI Operator",
+      targetApp,
+      frames,
+      createdAt: new Date().toISOString(),
+    };
+    const methods = [method, ...savedMethods].slice(0, 20);
+    localStorage.setItem("pack_builder_methods", JSON.stringify(methods));
+    setSavedMethods(methods);
+    setSavedMethodCount(methods.length);
+    setSelectedMethodIndex(0);
+    updateStatus(`Saved ${packName} as reenactment method #${methods.length}.`);
+  };
+
+  const handleLoadMethod = (runAfterLoad = false) => {
+    const method = savedMethods[selectedMethodIndex];
+    if (!method) {
+      updateStatus("No saved pack is selected.");
+      return;
+    }
+    setPackName(method.packName);
+    setTargetApp(method.targetApp);
+    setFrames(method.frames);
+    setSelectedFrameId(method.frames[0]?.id || "");
+    updateStatus(`Loaded ${method.packName}. AI will use live review before reenactment.`);
+    if (runAfterLoad) {
+      window.setTimeout(() => handlePlayDemonstration(method.frames), 0);
+    }
+  };
+
+  const handleUseMouseTrail = () => {
+    if (liveMouseTrail.length < 2) {
+      updateStatus("Record at least two mouse points before adding a trail step.");
+      return;
+    }
+    const first = liveMouseTrail[0];
+    const last = liveMouseTrail[liveMouseTrail.length - 1];
+    const newFrame: ActionFrame = {
+      id: `trail_${Date.now()}`,
+      frameIndex: frames.length + 1,
+      title: `Frame ${frames.length + 1}: Recorded Mouse Route`,
+      screenshotUrl: currentLiveScreenshot || "",
+      action: "stream_mouse_route",
+      targetCoords: { x: first.x, y: first.y },
+      dragEndCoords: { x: last.x, y: last.y },
+      expectedOutcome: "Mouse route reaches the target section",
+      verificationGate: "Live screen matches the route destination",
+      dwellMs: 300,
+    };
+    setFrames((prev) => [...prev, newFrame]);
+    setSelectedFrameId(newFrame.id);
+    updateStatus(`Added ${liveMouseTrail.length}-point mouse trail as a replay step.`);
+  };
+
   const handleSnapLiveScreen = () => {
     if (!currentLiveScreenshot) {
       setStatusLog("⚠️ No live screenshot stream available to snap.");
@@ -244,6 +386,21 @@ export const ScreenshotPackBuilderStudio: React.FC<
     );
   };
 
+  const handleCanvasContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = Math.round(((e.clientX - rect.left) / rect.width) * 1920);
+    const y = Math.round(((e.clientY - rect.top) / rect.height) * 1080);
+    setFrames((prev) =>
+      prev.map((frame) =>
+        frame.id === selectedFrameId
+          ? { ...frame, targetCoords: { x, y }, action: "right_click" }
+          : frame,
+      ),
+    );
+    updateStatus(`Right-click action target set at (${x}, ${y}).`);
+  };
+
   // Re-pin target on click
   const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -255,39 +412,155 @@ export const ScreenshotPackBuilderStudio: React.FC<
         f.id === selectedFrameId ? { ...f, targetCoords: { x, y } } : f,
       ),
     );
-    setStatusLog(
+    updateStatus(
       `Updated Frame #${selectedFrame.frameIndex} AI action target to (${x}, ${y})`,
     );
   };
 
-  // Play Step-by-Step Demonstration
-  const handlePlayDemonstration = () => {
+  const captureLiveFrame = async () => {
+    const endpoint = targetDevice === "android"
+      ? `/api/adb/capture?deviceId=${encodeURIComponent(deviceId || "")}`
+      : "/api/capture-screen";
+    const response = await fetch(endpoint);
+    const result = await response.json();
+    if (!response.ok || !result.success || !result.imageData) {
+      throw new Error(result.error || "Live device capture unavailable");
+    }
+    return result.imageData as string;
+  };
+
+  const reviewLiveFrame = async (frame: ActionFrame, imageData: string) => {
+    updateStatus(`AI reviewing the live screen before ${frame.action}...`);
+    const response = await fetch("/api/ai/describe-screen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageData }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || "AI screen review failed");
+    }
+    return result.report;
+  };
+
+  const verifyLiveStep = async (frame: ActionFrame, imageData: string) => {
+    const response = await fetch("/api/ai/verify-step", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        imageData,
+        userObjective: frame.expectedOutcome,
+        step: {
+          id: frame.id,
+          name: frame.title,
+          action: frame.action,
+          x: frame.targetCoords.x,
+          y: frame.targetCoords.y,
+          text: frame.payloadText,
+        },
+      }),
+    });
+    const result = await response.json();
+    return result.success ? result.verification : null;
+  };
+
+  // Replay each pack frame as a real sequential device action.
+  const handlePlayDemonstration = async (framesToRun = frames) => {
+    if (isPlayingDemonstration) return;
     setIsPlayingDemonstration(true);
     setActivePlayFrame(0);
-    setStatusLog("⚡ Demonstrating recorded AI Action Pack execution...");
-
-    let idx = 0;
-    const timer = setInterval(() => {
-      if (idx >= frames.length) {
-        clearInterval(timer);
-        setIsPlayingDemonstration(false);
-        setStatusLog(
-          `✓ Finished full demonstration of "${packName}" (${frames.length} frames executed).`,
+    updateStatus(`Executing "${packName}" on ${targetDevice}...`);
+    try {
+      for (let repeat = 0; repeat < repeatCount; repeat += 1) {
+        updateStatus(`Starting replay ${repeat + 1}/${repeatCount}...`);
+        for (let idx = 0; idx < framesToRun.length; idx += 1) {
+          const frame = framesToRun[idx];
+        setSelectedFrameId(frame.id);
+        setActivePlayFrame(idx + 1);
+        const liveFrame = await captureLiveFrame();
+        setFrames((prev) =>
+          prev.map((item) => item.id === frame.id ? { ...item, screenshotUrl: liveFrame } : item),
         );
-        return;
+        const perception = await reviewLiveFrame(frame, liveFrame);
+        let textPayload = frame.payloadText;
+        if ((frame.action === "type" || frame.action === "clear_and_type") && !textPayload && autoGenerateTyping) {
+          updateStatus(`AI inferring the correct input for ${frame.title}...`);
+          const planResponse = await fetch("/api/ai/plan-and-act", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              perceptionReport: perception,
+              userObjective: frame.expectedOutcome,
+              executeImmediately: false,
+            }),
+          });
+          const plan = await planResponse.json();
+          textPayload = plan.decision?.nextAction?.textPayload || plan.decision?.nextAction?.text || "";
+          if (!textPayload) throw new Error(`AI could not infer text for ${frame.title}`);
+        }
+        updateStatus(`Executing ${idx + 1}/${framesToRun.length}: ${frame.title}`);
+        const response = await fetch("/api/execute-task", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            targetDevice,
+            deviceId,
+            task: {
+              id: `pack_${Date.now()}_${idx}`,
+              name: frame.title,
+              description: frame.expectedOutcome,
+              action: frame.action === "type" ? "type_text" : frame.action === "tap" ? "click" : frame.action,
+              targetPosition: frame.targetCoords,
+              dragEndPosition: frame.dragEndCoords,
+              textPayload,
+              delayMs: frame.dwellMs,
+              perception,
+            },
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || `Frame ${idx + 1} failed`);
+        }
+        const afterFrame = await captureLiveFrame();
+        const verification = await verifyLiveStep(frame, afterFrame);
+        if (verification && ["missed", "obstructed", "failed"].includes(verification.status)) {
+          const retry = await fetch("/api/ai/adaptive-retry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              stepId: frame.id,
+              actionType: frame.action,
+              targetName: frame.title,
+              currentX: frame.targetCoords.x,
+              currentY: frame.targetCoords.y,
+              perception,
+              textPayload,
+            }),
+          });
+          const retryResult = await retry.json();
+          if (retryResult.newCoordinates) {
+            setFrames((prev) => prev.map((item) => item.id === frame.id
+              ? { ...item, targetCoords: retryResult.newCoordinates }
+              : item));
+          }
+          updateStatus(`AI found a live mismatch and prepared an alternate route for ${frame.title}.`);
+        }
+        }
       }
-      const fr = frames[idx];
-      setSelectedFrameId(fr.id);
-      setActivePlayFrame(idx + 1);
-      setStatusLog(
-        `[Demonstration Frame ${idx + 1}/${frames.length}] AI executing ${fr.action.toUpperCase()} at (${fr.targetCoords.x}, ${fr.targetCoords.y}). Expected: ${fr.expectedOutcome}`,
-      );
-      idx++;
-    }, 1300);
+      handleSaveMethod();
+      updateStatus(`Completed ${framesToRun.length} real actions x${repeatCount} on ${targetDevice}. Method saved for reenactment.`);
+    } catch (error) {
+      updateStatus(`Pack stopped: ${error instanceof Error ? error.message : "device action failed"}`);
+    } finally {
+      setIsPlayingDemonstration(false);
+    }
   };
 
   // Dispatch Action on Live Screen via PyAutoGUI
   const handleExecuteOnLiveScreen = async () => {
+    updateStatus(
+      `⚡ Dispatching "${selectedFrame.action.toUpperCase()}" at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}) to ${targetDevice}...`,
     if (selectedFrame.action === "ocr_verify") {
       const expected = (selectedFrame.payloadText || "").trim();
       setStatusLog(
@@ -331,30 +604,31 @@ export const ScreenshotPackBuilderStudio: React.FC<
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           targetDevice,
+          deviceId,
           aggressiveRetry: isAggressiveTrying,
           frameSize: { width: 1920, height: 1080 },
           task: {
             id: `pack_act_${Date.now()}`,
             name: selectedFrame.title,
             description: selectedFrame.expectedOutcome,
-            action: selectedFrame.action,
+            action: selectedFrame.action === "type" ? "type_text" : selectedFrame.action,
             targetPosition: selectedFrame.targetCoords,
+            dragEndPosition: selectedFrame.dragEndCoords,
             textPayload: selectedFrame.payloadText,
             frameSize: { width: 1920, height: 1080 },
           },
         }),
       });
       const data = await res.json();
-      if (data.success) {
-        setStatusLog(
-          `✓ Action executed successfully on live OS at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}).`,
-        );
-      } else {
-        setStatusLog(`✓ Dispatched action opcode to motor agent.`);
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Device rejected the action");
       }
+      updateStatus(
+        `✓ Action executed on ${targetDevice} at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}).`,
+      );
     } catch (err) {
-      setStatusLog(
-        `✓ Simulated motor execution at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}).`,
+      updateStatus(
+        `Device execution failed: ${err instanceof Error ? err.message : "unknown error"}`,
       );
     }
   };
@@ -443,12 +717,55 @@ export const ScreenshotPackBuilderStudio: React.FC<
             variant: "secondary",
           },
           {
+            label: isRecordingTrail ? "Stop Mouse Trail" : "Record Mouse Trail",
+            action: () => setIsRecordingTrail((value) => !value),
+            variant: isRecordingTrail ? "default" : "secondary",
+          },
+          {
+            label: "Add Trail Step",
+            action: handleUseMouseTrail,
+            variant: "secondary",
+          },
+          {
+            label: "Save Method",
+            action: handleSaveMethod,
+            variant: "secondary",
+          },
+          {
             label: "Export Pack JSON",
             action: handleExportPack,
             variant: "secondary",
           },
         ]}
       />
+
+      <Card className="bg-slate-900 border-cyan-800/60 shadow-xl">
+        <CardContent className="p-3 flex flex-wrap items-center gap-2 font-mono">
+          <span className="text-xs font-bold text-cyan-300">Saved Reenactment Packs</span>
+          <select
+            value={savedMethods.length ? selectedMethodIndex : ""}
+            onChange={(e) => setSelectedMethodIndex(Number(e.target.value))}
+            className="h-8 min-w-56 rounded border border-slate-700 bg-slate-950 px-2 text-xs text-slate-200"
+          >
+            {savedMethods.length === 0 ? (
+              <option value="">No saved packs yet</option>
+            ) : (
+              savedMethods.map((method, index) => (
+                <option key={`${method.packName}-${method.createdAt}`} value={index}>
+                  {method.packName} • {method.frames.length} steps
+                </option>
+              ))
+            )}
+          </select>
+          <Button size="sm" onClick={() => handleLoadMethod(false)} disabled={!savedMethods.length} className="h-8 text-xs bg-slate-800">
+            <FolderOpen className="w-3.5 h-3.5 mr-1" /> Load Pack
+          </Button>
+          <Button size="sm" onClick={() => handleLoadMethod(true)} disabled={!savedMethods.length || isPlayingDemonstration} className="h-8 text-xs bg-cyan-700 hover:bg-cyan-600">
+            <Play className="w-3.5 h-3.5 mr-1" /> Load & Run with AI
+          </Button>
+          <span className="text-[10px] text-slate-400">{savedMethods.length} saved • {savedMethodCount ? "updated this session" : "local method library"}</span>
+        </CardContent>
+      </Card>
 
       {/* Top Pack Metadata Card */}
       <Card className="bg-slate-900 border-slate-800 shadow-xl">
@@ -570,6 +887,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
             <CardContent className="p-4">
               <div
                 onClick={handleCanvasClick}
+                onContextMenu={handleCanvasContextMenu}
                 className="relative w-full aspect-video bg-slate-950 rounded-xl border border-slate-800 overflow-hidden cursor-crosshair group"
               >
                 <img
@@ -611,6 +929,30 @@ export const ScreenshotPackBuilderStudio: React.FC<
             </CardHeader>
 
             <CardContent className="p-4 space-y-3 font-mono text-xs">
+              <div className="flex items-center justify-between rounded border border-slate-800 bg-slate-950 p-2">
+                <span className="text-[10px] text-slate-300">Replay repeats</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={repeatCount}
+                  onChange={(e) => setRepeatCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+                  className="h-7 w-16 text-xs bg-slate-900 border-slate-700"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-[10px] text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={autoGenerateTyping}
+                  onChange={(e) => setAutoGenerateTyping(e.target.checked)}
+                />
+                Let AI infer missing typing text from the live step objective
+              </label>
+              {isRecordingTrail && (
+                <div className="rounded border border-amber-700/60 bg-amber-950/30 p-2 text-[10px] text-amber-200">
+                  Recording {liveMouseTrail.length} live mouse points. Use Add Trail Step when finished.
+                </div>
+              )}
               <div className="space-y-1">
                 <label className="text-[10px] text-slate-300 font-bold">
                   Demonstrated Action:
@@ -619,9 +961,13 @@ export const ScreenshotPackBuilderStudio: React.FC<
                   {(
                     [
                       "click",
+                      "right_click",
                       "double_click",
+                      "tap",
                       "type",
+                      "swipe",
                       "drag",
+                      "stream_mouse_route",
                       "hotkey",
                       "ocr_verify",
                     ] as const

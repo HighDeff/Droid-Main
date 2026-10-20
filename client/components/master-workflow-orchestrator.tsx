@@ -70,6 +70,9 @@ export interface ChronologicalLogEntry {
 interface MasterWorkflowOrchestratorProps {
   onStageChange?: (stageId: number, status: string) => void;
   activeModelName?: string;
+  run?: any;
+  onRun?: () => void;
+  onControl?: (command: "pause" | "resume" | "cancel") => Promise<void>;
 }
 
 export const MasterWorkflowOrchestrator: React.FC<
@@ -83,6 +86,7 @@ export const MasterWorkflowOrchestrator: React.FC<
   const [maxDurationSec, setMaxDurationSec] = useState(1800);
 
   // Non-repetition failed routes ledger
+  const [nonRepetitionEnabled, setNonRepetitionEnabled] = useState(true);
   const [failedMethodsLedger, setFailedMethodsLedger] = useState<string[]>([]);
 
   // 7-Stage Pipeline
@@ -222,17 +226,26 @@ export const MasterWorkflowOrchestrator: React.FC<
               setIterationCount((i) => i + 1);
             }
 
-            // Log event
-            const newLog: ChronologicalLogEntry = {
-              id: `l_${Date.now()}`,
-              timestamp: new Date().toLocaleTimeString(),
-              stageNumber: current.id,
-              action: current.name,
-              modelUsed: activeModelName,
-              result: "passed",
-              notes: `Stage verified with ${(current.aiVerificationConfidence * 100).toFixed(0)}% AI confidence.`,
-            };
-            setLogs((l) => [newLog, ...l.slice(0, 20)]);
+            // Log event outside updater
+            setTimeout(() => {
+              const newLog: ChronologicalLogEntry = {
+                id: `l_${Date.now()}`,
+                timestamp: new Date().toLocaleTimeString(),
+                stageNumber: current.id,
+                action: current.name,
+                modelUsed: activeModelName,
+                result: current.status === "failed" ? "rerouted" : "passed",
+                notes: `Stage verified with ${(current.aiVerificationConfidence * 100).toFixed(0)}% AI confidence.`,
+              };
+              setLogs((l) => [newLog, ...l.slice(0, 20)]);
+
+              if (nonRepetitionEnabled && current.status === "failed") {
+                const ledgerKey = `${current.nonRepetitionKey || current.id}@${new Date().toISOString()}`;
+                setFailedMethodsLedger((l) =>
+                  l[0] === ledgerKey ? l : [ledgerKey, ...l].slice(0, 50),
+                );
+              }
+            }, 0);
 
             return prevStages.map((s) =>
               s.id === current.id
@@ -246,7 +259,7 @@ export const MasterWorkflowOrchestrator: React.FC<
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [isRunning, currentStageIndex, activeModelName]);
+  }, [isRunning, currentStageIndex, activeModelName, nonRepetitionEnabled]);
 
   const handleToggleOrchestrator = () => {
     setIsRunning(!isRunning);

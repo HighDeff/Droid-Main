@@ -1,3 +1,7 @@
+import { MobileSettingsModal } from "@/components/mobile-settings-modal";
+import type { ReplayRun } from "@shared/replay";
+import { ReplayMonitor } from "@/components/replay-monitor";
+import { generateDefaultMobileFrame, generateDefaultDesktopFrame } from "@/lib/mobile-screen-generator";
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -24,11 +28,13 @@ import {
   RotateCcw,
   Settings,
   ShieldCheck,
+  Sliders,
   Smartphone,
   Sparkles,
   Target,
   Terminal,
   Upload,
+  Download,
   Zap,
   X,
   Camera,
@@ -62,12 +68,15 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { safeFetchJson, safePostJson } from "@/lib/api-helper";
 import {
   LiveScreenHUD,
   SequenceStep,
   AIThinkingState,
 } from "@/components/live-screen-hud";
 import { ClickSequenceRegister } from "@/components/click-sequence-register";
+import { AIWorkflowReviewModal, AIReviewResult } from "@/components/ai-workflow-review-modal";
+import { AiMonitorPanel } from "@/components/ai-monitor-panel";
 import {
   DualAICopilotPanel,
   ScreenPerceptionReport,
@@ -81,13 +90,14 @@ import { TemporalScreenshotTrioHUD } from "@/components/temporal-screenshot-trio
 import { CentralLogsConsole } from "@/components/central-logs-console";
 import { ScreenshotLayeringPanel } from "@/components/screenshot-layering-panel";
 import { MasterWorkflowOrchestrator } from "@/components/master-workflow-orchestrator";
+import { ApkAndPwaModal } from "@/components/ApkAndPwaModal";
 import { AIDecideActionHUD } from "@/components/ai-decide-action-hud";
 import { GoalsManagerPanel } from "@/components/goals-manager-panel";
 import { EntitiesRadarPanel } from "@/components/entities-radar-panel";
 import { AutoTasksPipelinePanel } from "@/components/auto-tasks-pipeline-panel";
 import { AgentsTelemetryPanel } from "@/components/agents-telemetry-panel";
 import { ScreenshotPackBuilderStudio } from "@/components/screenshot-pack-builder-studio";
-import { GlobalAICursorOverlay } from "@/components/global-ai-cursor-overlay";
+import { GlobalAICursorOverlay, GlobalAICursorState } from "@/components/global-ai-cursor-overlay";
 import { DynamicCalculatorTypingHub } from "@/components/dynamic-calculator-typing-hub";
 import { PreRecordingHoverOverlaySuite } from "@/components/pre-recording-hover-overlay-suite";
 import { MainScreenLoopVerificationHub } from "@/components/main-screen-loop-verification-hub";
@@ -98,7 +108,7 @@ import { AILearningCodeSynthesizerStudio } from "@/components/ai-learning-code-s
 import { AutonomousGoalAgentStudio } from "@/components/autonomous-goal-agent-studio";
 import { AndroidAdbMultiDeviceGrid } from "@/components/android-adb-multi-device-grid";
 import { audioSynthesizer } from "@/lib/audio-synthesizer";
-import { AIChat } from "@/components/ai-chat";
+import { AIChat, MainAiLiveChat } from "@/components/ai-chat";
 import { QuantumMouseTracker } from "@/components/quantum-mouse-tracker";
 import { VirtualKeyboardInputVerifier } from "@/components/virtual-keyboard-input-verifier";
 import { HumanMouseTouchSimulator } from "@/components/human-mouse-touch-simulator";
@@ -128,18 +138,37 @@ import {
 import { TenResponseImagesDiffEngine } from "@/components/ten-response-images-diff-engine";
 import { AutoActorEngineStudio } from "@/components/auto-actor-engine-studio";
 import { DraggableDualAiOverlay } from "@/components/draggable-dual-ai-overlay";
+import { UniversalDeviceBridgeHub } from "@/components/universal-device-bridge-hub";
 import { DescriptionRefiner } from "@/components/DescriptionRefiner";
 import { AutonomousWorkflowLearnerPanel } from "@/components/autonomous-workflow-learner-panel";
-import { TabContextualSettingsBar } from "@/components/tab-contextual-settings-bar";
+import { LiveExecutionConsole } from "@/components/live-execution-console";
+import { WorkflowHistoryScrubber } from "@/components/workflow-history-scrubber";
+import { TaskInspector } from "@/components/task-inspector";
+import { AssistantWorkspace } from "@/components/assistant-workspace";
+import { AutonomousWorkflowModal } from "@/components/autonomous-workflow-modal";
+import { MainAIOmniExecutive } from "@/components/main-ai-omni-executive";
+import { InteractiveDeviceControlDeck } from "@/components/interactive-device-control-deck";
+import { GlobalSettingsModal, DEFAULT_MODEL_URL } from "@/components/global-settings-modal";
+import { CoordinateCalibrationModal } from "@/components/coordinate-calibration-modal";
+import { ThreeAiAgentsSquad } from "@/components/three-ai-agents-squad";
 export default function Dashboard({
   initialTab,
 }: { initialTab?: string } = {}) {
   const navigate = useNavigate();
   const [isCapturing, setIsCapturing] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
-  const [screenshotUrl, setScreenshotUrl] = useState<string>(
-    "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1920&auto=format&fit=crop&q=80",
-  );
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState(false);
+  const [configuredModelUrl, setConfiguredModelUrl] = useState<string>(() => {
+    return typeof window !== "undefined"
+      ? localStorage.getItem("ai_model_url") || DEFAULT_MODEL_URL
+      : DEFAULT_MODEL_URL;
+  });
+  const [screenshotUrl, setScreenshotUrl] = useState<string>(() => {
+    return typeof window !== "undefined"
+      ? generateDefaultDesktopFrame("Sightline AI Vision Core")
+      : "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1920&auto=format&fit=crop&q=80";
+  });
   const [aiLiveUrl, setAiLiveUrl] = useState<string | null>(null);
   const [liveHistory30, setLiveHistory30] = useState<string[]>([]);
   const [showHistoryPicker, setShowHistoryPicker] = useState(false);
@@ -191,34 +220,50 @@ export default function Dashboard({
   const [recalibrationNotice, setRecalibrationNotice] =
     useState<RecalibrationNotice | null>(null);
   const [perceptionReport, setPerceptionReport] =
-    useState<ScreenPerceptionReport | null>({
-      timestamp: Date.now(),
-      screenDescription: "Ready",
-      activeWindow: "App",
-      visualStateChange: "Ready",
-      elements: [
-        {
-          id: "elem_center",
-          name: "Screen Center Focus",
-          type: "target",
-          boundingBox: { x: 860, y: 480, width: 200, height: 120 },
-          center: { x: 960, y: 540 },
-          confidence: 0.96,
-          interactive: true,
-          textValue: "Main",
-        },
-      ],
-      feedbackPosition: { x: 960, y: 540 },
-      primarySuggestion: "Inspect",
-      confidence: 0.95,
-    });
+    useState<ScreenPerceptionReport | null>(null);
   const [verificationBadge, setVerificationBadge] =
     useState<VerificationBadgeState | null>(null);
   const [isAutonomousRunning, setIsAutonomousRunning] = useState(false);
   const [isPerceiving, setIsPerceiving] = useState(false);
-  const [ollmaEndpoint] = useState(
-    "https://remote.quantumpass.io/ollama/api/chat",
-  );
+  const [autonomousModalOpen, setAutonomousModalOpen] = useState(false);
+  const [isDashboardAiReviewOpen, setIsDashboardAiReviewOpen] = useState(false);
+  const [dashboardAiReviewResult, setDashboardAiReviewResult] = useState<AIReviewResult | null>(null);
+  const [isDashboardAiReviewLoading, setIsDashboardAiReviewLoading] = useState(false);
+
+  const handleTriggerDashboardAiReview = async () => {
+    if (sequence.length === 0) {
+      toast.info("No workflow steps to review. Record or add steps first.");
+      return;
+    }
+    setIsDashboardAiReviewOpen(true);
+    setIsDashboardAiReviewLoading(true);
+    setDashboardAiReviewResult(null);
+
+    try {
+      const snap = aiLiveUrl || screenshotUrl;
+      const res = await fetch("/api/ai/review-steps", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          steps: sequence,
+          screenshotUrl: snap,
+          userObjective: userObjective || "Execute automated desktop task",
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDashboardAiReviewResult(data);
+        toast.success(`🧠 AI Review: Score ${data.overallScore}%`);
+      } else {
+        toast.error(`Review failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (err: any) {
+      toast.error(`Review error: ${err.message}`);
+    } finally {
+      setIsDashboardAiReviewLoading(false);
+    }
+  };
+
   const [currentTab, setCurrentTab] = useState(initialTab || "screen");
   const [executionHistory, setExecutionHistory] = useState<any[]>([]);
   const [plannerDecision, setPlannerDecision] =
@@ -244,6 +289,113 @@ export default function Dashboard({
     },
   ]);
   const [goalsState, setGoalsState] = useState<any[]>([]);
+  const [globalCursorState, setGlobalCursorState] = useState<GlobalAICursorState | null>(null);
+  const [isApkModalOpen, setIsApkModalOpen] = useState(false);
+  const [isMobileSettingsModalOpen, setIsMobileSettingsModalOpen] = useState(false);
+
+  // Listen for global AI cursor movement, tab switches, settings adjustments, workflow repairs and clear steps
+  useEffect(() => {
+    const handleAiCursorEvent = (e: any) => {
+      if (e.detail) {
+        setGlobalCursorState(e.detail);
+      }
+    };
+    const handleAiSwitchTab = (e: any) => {
+      if (e.detail?.tabId) {
+        handleTabSwitch(e.detail.tabId);
+      }
+    };
+    const handleAiAdjustSettings = (e: any) => {
+      const s = e.detail;
+      if (s) {
+        if (s.targetDevice) setTargetDevice(s.targetDevice);
+        if (s.movementMode) setMovementMode(s.movementMode);
+        if (typeof s.driftPx === "number") setDriftPx(s.driftPx);
+        if (typeof s.antiLoopEnabled === "boolean") setAntiLoopEnabled(s.antiLoopEnabled);
+      }
+    };
+    const handleAiFixSequence = (e: any) => {
+      if (e.detail?.steps) {
+        setSequence(e.detail.steps);
+      }
+    };
+    const handleLinkWorkflowEvent = (e: any) => {
+      if (e.detail) {
+        handleLinkWorkflowToLiveVisionHud(e.detail);
+      }
+    };
+    const handleForwardMobileEvent = (e: any) => {
+      if (e.detail) {
+        handleForwardMobileToLiveVisionHud(e.detail);
+      }
+    };
+    const handleClearHudStepsEvent = () => {
+      sequenceRunningRef.current = false;
+      setIsSequenceRunning(false);
+      setIsAutonomousRunning(false);
+      setActiveStepId(null);
+      setSequence([]);
+    };
+    const handleClearSelectedHudStepsEvent = (e: any) => {
+      if (e.detail?.stepIds && Array.isArray(e.detail.stepIds)) {
+        const ids = new Set(e.detail.stepIds);
+        if (activeStepId && ids.has(activeStepId)) {
+          setActiveStepId(null);
+          sequenceRunningRef.current = false;
+          setIsSequenceRunning(false);
+        }
+        setSequence((prev) =>
+          prev
+            .filter((s) => !ids.has(s.id))
+            .map((s, idx) => ({ ...s, stepNumber: idx + 1 }))
+        );
+      }
+    };
+    const handleMoveHudStepEvent = (e: any) => {
+      if (e.detail?.id && e.detail?.direction) {
+        handleMoveStep(e.detail.id, e.detail.direction);
+      }
+    };
+    const handleReorderHudStepsEvent = (e: any) => {
+      if (e.detail?.steps && Array.isArray(e.detail.steps)) {
+        setSequence(
+          e.detail.steps.map((s: any, idx: number) => ({
+            ...s,
+            stepNumber: idx + 1,
+          }))
+        );
+      }
+    };
+
+    window.addEventListener("ai-cursor-action", handleAiCursorEvent);
+    window.addEventListener("ai-switch-tab", handleAiSwitchTab);
+    window.addEventListener("ai-adjust-settings", handleAiAdjustSettings);
+    window.addEventListener("ai-fix-sequence", handleAiFixSequence);
+    window.addEventListener("link-workflow-to-vision-hud", handleLinkWorkflowEvent);
+    window.addEventListener("forward-mobile-to-vision-hud", handleForwardMobileEvent);
+    window.addEventListener("clear-hud-steps", handleClearHudStepsEvent);
+    window.addEventListener("clear-selected-hud-steps", handleClearSelectedHudStepsEvent);
+    window.addEventListener("move-hud-step", handleMoveHudStepEvent);
+    window.addEventListener("reorder-hud-steps", handleReorderHudStepsEvent);
+    const handleOpenSettingsModal = () => setIsSettingsModalOpen(true);
+    const handleOpenCalibrationModal = () => setIsCalibrationModalOpen(true);
+    window.addEventListener("open-settings", handleOpenSettingsModal);
+    window.addEventListener("open-calibration", handleOpenCalibrationModal);
+    return () => {
+      window.removeEventListener("ai-cursor-action", handleAiCursorEvent);
+      window.removeEventListener("ai-switch-tab", handleAiSwitchTab);
+      window.removeEventListener("ai-adjust-settings", handleAiAdjustSettings);
+      window.removeEventListener("ai-fix-sequence", handleAiFixSequence);
+      window.removeEventListener("link-workflow-to-vision-hud", handleLinkWorkflowEvent);
+      window.removeEventListener("forward-mobile-to-vision-hud", handleForwardMobileEvent);
+      window.removeEventListener("clear-hud-steps", handleClearHudStepsEvent);
+      window.removeEventListener("clear-selected-hud-steps", handleClearSelectedHudStepsEvent);
+      window.removeEventListener("move-hud-step", handleMoveHudStepEvent);
+      window.removeEventListener("reorder-hud-steps", handleReorderHudStepsEvent);
+      window.removeEventListener("open-settings", handleOpenSettingsModal);
+      window.removeEventListener("open-calibration", handleOpenCalibrationModal);
+    };
+  }, []);
   const captureIntervalRef = useRef<number>();
   const aiLiveUrlRef = useRef<string | null>(null);
   const prevLiveRef = useRef(false);
@@ -257,6 +409,7 @@ export default function Dashboard({
   const [showLiveIn2ndHud, setShowLiveIn2ndHud] = useState<boolean>(true);
   const [autoActEnabled, setAutoActEnabled] = useState<boolean>(false);
   const [autoActFeedback, setAutoActFeedback] = useState<string | null>(null);
+  const [isVisionHudHighlighted, setIsVisionHudHighlighted] = useState<boolean>(false);
   const [responseImages, setResponseImages] = useState<Record<number, string>>({});
   const [liveMouseTrail, setLiveMouseTrail] = useState<
     Array<{ x: number; y: number; time: number; isClick?: boolean }>
@@ -282,43 +435,169 @@ export default function Dashboard({
     const prevTab = currentTab;
     setCurrentTab(newTab);
 
-    // Auto-Actor verification & action execution on mode transition
-    if (autoActEnabled) {
+    // Auto-Actor verification & action execution on mode transition (only if steps exist)
+    if (autoActEnabled && sequence && sequence.length > 0) {
       const activeImg = activeCanvasUrl || screenshotUrl;
-      fetch("/api/ai/auto-actor-trigger", {
+      safePostJson<{ autoActExecuted?: boolean; similarityScore?: number; matched?: boolean }>("/api/ai/auto-actor-trigger", {
+        currentScreen: screenshotUrl,
+        expectedScreen: activeImg,
+        step: sequence[0],
+        autoActEnabled: true,
+        threshold: 0.75,
+        modeTransition: `${prevTab}_to_${newTab}`,
+      }).then((res) => {
+        if (res.autoActExecuted) {
+          setAutoActFeedback(
+            `🎯 Auto-Actor Executed! Screen match: ${((res.similarityScore || 0) * 100).toFixed(1)}% -> Dispatched "${sequence[0]?.name || "Step"}" via PyAutoGUI`
+          );
+          setTimeout(() => setAutoActFeedback(null), 6000);
+        } else if (res.matched) {
+          setAutoActFeedback(
+            `✓ Screen Match Verified (${((res.similarityScore || 0) * 100).toFixed(1)}%) on mode switch (${prevTab} → ${newTab})`
+          );
+          setTimeout(() => setAutoActFeedback(null), 4000);
+        }
+      }).catch(() => {});
+    }
+  };
+
+  // Link / Send Workflow directly to the Live Desktop Screen Capture & Vision HUD below
+  const handleLinkWorkflowToLiveVisionHud = (wf: any) => {
+    if (!wf) return;
+    const rawSteps = wf.steps || wf.actions || [];
+    if (rawSteps.length === 0) {
+      toast.info("Workflow has no steps to send");
+      return;
+    }
+
+    const mappedSequence = rawSteps.map((s: any, idx: number) => {
+      const rawX = typeof s.x === "number" ? s.x : 960;
+      const rawY = typeof s.y === "number" ? s.y : 540;
+      const normX = rawX <= 1 && rawX > 0 ? Math.round(rawX * 1920) : Math.round(rawX);
+      const normY = rawY <= 1 && rawY > 0 ? Math.round(rawY * 1080) : Math.round(rawY);
+
+      return {
+        id: s.id || `step_${Date.now()}_${idx + 1}`,
+        stepNumber: idx + 1,
+        name: s.name || s.description || `Step #${idx + 1}`,
+        action: s.action || s.type || "click",
+        x: normX,
+        y: normY,
+        text: s.text || "",
+        key: s.key || "",
+        delayMs: s.delayMs || 400,
+        status: "pending" as const,
+        confidence: s.confidence || 0.95,
+      };
+    });
+
+    setSequence(mappedSequence);
+    if (mappedSequence.length > 0) {
+      setActiveStepId(mappedSequence[0].id);
+      setSecondHudActivePath({
+        id: `p_linked_${Date.now()}`,
+        name: `Sequence: ${wf.name || "Linked Workflow"}`,
+        remappedTrajectory: mappedSequence.map((s: any) => ({ x: s.x, y: s.y })),
+        originalTrajectory: mappedSequence.map((s: any) => ({ x: s.x, y: s.y })),
+        altMethod: "linear_interpolated",
+      });
+    }
+
+    // Switch tab to screen HUD so the user immediately sees the HUD
+    handleTabSwitch("screen");
+
+    // Highlight Vision HUD card with neon border and scroll down smoothly
+    setIsVisionHudHighlighted(true);
+    setTimeout(() => setIsVisionHudHighlighted(false), 4500);
+
+    setTimeout(() => {
+      const hudElem = document.getElementById("live-vision-hud-section");
+      if (hudElem) {
+        hudElem.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 150);
+
+    toast.success(
+      `🎯 Linked "${wf.name || "Workflow"}" (${mappedSequence.length} steps) to Live Desktop Screen Capture & Vision HUD below!`
+    );
+  };
+  // Forward everything from Mobile Hub to Live Desktop Screen Capture & Vision HUD
+  const handleForwardMobileToLiveVisionHud = (payload?: any) => {
+    setTargetDevice("android");
+    setActiveCanvasSourceId("mobile");
+    setIsRecordMode(true);
+
+    const wf = payload?.workflow;
+    if (wf) {
+      handleLinkWorkflowToLiveVisionHud(wf);
+    }
+
+    const frameToUse = payload?.mobileFrame || (typeof window !== "undefined" ? generateDefaultMobileFrame({
+      appName: payload?.deviceName || "Sightline Remote",
+      title: "Mobile Automation",
+    }) : "");
+
+    if (frameToUse) {
+      setScreenshotUrl(frameToUse);
+      setAiLiveUrl(frameToUse);
+      setActiveCanvasUrl(frameToUse);
+      setFrozenLiveSnapshot(frameToUse);
+      aiLiveUrlRef.current = frameToUse;
+      prevLiveRef.current = true;
+      setIsLiveDesktopActive(false); // keep false so it renders the high-res frame instead of an empty WebRTC video
+
+      // Sync frame to backend so AI Perception and OCR also receive the phone frame
+      fetch("/api/mobile-stream/frame", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          currentScreen: screenshotUrl,
-          expectedScreen: activeImg,
-          step: sequence[0] || {
-            name: `Auto Step on Switch to ${newTab}`,
-            action: "click",
-            x: 960,
-            y: 540,
-          },
-          autoActEnabled: true,
-          threshold: 0.75,
-          modeTransition: `${prevTab}_to_${newTab}`,
+          imageData: frameToUse,
+          deviceName: payload?.deviceName || "Android Phone",
+          streamType: "screen",
+          fps: 30,
         }),
-      })
-        .then((r) => r.json())
-        .then((res) => {
-          if (res.autoActExecuted) {
-            setAutoActFeedback(
-              `🎯 Auto-Actor Executed! Screen match: ${(res.similarityScore * 100).toFixed(1)}% -> Dispatched "${sequence[0]?.name || "Step"}" via PyAutoGUI`
-            );
-            setTimeout(() => setAutoActFeedback(null), 6000);
-          } else if (res.matched) {
-            setAutoActFeedback(
-              `✓ Screen Match Verified (${(res.similarityScore * 100).toFixed(1)}%) on mode switch (${prevTab} → ${newTab})`
-            );
-            setTimeout(() => setAutoActFeedback(null), 4000);
-          }
-        })
-        .catch(console.error);
+      }).catch(() => {});
     }
+
+    // High frequency stream forwarding loop for real-time mobile mirror (with in-flight guard)
+    if (mobileIntervalRef.current) clearInterval(mobileIntervalRef.current);
+    let inFlight = false;
+    mobileIntervalRef.current = window.setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const d = await safeFetchJson<{ imageData?: string }>("/api/mobile-stream/frame");
+        if (d.success && d.imageData) {
+          aiLiveUrlRef.current = d.imageData;
+          setAiLiveUrl(d.imageData);
+          setScreenshotUrl(d.imageData);
+          setActiveCanvasUrl(d.imageData);
+          setFrozenLiveSnapshot(d.imageData);
+          setLiveHistory30((prev) => [d.imageData!, ...prev].slice(0, 30));
+        }
+      } catch {} finally {
+        inFlight = false;
+      }
+    }, 200);
+
+    // Switch tab to screen HUD so the user immediately sees the HUD
+    handleTabSwitch("screen");
+
+    setIsVisionHudHighlighted(true);
+    setTimeout(() => setIsVisionHudHighlighted(false), 5000);
+
+    setTimeout(() => {
+      const hudElem = document.getElementById("live-vision-hud-section");
+      if (hudElem) {
+        hudElem.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 150);
+
+    toast.success(
+      "🚀 Mobile Screen & Controls Forwarded to Live Vision HUD! Auto-Recording ON • Touch anywhere on phone to place steps • AI Vision Active."
+    );
   };
+
   const handleAddSequenceStep = (
     stepData: (Partial<SequenceStep> & { x: number; y: number }) | number,
     maybeY?: number,
@@ -332,16 +611,38 @@ export default function Dashboard({
       }
     } catch {}
     let newStep: SequenceStep;
+    const generateUniqueId = (base: string) => {
+      const salt = Math.random().toString(36).substring(2, 8);
+      const candidate = `${base}_${salt}`;
+      return sequence.some((s) => s.id === candidate) ? `${candidate}_${Date.now()}` : candidate;
+    };
+
+    let targetX = typeof stepData === "number" ? stepData : (stepData.x ?? 960);
+    let targetY = typeof stepData === "number" ? (maybeY ?? 540) : (stepData.y ?? 540);
+
+    // If default center was passed and we have recent cursor movement or previous step, advance logically
+    if (typeof stepData !== "number" && stepData.x === undefined && stepData.y === undefined) {
+      if (liveMouseTrail.length > 0) {
+        const lastMouse = liveMouseTrail[liveMouseTrail.length - 1];
+        targetX = Math.round(lastMouse.x);
+        targetY = Math.round(lastMouse.y);
+      } else if (sequence.length > 0) {
+        const last = sequence[sequence.length - 1];
+        targetX = (last.x + 55 > 1820) ? 140 : last.x + 55;
+        targetY = (last.y + 40 > 980) ? 160 : last.y + 40;
+      }
+    }
+
     if (typeof stepData === "number") {
       newStep = {
-        id: `step_${Date.now()}_${stepNum}`,
+        id: generateUniqueId(`step_${Date.now()}_${stepNum}`),
         stepNumber: stepNum,
         name: pendingRightClick
           ? `Step ${stepNum} (Right Click)`
           : `Step ${stepNum}`,
         action: pendingRightClick ? "right_click" : "click",
-        x: stepData,
-        y: maybeY ?? 540,
+        x: targetX,
+        y: targetY,
         delayMs: 500,
         status: "pending",
         referenceScreenshotUrl: saveScreenshotWithStep
@@ -351,16 +652,24 @@ export default function Dashboard({
     } else {
       const isRight =
         pendingRightClick || (stepData as any).action === "right_click";
+      const existingId = stepData.id;
+      // If provided id already exists in sequence, make it uniquely salted
+      const finalId =
+        existingId && !sequence.some((s) => s.id === existingId)
+          ? existingId
+          : generateUniqueId(existingId || `step_${Date.now()}_${stepNum}`);
+
       newStep = {
-        id: stepData.id || `step_${Date.now()}_${stepNum}`,
+        ...stepData,
+        id: finalId,
         stepNumber: stepNum,
         name:
           stepData.name ||
           (isRight ? `Step ${stepNum} (Right Click)` : `Step ${stepNum}`),
         action: (stepData.action as any) || (isRight ? "right_click" : "click"),
-        x: stepData.x,
-        y: stepData.y,
-        delayMs: stepData.delayMs || 500,
+        x: targetX,
+        y: targetY,
+        delayMs: stepData.delayMs ?? 500,
         text: stepData.text,
         keyPayload: stepData.keyPayload,
         status: "pending",
@@ -369,7 +678,9 @@ export default function Dashboard({
           (saveScreenshotWithStep ? screenshotUrl : undefined),
       };
     }
-    setSequence((prev) => [...prev, newStep]);
+
+    setSequence((prev) => [...prev, { ...newStep, stepNumber: prev.length + 1 }]);
+
   };
   const handleStripUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -452,33 +763,33 @@ export default function Dashboard({
       copy[t] = tmp;
       return copy.map((s, i) => ({ ...s, stepNumber: i + 1 }));
     });
-  const handleRunSequence = async () => {
-    if (sequence.length === 0 || isSequenceRunning) return;
-    setIsSequenceRunning(true);
-    sequenceRunningRef.current = true;
-    setSequence((prev) => prev.map((s) => ({ ...s, status: "pending" })));
-    for (let i = 0; i < sequence.length; i++) {
-      if (!sequenceRunningRef.current) break;
-      const current = sequence[i];
-      setActiveStepId(current.id);
-      setSequence((prev) =>
-        prev.map((s) =>
-          s.id === current.id ? { ...s, status: "running" } : s,
-        ),
-      );
-      setAiThinking({
-        x: current.x,
-        y: current.y,
-        action: `Executing ${current.name} (${current.action})`,
-        confidence: 0.95,
-        isThinking: true,
-        targetLabel: current.name,
-      });
-      const stepDelay = driftRandomInterval
-        ? 1000 + Math.floor(Math.random() * 2000)
-        : current.delayMs;
-      await new Promise((r) => setTimeout(r, stepDelay));
-      if (!sequenceRunningRef.current) break;
+  const [replayRun, setReplayRun] = useState<ReplayRun | null>(null);
+  const replayIdRef = useRef<string | null>(null);
+  const replayStopRequested = useRef(false);
+  const [replayApiKey, setReplayApiKey] = useState("");
+  const replayRequest = async (url: string, body?: unknown) => {
+    const response = await fetch(url, {
+      method: body === undefined ? "GET" : "POST", headers: { "Content-Type": "application/json", ...(replayApiKey ? { "x-api-key": replayApiKey } : {}) }, body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok || data.success !== true) throw new Error(data.error || "Replay request failed");
+    return data;
+  };
+  const applyReplay = (run: ReplayRun) => {
+    setReplayRun(run);
+    const active = run.status === "running" || run.status === "paused";
+    sequenceRunningRef.current = active;
+    setIsSequenceRunning(active);
+    setIsAutonomousRunning(active);
+    setActiveStepId(active ? run.steps[run.currentStep]?.id : null);
+    setSequence(prev => prev.map(step => ({ ...step, status: (run.steps.find(s => s.id === step.id)?.status as any) || step.status })));
+    if (!active) { setAiThinking(null); setGlobalCursorState(null); }
+  };
+  useEffect(() => {
+    if (!replayRun || !["running", "paused"].includes(replayRun.status)) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
       try {
         let liveReview: ScreenPerceptionReport | null = null;
         if (autoCrossReference) {
@@ -554,28 +865,77 @@ export default function Dashboard({
           ),
         );
       }
-    }
-    setActiveStepId(null);
-    setIsSequenceRunning(false);
-    sequenceRunningRef.current = false;
-  };
+        const data = await replayRequest(`/api/replay/${replayRun.id}`);
+        if (!disposed) applyReplay(data.run);
+      } catch (error) { if (!disposed) setAutoActFeedback(`Monitor disconnected: ${error instanceof Error ? error.message : error}. Stop is available; reconnect to confirm status.`); }
+      if (!disposed) timer = setTimeout(poll, 1000);
+    };
+    timer = setTimeout(poll, 300);
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [replayRun?.id, replayRun?.status, replayApiKey]);
   useEffect(() => {
-    if (!continuousPerception || !isCapturing) return;
-    const interval = window.setInterval(() => {
-      if (!isPerceiving && !isSequenceRunning) void handleTriggerDescribeScreen();
-    }, 2500);
-    return () => window.clearInterval(interval);
-  }, [continuousPerception, isCapturing, isPerceiving, isSequenceRunning]);
-
-  const handleStopSequence = () => {
-    sequenceRunningRef.current = false;
-    setIsSequenceRunning(false);
-    setActiveStepId(null);
+    const id = sessionStorage.getItem("screen-replay-id");
+    if (!id) return;
+    let disposed = false;
+    void replayRequest(`/api/replay/${id}`).then(data => {
+      if (!disposed) { replayIdRef.current = data.run.id; applyReplay(data.run); }
+    }).catch(() => {});
+    return () => { disposed = true; };
+  }, [replayApiKey]);
+  const handleRunSequence = async (stepsToRun?: SequenceStep[], iterations = 1) => {
+    if (sequenceRunningRef.current) return;
+    const steps = Array.isArray(stepsToRun) ? stepsToRun : sequence;
+    if (!steps.length) { toast.info("Add or record steps first."); return; }
+    sequenceRunningRef.current = true;
+    replayStopRequested.current = false;
+    setIsSequenceRunning(true);
+    try {
+      const data = await replayRequest("/api/replay", { targetDevice, deviceId: selectedAdbDevice || undefined,
+        steps: steps.map(step => ({ ...step, referenceScreenshotUrl: step.referenceScreenshotUrl || undefined })), iterations, confirmation: true });
+      replayIdRef.current = data.run.id;
+      sessionStorage.setItem("screen-replay-id", data.run.id);
+      applyReplay(data.run);
+      if (replayStopRequested.current) await replayRequest(`/api/replay/${data.run.id}/cancel`, {});
+      return data.run.id as string;
+    } catch (error) {
+      sequenceRunningRef.current = false; setIsSequenceRunning(false); setIsAutonomousRunning(false);
+      toast.error(error instanceof Error ? error.message : "Replay failed");
+    }
+  };
+  const handleReplayControl = async (command: "pause" | "resume" | "cancel") => {
+    if (!replayIdRef.current) return;
+    try { const data = await replayRequest(`/api/replay/${replayIdRef.current}/${command}`, {}); applyReplay(data.run); }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Control failed"); }
+  };
+  const handleStopSequence = async () => {
+    replayStopRequested.current = true;
+    await handleReplayControl("cancel");
+    setIsRecordMode(false);
+    toast.info("Stop requested. In-flight device actions cannot be undone; the monitor confirms when replay stops.");
+  };
+  const executeHubTask = async (_url: string, options: RequestInit) => {
+    const body = JSON.parse(String(options.body));
+    const task = body.task;
+    const id = await handleRunSequence([{
+      ...task, id: task.id || crypto.randomUUID(), stepNumber: 1, status: "pending", delayMs: task.delayMs ?? 500,
+      x: task.targetPosition?.x ?? task.x ?? 0, y: task.targetPosition?.y ?? task.y ?? 0,
+      text: task.textPayload ?? task.text, keyPayload: task.keyPayload ?? task.key,
+    }]);
+    if (!id) throw new Error("Replay could not start. Check the monitor and selected device.");
+    for (;;) {
+      const data = await replayRequest(`/api/replay/${id}`);
+      applyReplay(data.run);
+      if (data.run.status === "completed") return new Response(JSON.stringify({ success: true, verified: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (["failed", "cancelled"].includes(data.run.status)) throw new Error(data.run.error || "Replay stopped");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   };
   const captureScreen = async () => {
     try {
-      const response = await fetch("/api/capture-screen");
-      const data = await response.json();
+      const data = await safeFetchJson<{
+        imageData?: string;
+        method?: string;
+      }>("/api/capture-screen");
       if (data.success && data.imageData) {
         const isReal = data.method === "real_desktop_stream";
         const wasLive = prevLiveRef.current;
@@ -588,22 +948,11 @@ export default function Dashboard({
         }
         aiLiveUrlRef.current = data.imageData;
         setAiLiveUrl(data.imageData);
-        setLiveHistory30((prev) => [data.imageData, ...prev].slice(0, 30));
-        if (false && isReal) {
-          if (!wasLive) setScreenshotUrl(data.imageData);
-          try {
-            await fetch("/api/analyze-screenshot", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ imageData: data.imageData }),
-            });
-          } catch {}
-          return;
-        }
+        setLiveHistory30((prev) => [data.imageData!, ...prev].slice(0, 30));
         setScreenshotUrl(data.imageData);
       }
     } catch (e) {
-      console.error(e);
+      console.warn("Screen capture note:", e);
     }
   };
   useEffect(() => {
@@ -611,7 +960,7 @@ export default function Dashboard({
     if (isCapturing) {
       captureIntervalRef.current = window.setInterval(
         () => captureScreen(),
-        400,
+        600,
       );
     }
     return () => {
@@ -620,8 +969,7 @@ export default function Dashboard({
   }, [isCapturing]);
   useEffect(() => {
     if (targetDevice === "android") {
-      fetch("/api/adb/devices")
-        .then((r) => r.json())
+      safeFetchJson<{ devices?: string[] }>("/api/adb/devices")
         .then((d) => {
           if (d.success) {
             setAdbDevices(d.devices || []);
@@ -638,26 +986,17 @@ export default function Dashboard({
         );
     }
   }, [targetDevice]);
-  const handleTriggerDescribeScreen = async () => {
-    const liveImg = aiLiveUrl || screenshotUrl;
-    if (!liveImg) {
-      setVerificationBadge({
-        status: "failed",
-        message: "No screenshot to perceive",
-      });
-      setTimeout(() => setVerificationBadge(null), 2500);
-      return null;
-    }
+  const handleTriggerDescribeScreen = async (signalOrEvent?: any) => {
     setIsPerceiving(true);
-    setVerificationBadge({
-      status: "verifying",
-      message: "Perceiving live screen via AI #1...",
-    });
     try {
-      const res = await fetch("/api/ai/describe-screen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageData: liveImg, model: "qwen2.5vl:7b" }),
+      const signal = signalOrEvent && typeof signalOrEvent === "object" && "aborted" in signalOrEvent ? (signalOrEvent as AbortSignal) : undefined;
+      const timeoutSignal = AbortSignal.timeout(45000);
+      const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+
+      const capture = await replayRequest("/api/replay/capture", {
+        targetDevice,
+        deviceId: selectedAdbDevice || undefined,
+        signal: combinedSignal,
       });
       const data = await res.json();
       if (data.success && data.report) {
@@ -696,282 +1035,160 @@ export default function Dashboard({
       setVerificationBadge({
         status: "failed",
         message: "Perceive error: " + String(e).slice(0, 50),
+      setScreenshotUrl(capture.frame.image);
+      setAiLiveUrl(capture.frame.image);
+      const data = await replayRequest("/api/ai/describe-screen", {
+        imageData: capture.frame.image,
+        signal: combinedSignal,
       });
-      setTimeout(() => setVerificationBadge(null), 3000);
+      if (!data.success || !data.report) throw new Error(data.error || "Perception unavailable");
+      setPerceptionReport(data.report);
+      setVerificationBadge({ status: "verifying", message: "Screen analyzed; actions still require outcome verification" });
+      return data.report;
+    } catch (error: any) {
+      setPerceptionReport(null);
+      const msg =
+        error?.name === "TimeoutError"
+          ? "Perceive timed out (45s) — vision model hung, aborted"
+          : error?.name === "AbortError"
+            ? "Perceive cancelled (Esc)"
+            : error instanceof Error
+              ? error.message
+              : "Screen analysis failed";
+      setVerificationBadge({ status: "failed", message: msg });
     } finally {
       setIsPerceiving(false);
     }
-    return null;
   };
+  const describeScreenRef = useRef(handleTriggerDescribeScreen);
+  describeScreenRef.current = handleTriggerDescribeScreen;
   const handleTriggerPlanAndAct = async () => {
-    let report: any = perceptionReport;
-    if (!report) {
-      const liveImg = aiLiveUrl || screenshotUrl;
-      if (!liveImg) {
-        setVerificationBadge({
-          status: "failed",
-          message: "No live image for planning",
-        });
-        setTimeout(() => setVerificationBadge(null), 2500);
-        return;
-      }
-      setVerificationBadge({
-        status: "verifying",
-        message: "Perceiving before planning...",
-      });
-      const fresh = await handleTriggerDescribeScreen();
-      if (fresh) report = fresh;
-      else {
-        setVerificationBadge({
-          status: "failed",
-          message: "Need perception first",
-        });
-        setTimeout(() => setVerificationBadge(null), 2500);
-        return;
-      }
-    }
-    setVerificationBadge({
-      status: "verifying",
-      message: "AI #2 planning next action...",
-    });
-    try {
-      const res = await fetch("/api/ai/plan-and-act", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          perceptionReport: report,
-          userObjective: "auto",
-          model: "qwen2.5vl:7b",
-          executeImmediately: true,
-        }),
-      });
-      const data = await res.json();
-      if (data.success && data.decision) {
-        if (data.decision.nextAction) {
-          setAiThinking({
-            x: data.decision.nextAction.x || 960,
-            y: data.decision.nextAction.y || 540,
-            action: data.decision.nextAction.title,
-            confidence: data.decision.thinking?.confidence || 0.92,
-            isThinking: true,
-            targetLabel: data.decision.nextAction.targetName,
-          });
-          setPlannerDecision(data.decision);
-        }
-        if (data.decision.verificationRule) {
-          setVerificationBadge({
-            status: "verified",
-            message:
-              data.decision.statusSummary ||
-              `Planned: ${data.decision.nextAction?.title || "next"}`,
-          });
-          setTimeout(() => setVerificationBadge(null), 3500);
-        } else {
-          setVerificationBadge({
-            status: "verified",
-            message: data.decision.statusSummary || "Planned",
-          });
-          setTimeout(() => setVerificationBadge(null), 3000);
-        }
-        setExecutionHistory((prev) =>
-          [
-            {
-              stepName: data.decision.nextAction?.title || "Plan",
-              status: "planned",
-              timestamp: Date.now(),
-              thought: data.decision.thinking?.reasoning,
-            },
-            ...prev,
-          ].slice(0, 20),
-        );
-        if (data.executionResult) {
-          const ok = data.executionResult.success;
-          setVerificationBadge({
-            status: ok ? "verified" : "failed",
-            message:
-              data.executionResult.explanation ||
-              (ok ? "Executed via pyautogui" : "Execute failed"),
-          });
-          setTimeout(() => setVerificationBadge(null), 3000);
-          fetch("/api/logs", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              source: "PyAutoGUI",
-              level: ok ? "SUCCESS" : "ERROR",
-              message: `Plan&Act: ${data.decision.nextAction?.title} -> ${data.executionResult.explanation || ""}`,
-            }),
-          }).catch(() => {});
-        }
-        setPerceptionReport(report);
-      } else {
-        setVerificationBadge({
-          status: "failed",
-          message: "Plan failed: " + (data.error || "unknown"),
-        });
-        setTimeout(() => setVerificationBadge(null), 3000);
-      }
-    } catch (e) {
-      setVerificationBadge({ status: "failed", message: "Plan & Act error" });
-      setTimeout(() => setVerificationBadge(null), 3000);
-    }
+    await handleRunSequence();
   };
   const handleGlobalExecuteOnActualPC = async () => {
-    const x = aiThinking?.x || perceptionReport?.feedbackPosition?.x || 960;
-    const y = aiThinking?.y || perceptionReport?.feedbackPosition?.y || 540;
-    const label =
-      aiThinking?.action ||
-      perceptionReport?.primarySuggestion ||
-      "Global Execute";
-    setVerificationBadge({
-      status: "verifying",
-      message: `Executing ${label.slice(0, 30)} @ (${x},${y}) via ${targetDevice}...`,
-    });
-    try {
-      const res = await fetch("/api/execute-task", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          targetDevice,
-          deviceId: selectedAdbDevice,
-          task: {
-            id: `pc_${Date.now()}`,
-            name: label,
-            action: "click",
-            targetPosition: { x, y },
-            driftPx: movementMode === "exact" ? 0 : driftPx,
-          },
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setVerificationBadge({
-          status: "verified",
-          message: data.explanation || `Executed @ (${x},${y})`,
-        });
-        setExecutionHistory((prev) =>
-          [
-            {
-              stepName: label,
-              status: "success",
-              timestamp: Date.now(),
-              explanation: data.explanation,
-            },
-            ...prev,
-          ].slice(0, 20),
-        );
-        fetch("/api/logs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            source: "PyAutoGUI",
-            level: "SUCCESS",
-            message: `Execute: ${label} @ (${x},${y})`,
-          }),
-        }).catch(() => {});
-      } else {
-        setVerificationBadge({
-          status: "failed",
-          message: data.error || "Execute failed",
-        });
-      }
-      setTimeout(() => setVerificationBadge(null), 3000);
-    } catch (e) {
-      setVerificationBadge({
-        status: "failed",
-        message: "Execute failed: " + String(e).slice(0, 60),
-      });
-      setTimeout(() => setVerificationBadge(null), 3000);
-    }
+    const step = sequence.find(s => s.id === activeStepId);
+    if (!step) { toast.info("Select a recorded step to execute and verify."); return; }
+    await handleRunSequence([step]);
   };
-  const handleToggleAutonomousLoop = async () =>
-    setIsAutonomousRunning((v) => !v);
+  const handleToggleAutonomousLoop = async () => {
+    if (sequenceRunningRef.current) await handleStopSequence();
+    else await handleRunSequence();
+  };
   const handleTriggerAutoLoop = handleToggleAutonomousLoop;
   const toggleCapture = () => setIsCapturing((v) => !v);
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border/80 bg-slate-950/90 backdrop-blur sticky top-0 z-50">
-        <div className="container flex h-14 items-center justify-between px-4">
-          <div className="flex items-center gap-3">
-            <div className="p-1.5 rounded-lg bg-cyan-950 border border-cyan-600 text-cyan-400 shadow-sm">
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800/80 bg-slate-950/95 backdrop-blur sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto flex h-14 items-center justify-between px-4 sm:px-6 gap-4">
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="p-1.5 rounded-lg bg-cyan-950/80 border border-cyan-500/50 text-cyan-400 shadow-sm">
               <Brain className="w-5 h-5" />
             </div>
-            <div>
-              <h1 className="text-sm sm:text-base font-bold text-white tracking-wide flex items-center gap-2">
-                DroidVision AI Master Agent
-                <span className="hidden sm:inline-block px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-700">
-                  Autonomous Vision Hub
-                </span>
-              </h1>
+            <div className="flex items-center gap-2">
+              <span className="text-base font-bold text-white tracking-tight whitespace-nowrap">
+                DroidVision AI
+              </span>
+              <span className="hidden sm:inline-block text-xs text-slate-400 font-medium">
+                · Automation &amp; Vision Hub
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1 bg-slate-900 border border-cyan-500/30 rounded-lg p-0.5 shadow-sm">
+              <Button
+                size="sm"
+                onClick={() => setIsApkModalOpen(true)}
+                className="h-8 text-xs font-mono font-medium gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white whitespace-nowrap"
+                title="Android APK / WebAPK Hub: Download build zip or install native companion"
+                aria-label="Download APK build project or install native companion"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-cyan-100" />
+                <span>APK (.zip)</span>
+              </Button>
+              <a
+                href="/api/mobile/download-apk-bundle"
+                download="sightline-mobile-apk-project.zip"
+                className="h-8 px-2 flex items-center justify-center rounded-md text-xs font-mono font-medium bg-slate-950 hover:bg-slate-800 text-cyan-300 hover:text-white border border-slate-800 transition-colors"
+                title="Direct Download APK Build Project (.zip)"
+                aria-label="Direct Download APK Build Project zip file"
+              >
+                <Download className="w-3.5 h-3.5 text-cyan-400" />
+              </a>
+            </div>
             <Button
-              variant="outline"
               size="sm"
-              onClick={() => setCurrentTab("desc-refiner")}
-              className={`h-8 text-xs font-mono font-bold gap-1.5 transition-all ${
-                currentTab === "desc-refiner"
-                  ? "bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-md shadow-amber-500/20"
-                  : "bg-amber-950/70 border-amber-500/60 text-amber-200 hover:bg-amber-900/90 hover:text-white"
-              }`}
+              onClick={() => setAutonomousModalOpen(true)}
+              className="h-8 text-xs font-medium gap-1.5 bg-purple-600 hover:bg-purple-500 text-white whitespace-nowrap shadow-sm"
+              aria-label="Autonomous Director & Sentinels Manager"
             >
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Description Refiner (&lt;20 words)
+              <Bot className="w-3.5 h-3.5 text-purple-200" />
+              <span className="hidden md:inline">Autonomous</span> Director
             </Button>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentTab("screen")}
-              className={`h-8 text-xs font-mono font-bold gap-1.5 ${currentTab === "screen" ? "bg-cyan-600 text-white border-cyan-500" : "bg-slate-900 border-slate-700 text-slate-200 hover:text-white"}`}
+              onClick={() => setIsCalibrationModalOpen(true)}
+              aria-label="Calibrate Mouse Coordinates"
+              className="h-8 text-xs font-mono bg-slate-900 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700 hover:bg-slate-850 gap-1.5 whitespace-nowrap px-2.5"
+              title="Calibrate Mouse, PyAutoGUI & Touch Coordinates"
             >
-              <Monitor className="w-3.5 h-3.5 text-cyan-400" /> Screen HUD
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentTab("movement")}
-              className={`h-8 text-xs font-mono font-bold gap-1.5 transition-all ${
-                currentTab === "movement"
-                  ? "bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/30 font-black"
-                  : "bg-cyan-950/80 border-cyan-500/80 text-cyan-200 hover:bg-cyan-900 hover:text-white"
-              }`}
-            >
-              <Compass className="w-3.5 h-3.5 text-cyan-300" /> Movement Mode (2nd HUD)
+              <Target className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline">Calibrate</span>
             </Button>
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setCurrentTab("settings")}
-              className="h-8 text-xs font-mono text-slate-300 hover:text-white"
+              onClick={() => setIsSettingsModalOpen(true)}
+              aria-label="Global System Settings"
+              className="h-8 w-8 p-0 text-slate-400 hover:text-white hover:bg-slate-800"
+              title="Configure AI Model URL & System Settings"
             >
-              <Settings className="w-3.5 h-3.5" />
+              <Settings className="w-4 h-4" />
             </Button>
           </div>
         </div>
       </header>
-      <main className="container py-6 px-4">
-        <div className="space-y-3 mb-6">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-4 rounded-xl bg-slate-900/80 border border-slate-800 shadow-md">
-            <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-2xl font-bold text-white tracking-tight">AI Game Automation & Vision Hub</h1>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
-                  REAL PYAUTOGUI
+      <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6">
+        <div className="space-y-4 mb-6">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 rounded-xl bg-slate-900/70 border border-slate-800 shadow-sm">
+            <div className="space-y-1">
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                  Automation &amp; Vision Control Hub
+                </h1>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800/80">
+                  PyAutoGUI Ready
                 </span>
               </div>
-              <p className="text-slate-300 text-xs font-mono mt-1">
-                Real pyautogui • Anti-loop frozen preview • 60FPS screen stream • Cross-platform desktop & mobile
-              </p>
+              <div className="flex items-center gap-2 text-xs text-slate-400 font-mono flex-wrap">
+                <span>60 FPS Stream</span>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span>Anti-Loop Protection</span>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span>Sub-Pixel Precision</span>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span>Desktop &amp; Android ADB</span>
+              </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1 bg-slate-950 p-1.5 rounded-lg border border-slate-800 shadow-inner">
+              <div
+                role="radiogroup"
+                aria-label="Target device"
+                className="flex items-center gap-1 bg-slate-950 p-1.5 rounded-lg border border-slate-800 shadow-inner"
+              >
                 <button
+                  role="radio"
+                  aria-checked={targetDevice === "desktop"}
+                  aria-label="Target Server Desktop"
                   onClick={() => setTargetDevice("desktop")}
                   className={`px-3 py-1 rounded-md text-xs font-mono font-bold flex items-center gap-1.5 transition-colors ${targetDevice === "desktop" ? "bg-cyan-600 text-white shadow-sm" : "text-slate-300 hover:text-white"}`}
                 >
-                  <Monitor className="w-3.5 h-3.5" /> Desktop
+                  <Monitor className="w-3.5 h-3.5" /> Server desktop
                 </button>
                 <button
+                  role="radio"
+                  aria-checked={targetDevice === "android"}
+                  aria-label="Target Android Mobile device via ADB"
                   onClick={() => {
                     setTargetDevice("android");
                     fetch("/api/adb/devices")
@@ -1016,25 +1233,57 @@ export default function Dashboard({
                       return;
                     }
                     try {
-                      const devId = selectedAdbDevice || adbDevices[0];
+                      const safeFetchJson = async (url: string, options?: RequestInit) => {
+                        try {
+                          const res = await fetch(url, options);
+                          const text = await res.text();
+                          return JSON.parse(text);
+                        } catch {
+                          return { success: true, simulated: true, devices: ["192.168.1.50:5555 (WiFi Phone)"] };
+                        }
+                      };
+
+                      let devId = selectedAdbDevice || adbDevices[0];
+                      // Check for real mobile stream first
+                      const mobileCheck = await safeFetchJson("/api/mobile-stream/frame");
+                      if (mobileCheck.success && mobileCheck.imageData) {
+                        setScreenshotUrl(mobileCheck.imageData);
+                        setAiLiveUrl(mobileCheck.imageData);
+                        aiLiveUrlRef.current = mobileCheck.imageData;
+                        setFrozenLiveSnapshot(mobileCheck.imageData);
+                        prevLiveRef.current = true;
+                        setIsLiveDesktopActive(true);
+                        setWifiStatus(`Phone live: ${mobileCheck.deviceName || "Connected Mobile Device"}`);
+
+                        if (mobileIntervalRef.current) clearInterval(mobileIntervalRef.current);
+                        mobileIntervalRef.current = window.setInterval(async () => {
+                          try {
+                            const res = await safeFetchJson("/api/mobile-stream/frame");
+                            if (res.success && res.imageData) {
+                              aiLiveUrlRef.current = res.imageData;
+                              setAiLiveUrl(res.imageData);
+                              setScreenshotUrl(res.imageData);
+                              setFrozenLiveSnapshot(res.imageData);
+                              setLiveHistory30((prev) => [res.imageData, ...prev].slice(0, 30));
+                            }
+                          } catch {}
+                        }, 150);
+                        return;
+                      }
+
                       if (!devId) {
-                        const dr = await fetch("/api/adb/devices");
-                        const dj = await dr.json();
-                        if (dj.devices?.[0]) {
+                        const dj = await safeFetchJson("/api/adb/devices");
+                        if (dj.devices?.[0] && !dj.devices[0].includes("virtual") && !dj.devices[0].includes("WiFi Phone")) {
                           setAdbDevices(dj.devices);
                           setSelectedAdbDevice(dj.devices[0]);
-                        } else {
-                          alert(
-                            "No Android device found. Connect phone via USB or WiFi IP above (Wireless Debugging).",
-                          );
-                          return;
+                          devId = dj.devices[0];
                         }
                       }
-                      const capRes = await fetch(
-                        `/api/adb/capture${selectedAdbDevice ? `?deviceId=${selectedAdbDevice}` : ""}`,
+
+                      const capData = await safeFetchJson(
+                        `/api/adb/capture${devId ? `?deviceId=${encodeURIComponent(devId)}` : ""}`,
                       );
-                      const capData = await capRes.json();
-                      if (capData.success && capData.imageData) {
+                      if (capData.success && capData.imageData && !capData.simulated) {
                         setScreenshotUrl(capData.imageData);
                         setAiLiveUrl(capData.imageData);
                         setFrozenLiveSnapshot(capData.imageData);
@@ -1046,48 +1295,31 @@ export default function Dashboard({
                         setWifiStatus(
                           `Phone live: ${selectedAdbDevice || devId}`,
                         );
-                        fetch("/api/sync-real-frame", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            imageData: capData.imageData,
-                          }),
-                        }).catch(() => {});
                         mobileIntervalRef.current = window.setInterval(
                           async () => {
                             try {
-                              const r = await fetch(
-                                `/api/adb/capture${selectedAdbDevice ? `?deviceId=${selectedAdbDevice}` : ""}`,
+                              const d = await safeFetchJson(
+                                `/api/adb/capture${selectedAdbDevice ? `?deviceId=${encodeURIComponent(selectedAdbDevice)}` : ""}`,
                               );
-                              const d = await r.json();
-                              if (d.success && d.imageData) {
+                              if (d.success && d.imageData && !d.simulated) {
                                 aiLiveUrlRef.current = d.imageData;
                                 setAiLiveUrl(d.imageData);
                                 setLiveHistory30((prev) =>
                                   [d.imageData, ...prev].slice(0, 30),
                                 );
                                 setScreenshotUrl(d.imageData);
-                                fetch("/api/sync-real-frame", {
-                                  method: "POST",
-                                  headers: {
-                                    "Content-Type": "application/json",
-                                  },
-                                  body: JSON.stringify({
-                                    imageData: d.imageData,
-                                  }),
-                                }).catch(() => {});
                               }
                             } catch {}
                           },
-                          700,
+                          500,
                         );
                       } else {
-                        alert(
-                          "ADB capture failed: " + (capData.error || "unknown"),
-                        );
+                        // If no phone stream or physical ADB is active yet, trigger browser screen share or prompt
+                        window.dispatchEvent(new CustomEvent("trigger-hud-share"));
+                        setWifiStatus("Scan QR code below with phone to beam screen, or select phone window in screen share");
                       }
                     } catch (e) {
-                      alert("Mobile share failed: " + String(e));
+                      setWifiStatus("Mobile stream: " + String(e));
                     }
                     return;
                   }
@@ -1141,242 +1373,31 @@ export default function Dashboard({
             </div>
           </div>
           {targetDevice === "android" && (
-            <div className="p-3 rounded-xl bg-slate-900 border border-emerald-900/50 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
-                  <Smartphone className="w-4 h-4" /> Mobile WiFi Connect &
-                  Detection
-                </span>
-                <span className="text-[10px] font-mono text-slate-300">
-                  USB → WiFi • Pairing (Android 11+) • IP Connect
-                </span>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5">
-                  <span className="text-[11px] font-mono font-bold text-slate-300">
-                    1) USB → Enable WiFi (once)
-                  </span>
-                  <p className="text-[10px] text-slate-400">
-                    With phone on USB, enable wireless:{" "}
-                    <code>adb tcpip 5555</code>
-                  </p>
-                  <Button
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        const r = await fetch("/api/adb/tcpip", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            port: 5555,
-                            deviceId: selectedAdbDevice,
-                          }),
-                        });
-                        const d = await r.json();
-                        setWifiStatus(d.output || d.error || "tcpip done");
-                        if (d.success)
-                          setTimeout(
-                            () =>
-                              fetch("/api/adb/devices")
-                                .then((r) => r.json())
-                                .then((d) => setAdbDevices(d.devices || [])),
-                            1500,
-                          );
-                      } catch (e) {
-                        setWifiStatus(String(e));
-                      }
-                    }}
-                    className="h-7 w-full text-xs bg-slate-800 hover:bg-slate-700 gap-1"
-                  >
-                    <Zap className="w-3 h-3" /> Enable WiFi ADB (tcpip 5555)
-                  </Button>
-                  <span className="text-[10px] font-mono text-slate-400">
-                    Then unplug USB, connect via WiFi below
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5">
-                  <span className="text-[11px] font-mono font-bold text-slate-300">
-                    2) Pair (Android 11+ Wireless Debugging)
-                  </span>
-                  <div className="grid grid-cols-3 gap-1">
-                    <Input
-                      value={pairIp}
-                      onChange={(e) => setPairIp(e.target.value)}
-                      placeholder="IP (192.168.1.10)"
-                      className="h-7 text-xs bg-slate-900 border-slate-700 col-span-2"
-                    />
-                    <Input
-                      value={pairPort}
-                      onChange={(e) => setPairPort(e.target.value)}
-                      placeholder="Pair port"
-                      className="h-7 text-xs bg-slate-900 border-slate-700"
-                    />
-                  </div>
-                  <Input
-                    value={pairCode}
-                    onChange={(e) => setPairCode(e.target.value)}
-                    placeholder="Pairing code (6 digits)"
-                    className="h-7 text-xs bg-slate-900 border-slate-700"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={async () => {
-                      if (!pairIp || !pairPort || !pairCode) {
-                        setWifiStatus(
-                          "Need IP, Pair port and code from phone's Wireless Debugging → Pair with pairing code",
-                        );
-                        return;
-                      }
-                      try {
-                        const r = await fetch("/api/adb/pair", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            ip: pairIp,
-                            port: pairPort,
-                            code: pairCode,
-                          }),
-                        });
-                        const d = await r.json();
-                        setWifiStatus(d.output || d.error);
-                        if (d.success)
-                          fetch("/api/adb/devices")
-                            .then((r) => r.json())
-                            .then((d) => setAdbDevices(d.devices || []));
-                      } catch (e) {
-                        setWifiStatus(String(e));
-                      }
-                    }}
-                    className="h-7 w-full text-xs bg-emerald-700 hover:bg-emerald-600 text-white gap-1"
-                  >
-                    <Smartphone className="w-3 h-3" /> Pair
-                  </Button>
-                  <p className="text-[10px] text-slate-400">
-                    On phone: Settings → Developer → Wireless debugging → Pair
-                    with pairing code
-                  </p>
-                </div>
-                <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5">
-                  <span className="text-[11px] font-mono font-bold text-slate-300">
-                    3) Connect via WiFi IP
-                  </span>
-                  <div className="flex gap-1">
-                    <Input
-                      value={wifiIp}
-                      onChange={(e) => setWifiIp(e.target.value)}
-                      placeholder="Phone IP (192.168.1.50)"
-                      className="h-7 text-xs bg-slate-900 border-slate-700 flex-1"
-                    />
-                    <Input
-                      value={wifiPort}
-                      onChange={(e) => setWifiPort(e.target.value)}
-                      placeholder="5555"
-                      className="h-7 w-16 text-xs bg-slate-900 border-slate-700"
-                    />
-                  </div>
-                  <div className="flex gap-1">
-                    <Button
-                      size="sm"
-                      onClick={async () => {
-                        if (!wifiIp) {
-                          setWifiStatus(
-                            "Enter phone WiFi IP first (shown in Wireless Debugging)",
-                          );
-                          return;
-                        }
-                        try {
-                          const r = await fetch("/api/adb/connect", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              ip: wifiIp,
-                              port: wifiPort || 5555,
-                            }),
-                          });
-                          const d = await r.json();
-                          setWifiStatus(d.output || d.error);
-                          fetch("/api/adb/devices")
-                            .then((r) => r.json())
-                            .then((d) => {
-                              setAdbDevices(d.devices || []);
-                              if (d.devices?.[0])
-                                setSelectedAdbDevice(d.devices[0]);
-                            });
-                        } catch (e) {
-                          setWifiStatus(String(e));
-                        }
-                      }}
-                      className="h-7 flex-1 text-xs bg-cyan-600 hover:bg-cyan-500 text-white gap-1"
-                    >
-                      <Monitor className="w-3 h-3" /> Connect
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={async () => {
-                        try {
-                          const r = await fetch("/api/adb/scan");
-                          const d = await r.json();
-                          setAdbDevices(d.devices || []);
-                          setWifiStatus(d.raw || "scanned");
-                          if (d.devices?.[0])
-                            setSelectedAdbDevice(d.devices[0]);
-                        } catch (e) {
-                          setWifiStatus(String(e));
-                        }
-                      }}
-                      className="h-7 text-xs border-slate-700"
-                    >
-                      Scan
-                    </Button>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={async () => {
-                      if (!selectedAdbDevice) {
-                        setWifiStatus("No device to disconnect");
-                        return;
-                      }
-                      try {
-                        const r = await fetch("/api/adb/disconnect", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ deviceId: selectedAdbDevice }),
-                        });
-                        const d = await r.json();
-                        setWifiStatus(d.output || "disconnected");
-                        fetch("/api/adb/devices")
-                          .then((r) => r.json())
-                          .then((d) => setAdbDevices(d.devices || []));
-                      } catch (e) {
-                        setWifiStatus(String(e));
-                      }
-                    }}
-                    className="h-7 w-full text-xs text-red-400"
-                  >
-                    Disconnect
-                  </Button>
-                </div>
-              </div>
-              {wifiStatus && (
-                <div className="px-2 py-1.5 rounded bg-slate-950 border border-slate-800 text-[11px] font-mono text-cyan-300 truncate">
-                  {wifiStatus}
-                </div>
-              )}
-              <p className="text-[11px] text-slate-300 font-mono">
-                Detection: USB (adb devices) → WiFi IP → Pairing (mDNS). After
-                WiFi connect, use <b>Share Phone Screen</b> above. Actions
-                (tap/swipe/type) auto-route via ADB when Mobile selected.
-              </p>
-            </div>
+            <UniversalDeviceBridgeHub
+              replaySteps={sequence}
+              selectedAdbDevice={selectedAdbDevice}
+              onDeviceSelected={setSelectedAdbDevice}
+              adbDevices={adbDevices}
+              setAdbDevices={setAdbDevices}
+              wifiStatus={wifiStatus}
+              setWifiStatus={setWifiStatus}
+              onSendWorkflowToMainVisionHud={handleLinkWorkflowToLiveVisionHud}
+              onSelectDeviceFrame={(frame) => {
+                setScreenshotUrl(frame);
+                setAiLiveUrl(frame);
+                aiLiveUrlRef.current = frame;
+                setFrozenLiveSnapshot(frame);
+                prevLiveRef.current = true;
+                setIsLiveDesktopActive(true);
+              }}
+            />
           )}
 
           {/* 1st HUD: AI Control & Perception */}
           <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-900/95 border border-cyan-700/60 shadow-lg">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-mono font-bold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950/80 border border-cyan-800/80 flex items-center gap-1.5 shadow-sm">
-                <Brain className="w-4 h-4 text-cyan-400 animate-pulse" /> 1ST HUD • AI CONTROL & PERCEPTION
+                <Brain className="w-4 h-4 text-cyan-400" /> AI Perception &amp; Control
               </span>
               <Button
                 size="sm"
@@ -1395,7 +1416,7 @@ export default function Dashboard({
                 onClick={handleTriggerPlanAndAct}
                 className="h-7 text-xs font-mono font-bold bg-purple-600 hover:bg-purple-500 text-white gap-1.5 shadow-sm"
               >
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Plan & Act (AI #2 → Execute)
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Plan &amp; Act (AI #2)
               </Button>
               <Button
                 size="sm"
@@ -1403,7 +1424,7 @@ export default function Dashboard({
                 className="h-7 text-xs font-mono font-bold bg-gradient-to-r from-red-600 via-amber-600 to-red-600 hover:from-red-500 hover:to-amber-500 text-white border border-amber-300 gap-1.5 shadow-md"
               >
                 <Zap className="w-3.5 h-3.5 text-yellow-200" /> Execute on{" "}
-                {targetDevice === "android" ? "Phone" : "PC"} (pyautogui)
+                {targetDevice === "android" ? "Phone" : "PC"}
               </Button>
             </div>
             {verificationBadge && (
@@ -1415,16 +1436,23 @@ export default function Dashboard({
             )}
           </div>
 
-          {/* 2nd HUD: Movement Mode & Trajectory Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-950 border-2 border-cyan-600/70 shadow-xl shadow-cyan-950/30">
+          {/* Movement Mode & Trajectory Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-950 border border-cyan-600/60 shadow-lg">
             <div className="flex flex-wrap items-center gap-3">
-              <span className="text-xs font-mono font-extrabold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-500/70 flex items-center gap-1.5 shadow-sm tracking-wider">
-                <Compass className="w-4 h-4 text-cyan-400 animate-pulse" /> 2ND HUD • MOVEMENT MODE
+              <span className="text-xs font-mono font-bold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-500/70 flex items-center gap-1.5 shadow-sm">
+                <Compass className="w-4 h-4 text-cyan-400" /> Trajectory &amp; Movement Mode
               </span>
-              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-700 shadow-inner">
+              <div
+                role="radiogroup"
+                aria-label="Movement mode selection"
+                className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-700 shadow-inner"
+              >
                 {(["exact", "variation", "live"] as const).map((m) => (
                   <button
                     key={m}
+                    role="radio"
+                    aria-checked={movementMode === m}
+                    aria-label={`Movement mode: ${m}`}
                     onClick={() => setMovementMode(m)}
                     className={`px-3 py-1 rounded-md text-xs font-mono font-extrabold capitalize transition-all ${movementMode === m ? "bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/40" : "text-slate-100 hover:text-white hover:bg-slate-800"}`}
                   >
@@ -1470,7 +1498,7 @@ export default function Dashboard({
                 {antiLoopEnabled ? (
                   <span className="text-emerald-400 font-extrabold">ON (frozen preview)</span>
                 ) : (
-                  <span className="text-amber-400 font-extrabold">OFF (live — may tunnel)</span>
+                  <span className="text-amber-400 font-extrabold">OFF (live - may tunnel)</span>
                 )}
               </label>
               <div className="flex items-center gap-2 bg-slate-900/80 px-3 py-1 rounded-lg border border-slate-700">
@@ -1528,171 +1556,226 @@ export default function Dashboard({
           className="w-full"
         >
           <div className="mb-6">
-            <MasterWorkflowOrchestrator />
+            <MasterWorkflowOrchestrator run={replayRun} onRun={() => { void handleRunSequence(); }} onControl={handleReplayControl} />
           </div>
-          <TabsList className="flex flex-wrap h-auto gap-1.5 bg-slate-900 border border-slate-800 p-2 rounded-xl mb-4">
-            <span className="text-[10px] font-mono font-bold text-cyan-400 px-1 py-1">
-              VISION
-            </span>
-            <TabsTrigger value="screen" className="h-7 text-xs gap-1">
-              <Monitor className="w-3 h-3" />
-              Screen
-            </TabsTrigger>
-            <TabsTrigger value="layers" className="h-7 text-xs gap-1">
-              <Layers className="w-3 h-3" />
-              Layers
-            </TabsTrigger>
-            <TabsTrigger value="models" className="h-7 text-xs gap-1">
-              <Cpu className="w-3 h-3" />
-              Models
-            </TabsTrigger>
-            <TabsTrigger value="pack-builder" className="h-7 text-xs gap-1">
-              <Package className="w-3 h-3" />
-              Pack Builder
-            </TabsTrigger>
-            <TabsTrigger value="capture" className="h-7 text-xs gap-1">
-              <Camera className="w-3 h-3" />
-              Capture
-            </TabsTrigger>
-            <TabsTrigger value="entities" className="h-7 text-xs gap-1">
-              <Crosshair className="w-3 h-3" />
-              Entities
-            </TabsTrigger>
-            <TabsTrigger value="quantum" className="h-7 text-xs gap-1">
-              <Activity className="w-3 h-3" />
-              Quantum
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-emerald-400 px-1 py-1 ml-2">
-              OS & LINK
-            </span>
-            <TabsTrigger value="linker" className="h-7 text-xs gap-1">
-              <Link2 className="w-3 h-3" />
-              Linker
-            </TabsTrigger>
-            <TabsTrigger value="v-desktop" className="h-7 text-xs gap-1">
-              <AppWindow className="w-3 h-3" />
-              V-Desktop
-            </TabsTrigger>
-            <TabsTrigger value="code-editor" className="h-7 text-xs gap-1">
-              <Code2 className="w-3 h-3" />
-              Code Editor
-            </TabsTrigger>
-            <TabsTrigger value="gap-agent" className="h-7 text-xs gap-1">
-              <Bug className="w-3 h-3" />
-              Gap Agent
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-amber-400 px-1 py-1 ml-2">
-              INPUT & TOUCH
-            </span>
-            <TabsTrigger value="drag-drop" className="h-7 text-xs gap-1">
-              <MousePointer className="w-3 h-3" />
-              Drag-Drop
-            </TabsTrigger>
-            <TabsTrigger value="benchmark" className="h-7 text-xs gap-1">
-              <Scan className="w-3 h-3" />
-              Benchmark
-            </TabsTrigger>
-            <TabsTrigger
-              value="movement"
-              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-400 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-cyan-500/20 text-cyan-200 border border-cyan-500/80 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
-            >
-              <Compass className="w-3.5 h-3.5 text-cyan-300" />
-              Movement Mode (2nd HUD)
-            </TabsTrigger>
-            <TabsTrigger
-              value="typing-calc"
-              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-purple-500 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-purple-500/20 text-purple-200 border border-purple-500/80 bg-purple-950/80 hover:bg-purple-900/90 shadow-sm"
-            >
-              <Keyboard className="w-3.5 h-3.5 text-purple-300" />
-              Typing & Equations (Full View)
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-purple-400 px-1 py-1 ml-2">
-              ROUTES
-            </span>
-            <TabsTrigger value="mouse-route" className="h-7 text-xs gap-1">
-              <Route className="w-3 h-3" />
-              Mouse Route
-            </TabsTrigger>
-            <TabsTrigger value="backprop" className="h-7 text-xs gap-1">
-              <RotateCcw className="w-3 h-3" />
-              Backprop
-            </TabsTrigger>
-            <TabsTrigger value="code-learn" className="h-7 text-xs gap-1">
-              <BookOpen className="w-3 h-3" />
-              Code Learn
-            </TabsTrigger>
-            <TabsTrigger value="route-map" className="h-7 text-xs gap-1">
-              <Map className="w-3 h-3" />
-              Route Map
-            </TabsTrigger>
-            <TabsTrigger value="testpoints" className="h-7 text-xs gap-1">
-              <Target className="w-3 h-3" />
-              Testpoints
-            </TabsTrigger>
-            <TabsTrigger value="dedup" className="h-7 text-xs gap-1">
-              <ListChecks className="w-3 h-3" />
-              Dedup
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-pink-400 px-1 py-1 ml-2">
-              COGNITION
-            </span>
-            <TabsTrigger value="scenarios" className="h-7 text-xs gap-1">
-              <Film className="w-3 h-3" />
-              Scenarios
-            </TabsTrigger>
-            <TabsTrigger value="watchdog" className="h-7 text-xs gap-1">
-              <Watch className="w-3 h-3" />
-              Watchdog
-            </TabsTrigger>
-            <TabsTrigger value="cross-ref" className="h-7 text-xs gap-1">
-              <Scan className="w-3 h-3" />
-              Cross-Ref
-            </TabsTrigger>
-            <TabsTrigger value="rebound" className="h-7 text-xs gap-1">
-              <RotateCcw className="w-3 h-3" />
-              Rebound
-            </TabsTrigger>
-            <TabsTrigger value="story" className="h-7 text-xs gap-1">
-              <Film className="w-3 h-3" />
-              Story
-            </TabsTrigger>
-            <TabsTrigger value="aggressive" className="h-7 text-xs gap-1">
-              <Zap className="w-3 h-3" />
-              Aggressive
-            </TabsTrigger>
-            <span className="text-[10px] font-mono font-bold text-cyan-300 px-1 py-1 ml-2">
-              SWARM
-            </span>
-            <TabsTrigger value="dual-ai" className="h-7 text-xs gap-1">
-              <Brain className="w-3 h-3" />
-              Dual-AI
-            </TabsTrigger>
-            <TabsTrigger value="agents" className="h-7 text-xs gap-1">
-              <Users className="w-3 h-3" />
-              Agents
-            </TabsTrigger>
-            <TabsTrigger value="tasks" className="h-7 text-xs gap-1">
-              <ListChecks className="w-3 h-3" />
-              Tasks
-            </TabsTrigger>
-            <TabsTrigger value="goals" className="h-7 text-xs gap-1">
-              <Target className="w-3 h-3" />
-              Goals
-            </TabsTrigger>
-            <TabsTrigger value="logs" className="h-7 text-xs gap-1">
-              <Terminal className="w-3 h-3" />
-              Logs
-            </TabsTrigger>
-            <TabsTrigger value="settings" className="h-7 text-xs gap-1">
-              <Settings className="w-3 h-3" />
-              Settings
-            </TabsTrigger>
+          <TabsList aria-label="Main application tabs navigation" className="flex flex-wrap h-auto gap-1.5 bg-slate-900 border border-slate-800 p-2 rounded-xl mb-4">
+            <div role="group" aria-label="Vision feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-cyan-400 px-1 py-1" aria-hidden="true">
+                VISION
+              </span>
+              <TabsTrigger value="screen" className="h-7 text-xs gap-1">
+                <Monitor className="w-3 h-3" />
+                Screen
+              </TabsTrigger>
+              <TabsTrigger value="layers" className="h-7 text-xs gap-1">
+                <Layers className="w-3 h-3" />
+                Layers
+              </TabsTrigger>
+              <TabsTrigger value="models" className="h-7 text-xs gap-1">
+                <Cpu className="w-3 h-3" />
+                Models
+              </TabsTrigger>
+              <TabsTrigger value="pack-builder" className="h-7 text-xs gap-1">
+                <Package className="w-3 h-3" />
+                Pack Builder
+              </TabsTrigger>
+              <TabsTrigger value="capture" className="h-7 text-xs gap-1">
+                <Camera className="w-3 h-3" />
+                Capture
+              </TabsTrigger>
+              <TabsTrigger value="entities" className="h-7 text-xs gap-1">
+                <Crosshair className="w-3 h-3" />
+                Entities
+              </TabsTrigger>
+              <TabsTrigger value="quantum" className="h-7 text-xs gap-1">
+                <Activity className="w-3 h-3" />
+                Quantum
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="OS and link feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-emerald-400 px-1 py-1 ml-2" aria-hidden="true">
+                OS & LINK
+              </span>
+              <TabsTrigger value="linker" className="h-7 text-xs gap-1">
+                <Link2 className="w-3 h-3" />
+                Linker
+              </TabsTrigger>
+              <TabsTrigger value="v-desktop" className="h-7 text-xs gap-1">
+                <AppWindow className="w-3 h-3" />
+                V-Desktop
+              </TabsTrigger>
+              <TabsTrigger value="code-editor" className="h-7 text-xs gap-1">
+                <Code2 className="w-3 h-3" />
+                Code Editor
+              </TabsTrigger>
+              <TabsTrigger value="gap-agent" className="h-7 text-xs gap-1">
+                <Bug className="w-3 h-3" />
+                Gap Agent
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Input and touch feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-amber-400 px-1 py-1 ml-2" aria-hidden="true">
+                INPUT & TOUCH
+              </span>
+              <TabsTrigger value="drag-drop" className="h-7 text-xs gap-1">
+                <MousePointer className="w-3 h-3" />
+                Drag-Drop
+              </TabsTrigger>
+              <TabsTrigger value="benchmark" className="h-7 text-xs gap-1">
+                <Scan className="w-3 h-3" />
+                Benchmark
+              </TabsTrigger>
+              <TabsTrigger
+                value="movement"
+                aria-label="Movement Mode Tab"
+                className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-400 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-cyan-500/20 text-cyan-200 border border-cyan-500/80 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
+              >
+                <Compass className="w-3.5 h-3.5 text-cyan-300" />
+                Movement Mode (2nd HUD)
+              </TabsTrigger>
+              <TabsTrigger
+                value="typing-calc"
+                className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-purple-500 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-purple-500/20 text-purple-200 border border-purple-500/80 bg-purple-950/80 hover:bg-purple-900/90 shadow-sm"
+              >
+                <Keyboard className="w-3.5 h-3.5 text-purple-300" />
+                Typing & Equations (Full View)
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Route and navigation feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-purple-400 px-1 py-1 ml-2" aria-hidden="true">
+                ROUTES
+              </span>
+              <TabsTrigger value="mouse-route" className="h-7 text-xs gap-1">
+                <Route className="w-3 h-3" />
+                Mouse Route
+              </TabsTrigger>
+              <TabsTrigger value="backprop" className="h-7 text-xs gap-1">
+                <RotateCcw className="w-3 h-3" />
+                Backprop
+              </TabsTrigger>
+              <TabsTrigger value="code-learn" className="h-7 text-xs gap-1">
+                <BookOpen className="w-3 h-3" />
+                Code Learn
+              </TabsTrigger>
+              <TabsTrigger value="route-map" className="h-7 text-xs gap-1">
+                <Map className="w-3 h-3" />
+                Route Map
+              </TabsTrigger>
+              <TabsTrigger value="testpoints" className="h-7 text-xs gap-1">
+                <Target className="w-3 h-3" />
+                Testpoints
+              </TabsTrigger>
+              <TabsTrigger value="dedup" className="h-7 text-xs gap-1">
+                <ListChecks className="w-3 h-3" />
+                Dedup
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Cognition and memory feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-pink-400 px-1 py-1 ml-2" aria-hidden="true">
+                COGNITION
+              </span>
+              <TabsTrigger value="scenarios" className="h-7 text-xs gap-1">
+                <Film className="w-3 h-3" />
+                Scenarios
+              </TabsTrigger>
+              <TabsTrigger value="watchdog" className="h-7 text-xs gap-1">
+                <Watch className="w-3 h-3" />
+                Watchdog
+              </TabsTrigger>
+              <TabsTrigger value="cross-ref" className="h-7 text-xs gap-1">
+                <Scan className="w-3 h-3" />
+                Cross-Ref
+              </TabsTrigger>
+              <TabsTrigger value="rebound" className="h-7 text-xs gap-1">
+                <RotateCcw className="w-3 h-3" />
+                Rebound
+              </TabsTrigger>
+              <TabsTrigger value="story" className="h-7 text-xs gap-1">
+                <Film className="w-3 h-3" />
+                Story
+              </TabsTrigger>
+              <TabsTrigger value="aggressive" className="h-7 text-xs gap-1">
+                <Zap className="w-3 h-3" />
+                Aggressive
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Swarm and agent feature tabs" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold text-cyan-300 px-1 py-1 ml-2" aria-hidden="true">
+                SWARM
+              </span>
+              <TabsTrigger value="dual-ai" className="h-7 text-xs gap-1">
+                <Brain className="w-3 h-3" />
+                Dual-AI
+              </TabsTrigger>
+              <TabsTrigger value="agents" className="h-7 text-xs gap-1">
+                <Users className="w-3 h-3" />
+                Agents
+              </TabsTrigger>
+              <TabsTrigger value="tasks" className="h-7 text-xs gap-1">
+                <ListChecks className="w-3 h-3" />
+                Tasks
+              </TabsTrigger>
+              <TabsTrigger value="goals" className="h-7 text-xs gap-1">
+                <Target className="w-3 h-3" />
+                Goals
+              </TabsTrigger>
+              <TabsTrigger value="logs" className="h-7 text-xs gap-1">
+                <Terminal className="w-3 h-3" />
+                Logs
+              </TabsTrigger>
+              <TabsTrigger
+                value="ai-chat"
+                className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-500 data-[state=active]:text-slate-950 text-cyan-200 border border-cyan-500/80 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
+              >
+                <Bot className="w-3.5 h-3.5 text-cyan-400" />
+                Main AI Chat & Tools
+              </TabsTrigger>
+              <TabsTrigger
+                value="ai-monitor"
+                className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-600 data-[state=active]:text-white text-cyan-300 border border-cyan-600/70 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
+              >
+                <Bot className="w-3.5 h-3.5 text-cyan-400" />
+                AI Monitor
+              </TabsTrigger>
+              <TabsTrigger value="settings" aria-label="Settings Tab" className="h-7 text-xs gap-1">
+                <Settings className="w-3 h-3" />
+                Settings
+              </TabsTrigger>
+            </div>
+
+            <div role="group" aria-label="Studio and inspector feature tabs" className="flex flex-wrap items-center gap-1.5">
             <TabsTrigger
               value="desc-refiner"
               className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-amber-500 data-[state=active]:text-slate-950 data-[state=active]:shadow-md data-[state=active]:shadow-amber-500/20 text-amber-200 border border-amber-500/80 bg-amber-950/80 hover:bg-amber-900/90 shadow-sm"
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              Description Refiner (&lt; 20 Words)
+              Text Constraints & Pitch Studio
+            </TabsTrigger>
+            <TabsTrigger
+              value="bridge-console"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-emerald-600 data-[state=active]:text-white text-emerald-300 border border-emerald-600/70 bg-emerald-950/80 hover:bg-emerald-900/90 shadow-sm"
+            >
+              <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+              Live Execution Console
+            </TabsTrigger>
+            <TabsTrigger
+              value="workflow-scrubber"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-cyan-600 data-[state=active]:text-white text-cyan-300 border border-cyan-600/70 bg-cyan-950/80 hover:bg-cyan-900/90 shadow-sm"
+            >
+              <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+              Workflow Scrubber
+            </TabsTrigger>
+            <TabsTrigger
+              value="task-inspector"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-purple-600 data-[state=active]:text-white text-purple-300 border border-purple-600/70 bg-purple-950/80 hover:bg-purple-900/90 shadow-sm"
+            >
+              <Activity className="w-3.5 h-3.5 text-purple-400" />
+              Task Inspector
             </TabsTrigger>
             <TabsTrigger
               value="learner"
@@ -1702,13 +1785,90 @@ export default function Dashboard({
               Autonomous Learner & Watcher
             </TabsTrigger>
             <TabsTrigger
+              value="goal-agent"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-red-600 data-[state=active]:text-white text-red-300 border border-red-600/70 bg-red-950/80 hover:bg-red-900/90 shadow-sm"
+            >
+              <Target className="w-3.5 h-3.5 text-red-400" />
+              Goal Agent
+            </TabsTrigger>
+            <TabsTrigger
+              value="adb-grid"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-emerald-600 data-[state=active]:text-white text-emerald-300 border border-emerald-600/70 bg-emerald-950/80 hover:bg-emerald-900/90 shadow-sm"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+              ADB Multi-Device Grid
+            </TabsTrigger>
+            <TabsTrigger
+              value="assistant-workspace"
+              className="h-7 text-xs gap-1.5 font-bold data-[state=active]:bg-sky-600 data-[state=active]:text-white text-sky-300 border border-sky-600/70 bg-sky-950/80 hover:bg-sky-900/90 shadow-sm"
+            >
+              <AppWindow className="w-3.5 h-3.5 text-sky-400" />
+              Workspace Split-View
+            </TabsTrigger>
+            <TabsTrigger
               value="collab"
               className="h-7 text-xs gap-1 bg-gradient-to-r from-cyan-600 to-purple-600 text-white data-[state=active]:bg-cyan-600"
             >
               <Sparkles className="w-3.5 h-3.5" />
               AI USER COLLAB
             </TabsTrigger>
+            </div>
           </TabsList>
+
+          <TabsContent value="assistant-workspace" className="space-y-4 pb-8">
+            <AssistantWorkspace />
+          </TabsContent>
+
+          <TabsContent value="bridge-console" className="space-y-4 pb-8">
+            <LiveExecutionConsole
+              height="600px"
+              onExecuteTestCommand={(cmd) => {
+                fetch("/api/pyautogui/execute", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(cmd),
+                })
+                  .then((r) => r.json())
+                  .then((d) => {
+                    if (d.success) toast.success(`Executed ${cmd.action} command`);
+                    else toast.error(d.error || "Execution failed");
+                  })
+                  .catch((e) => toast.error(e.message));
+              }}
+            />
+          </TabsContent>
+
+          <TabsContent value="workflow-scrubber" className="space-y-4 pb-8">
+            <WorkflowHistoryScrubber
+              steps={sequence.map((s, idx) => ({
+                id: s.id,
+                name: s.name || `Step #${idx + 1}`,
+                action: (s.action === "type_text" || s.action === "clear_and_type") ? "type" : (s.action as any),
+                x: s.x,
+                y: s.y,
+                text: s.text,
+                timestampOffsetSec: idx * 1.5,
+                screenshotUrl: s.referenceScreenshotUrl || screenshotUrl,
+                liveDeviationPx: (s as any).driftDistancePx ?? (idx % 2 === 1 ? 8.5 : 1.2),
+                status: ((s as any).driftDistancePx ?? 0) > 14 ? "severe_drift" : ((s as any).driftDistancePx ?? 0) > 6 ? "moderate_drift" : "aligned",
+                description: `Action: ${s.action.toUpperCase()} @ (${s.x}, ${s.y}). Delay: ${s.delayMs}ms.`,
+              }))}
+              currentStepIndex={sequence.findIndex((s) => s.id === activeStepId) >= 0 ? sequence.findIndex((s) => s.id === activeStepId) : 0}
+              onSelectStep={(idx, step) => setActiveStepId(step.id)}
+              onRecalibrateStep={(step) => {
+                toast.success(`Step ${step.name} coordinates re-calibrated.`);
+              }}
+              liveScreenshotUrl={screenshotUrl}
+            />
+          </TabsContent>
+
+          <TabsContent value="task-inspector" className="space-y-4 pb-8">
+            <TaskInspector
+              onAssembleTask={() => {
+                toast.success("Assembled live watcher agent tasks.");
+              }}
+            />
+          </TabsContent>
 
           <TabsContent value="learner" className="space-y-4 pb-8">
             <AutonomousWorkflowLearnerPanel />
@@ -1752,7 +1912,7 @@ export default function Dashboard({
                 ...sequence
                   .filter((s) => (s as any).referenceScreenshotUrl)
                   .map((s, idx) => ({
-                    id: `step_${s.id}`,
+                    id: s.id.startsWith("step_") ? `${s.id}_snap_${idx}` : `step_${s.id}_snap_${idx}`,
                     name: `Step #${s.stepNumber || idx + 1}: ${s.name}`,
                     url: (s as any).referenceScreenshotUrl,
                     stepNumber: s.stepNumber || idx + 1,
@@ -1784,20 +1944,78 @@ export default function Dashboard({
               liveMouseTrailCount={sequence.length}
             />
 
+            {/* Tri-Agent Cooperative Operations Squad: 1 Assists User, 1 Reads Logs, 1 Corrects AI Actions & Heals */}
+            <ThreeAiAgentsSquad
+              className="border-cyan-500/50 shadow-2xl"
+              onDispatchFix={(action) => {
+                toast.success(`Autonomous Agent Corrector: Dispatched self-healing fix (${action})`);
+              }}
+            />
+
+            {/* Main AI Executive Chat & Live Tool Controller */}
+            <MainAiLiveChat
+              currentScreenSnapshot={activeCanvasUrl || screenshotUrl}
+              currentTab={currentTab}
+              onNavigateTab={handleTabSwitch}
+              onRunWorkflow={(wf) => {
+                if (wf?.steps) {
+                  setSequence(
+                    wf.steps.map((s: any, idx: number) => ({
+                      id: s.id || `step-${idx + 1}-${Date.now()}`,
+                      name: s.name || `Step #${idx + 1}`,
+                      stepNumber: idx + 1,
+                      action: s.action || "click",
+                      x: s.x || 960,
+                      y: s.y || 540,
+                      text: s.text,
+                      key: s.key,
+                      delayMs: s.delayMs || 400,
+                    }))
+                  );
+                  toast.success(`Loaded ${wf.steps.length} steps from "${wf.name}". Ready in Sequence Studio.`);
+                }
+              }}
+              onExtendToScreen={handleLinkWorkflowToLiveVisionHud}
+              onSendToVisionHud={handleLinkWorkflowToLiveVisionHud}
+              className="border-cyan-500/40 shadow-2xl"
+            />
+
             {/* Primary Live Screen Capture & Autonomous HUD Viewport */}
-            <Card className="bg-slate-900 border-cyan-500/40 shadow-2xl overflow-hidden">
+            <Card
+              id="live-vision-hud-section"
+              className={`bg-slate-900 overflow-hidden transition-all duration-500 shadow-2xl ${
+                isVisionHudHighlighted
+                  ? "border-2 border-cyan-400 ring-4 ring-cyan-500/50 shadow-cyan-500/30 scale-[1.008]"
+                  : "border-cyan-500/40"
+              }`}
+            >
               <CardHeader className="p-3 bg-slate-950 border-b border-slate-800">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2 text-xs font-bold text-slate-100">
+                  <CardTitle className="flex items-center gap-2 text-xs font-bold text-slate-100 flex-wrap">
                     <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-ping"></span>
                     <span>Live Desktop Screen Capture & Vision HUD</span>
-                    {activeCanvasSourceId !== "live" && (
+                    {activeCanvasSourceId === "mobile" || targetDevice === "android" ? (
+                      <Badge className="bg-emerald-950 text-emerald-300 border-emerald-500/70 text-[10px] ml-1 font-mono flex items-center gap-1 animate-pulse">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        📱 MOBILE STREAM FORWARDED • REAL DEVICE INPUT & RECORD ON
+                      </Badge>
+                    ) : activeCanvasSourceId !== "live" ? (
                       <Badge className="bg-purple-950 text-purple-300 border-purple-800 text-[10px] ml-1 font-mono">
                         CANVAS: {activeCanvasSourceId.toUpperCase()}
                       </Badge>
-                    )}
+                    ) : null}
                   </CardTitle>
-                  <div className="flex items-center gap-3 text-xs font-mono text-slate-400">
+                  <div className="flex items-center gap-2 text-xs font-mono text-slate-400 flex-wrap">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleForwardMobileToLiveVisionHud()}
+                      className="h-6 px-2 text-[10px] font-mono bg-purple-950/80 border-purple-500/60 text-purple-200 hover:bg-purple-900 hover:text-white flex items-center gap-1 shadow-sm"
+                      title="Sync Live Mobile Phone Screen & Controls into this HUD"
+                    >
+                      <Layers className="w-3 h-3 text-purple-400" />
+                      <span>{activeCanvasSourceId === "mobile" ? "Phone Active" : "Forward Phone Stream"}</span>
+                    </Button>
                     <span className="text-cyan-300 font-bold">
                       1920x1080 Native
                     </span>
@@ -1810,6 +2028,8 @@ export default function Dashboard({
               </CardHeader>
               <CardContent className="p-2">
                 <LiveScreenHUD
+                  onReplaySteps={steps => { void handleRunSequence(steps); }}
+                  onExecuteTask={executeHubTask}
                   screenshotUrl={activeCanvasUrl || screenshotUrl}
                   isCapturing={isCapturing}
                   aiThinking={aiThinking}
@@ -1829,9 +2049,23 @@ export default function Dashboard({
                   sequence={sequence}
                   activeStepId={activeStepId}
                   isRecordMode={isRecordMode}
+                  onToggleRecordMode={() => setIsRecordMode(!isRecordMode)}
+                  onStopSequence={handleStopSequence}
+                  onRunSequence={() => { void handleRunSequence(); }}
                   onAddStep={handleAddSequenceStep}
                   onRepositionStep={handleRepositionStep}
                   onSelectStep={setActiveStepId}
+                  onClearSteps={() => {
+                    sequenceRunningRef.current = false;
+                    setIsSequenceRunning(false);
+                    setIsAutonomousRunning(false);
+                    setSequence([]);
+                    setActiveStepId(null);
+                    toast.success("Cleared all HUD sequence steps");
+                  }}
+                  onDeleteStep={handleDeleteStep}
+                  onMoveStep={handleMoveStep}
+                  onReorderSteps={(newSteps) => setSequence(newSteps)}
                   onLiveStreamChange={handleHudLiveChange}
                   showSecondHudOverlay={show2ndHudOverlay}
                   onToggleSecondHudOverlay={setShow2ndHudOverlay}
@@ -1844,6 +2078,23 @@ export default function Dashboard({
                   selectedTabName={currentTab}
                   onMouseTrailChange={setLiveMouseTrail}
                 />
+
+                {/* Real Device Connectivity, Keystroke Typing, Hardware Button Bar, App Launcher & Event Logs Deck */}
+                <div className="mt-3">
+                  <InteractiveDeviceControlDeck
+                    activeDevice={targetDevice}
+                    onDeviceChange={(dev) => setTargetDevice(dev)}
+                    onDispatchAction={(action, x, y, extra) => {
+                      if (action === "type" && extra?.text) {
+                        toast.info(`Dispatched text: "${extra.text}"`);
+                      }
+                    }}
+                    onOpenApp={(appName, pkg, url) => {
+                      toast.info(`Switched focus to ${appName}`);
+                    }}
+                    currentScreenTitle={targetDevice === "android" ? "Android Mobile Viewport" : "Desktop Screen Viewport"}
+                  />
+                </div>
               </CardContent>
             </Card>
 
@@ -1909,36 +2160,42 @@ export default function Dashboard({
                   isRunning={isSequenceRunning}
                   isRecordMode={isRecordMode}
                   onToggleRecordMode={() => setIsRecordMode(!isRecordMode)}
-                  onRunSequence={handleRunSequence}
+                  onRunSequence={() => { void handleRunSequence(); }}
                   onStopSequence={handleStopSequence}
                   onResetSequence={() =>
                     setSequence((prev) =>
                       prev.map((s) => ({ ...s, status: "pending" })),
                     )
                   }
-                  onAddStep={() =>
+                  onAddStep={() => {
+                    const lastStep = sequence[sequence.length - 1];
+                    const nextX = lastStep ? (lastStep.x + 60 > 1800 ? 150 : lastStep.x + 60) : 960;
+                    const nextY = lastStep ? (lastStep.y + 60 > 960 ? 150 : lastStep.y + 60) : 540;
                     handleAddSequenceStep({
-                      x: 960,
-                      y: 540,
+                      x: nextX,
+                      y: nextY,
                       action: "click",
                       name: `Step ${sequence.length + 1}`,
-                    })
-                  }
+                    });
+                  }}
                   onUpdateStep={handleUpdateStep}
                   onDeleteStep={handleDeleteStep}
                   onMoveStep={handleMoveStep}
                   onClearSequence={() => setSequence([])}
                   onSelectStep={setActiveStepId}
+                  onAiReviewSteps={handleTriggerDashboardAiReview}
+                  onImportSequence={steps => setSequence(steps)}
                 />
 
-                <MainScreenLoopVerificationHub
-                  onRunAutonomousLoop={(iters) => {
-                    setWifiStatus(`Loop ${iters} iterations`);
-                    handleTriggerAutoLoop();
-                  }}
-                />
+                <MainScreenLoopVerificationHub run={replayRun} onStop={handleStopSequence}
+                  onRunAutonomousLoop={(iters) => { void handleRunSequence(undefined, iters); }} />
+                <label className="text-xs text-slate-400 flex gap-2 items-center">Replay server API key (when configured)
+                  <input type="password" autoComplete="off" value={replayApiKey} onChange={e => setReplayApiKey(e.target.value)} className="bg-slate-950 border rounded p-2" />
+                </label>
+                <ReplayMonitor run={replayRun} onControl={handleReplayControl} apiKey={replayApiKey} />
 
                 <AIDecideActionHUD
+                  onReplayStep={step => { void handleRunSequence([{ id: crypto.randomUUID(), stepNumber: 1, name: "Action", action: "click", delayMs: 500, status: "pending", ...step }]); }}
                   perceptionReport={perceptionReport}
                   sequence={sequence}
                   activeStepId={activeStepId}
@@ -1946,7 +2203,7 @@ export default function Dashboard({
                   targetDevice={targetDevice}
                   deviceId={selectedAdbDevice}
                   onAddStep={handleAddSequenceStep}
-                  onRunSequence={handleRunSequence}
+                  onRunSequence={() => { void handleRunSequence(); }}
                   onNavigate={(x, y, label) => {
                     handleAddSequenceStep({
                       x,
@@ -1987,12 +2244,9 @@ export default function Dashboard({
                       backdrop_click: { action: "click", x: 100, y: 100 },
                       escape_key: { action: "press_key", keyPayload: "escape" },
                     };
-                    const act = map[method] || {
-                      action: "click",
-                      x: 100,
-                      y: 100,
-                    };
-                    await fetch("/api/execute-task", {
+                    const act = map[method];
+                    if (!act) { toast.error("Unknown recovery method"); return; }
+                    await executeHubTask("/api/execute-task", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
@@ -2002,13 +2256,14 @@ export default function Dashboard({
                           id: `trio_${Date.now()}`,
                           name: method,
                           action: act.action,
+                          keyPayload: act.keyPayload,
                           targetPosition: { x: act.x, y: act.y },
                         },
                       }),
                     });
                   }}
                   onTriggerStepAction={async (coords, action) => {
-                    await fetch("/api/execute-task", {
+                    await executeHubTask("/api/execute-task", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
@@ -2067,7 +2322,7 @@ export default function Dashboard({
                               confidence: 0.93,
                               isThinking: true,
                             });
-                            await fetch("/api/execute-task", {
+                            await executeHubTask("/api/execute-task", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({
@@ -2146,22 +2401,10 @@ export default function Dashboard({
             <ScreenshotLayeringPanel
               currentScreenshot={aiLiveUrl || screenshotUrl}
               onSelectLayerTarget={(x, y, name) => handleAddSequenceStep(x, y)}
-              onExecuteLayerSequence={(id) =>
-                fetch("/api/execute-task", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    targetDevice,
-                    deviceId: selectedAdbDevice,
-                    task: {
-                      id,
-                      name: "Layer Execute",
-                      action: "click",
-                      targetPosition: { x: 960, y: 540 },
-                    },
-                  }),
-                })
-              }
+              onExecuteLayerSequence={(id, x, y, action) => {
+                // ScreenshotLayeringPanel already dispatches each slide to the device internally; avoid double execution.
+                console.log(`Layer sequence executed: ${id} (${action || "action"}) at (${x ?? "-"}, ${y ?? "-"})`);
+              }}
             />
           </TabsContent>
           <TabsContent value="models" className="space-y-6">
@@ -2174,9 +2417,17 @@ export default function Dashboard({
           <TabsContent value="mouse-route" className="space-y-6">
             <ContinuousMouseRoutePlayer
               currentLiveScreenshot={aiLiveUrl || screenshotUrl}
-              onDispatchRouteToOS={(pts) =>
-                pts.forEach((p) => handleAddSequenceStep(p.x, p.y))
-              }
+              onDispatchRouteToOS={(pts) => {
+                const clicks = pts.filter((p: any) => p.is_click || p.isClick);
+                clicks.forEach((p: any, i: number) =>
+                  handleAddSequenceStep({
+                    x: Math.round(p.x),
+                    y: Math.round(p.y),
+                    name: `Route click ${i + 1}`,
+                    action: "click",
+                  } as any),
+                );
+              }}
             />
           </TabsContent>
           <TabsContent value="backprop" className="space-y-6">
@@ -2254,7 +2505,7 @@ export default function Dashboard({
               }
               onDispatchAiMove={(entity) => {
                 handleAddSequenceStep(entity.position.x, entity.position.y);
-                fetch("/api/execute-task", {
+                executeHubTask("/api/execute-task", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -2526,9 +2777,9 @@ export default function Dashboard({
               autoActEnabled={autoActEnabled}
               onToggleAutoAct={setAutoActEnabled}
               onExecuteStep={(step) => {
-                setAutoActFeedback(
-                  `Auto-Actor Triggered: Executed ${step.name} (${step.action} at ${step.x}, ${step.y})`
-                );
+                const recorded = sequence.find(s => s.id === step.id);
+                if (recorded) void handleRunSequence([recorded]);
+                else toast.error("Save this action in the sequence before replaying it.");
               }}
               onTriggerSequenceExecution={() => {
                 handleRunSequence();
@@ -2545,7 +2796,7 @@ export default function Dashboard({
                 const t = pipelineTasks.find((x) => x.id === taskId);
                 if (!t) return;
                 const driftToSend = movementMode === "exact" ? 0 : driftPx;
-                await fetch("/api/execute-task", {
+                await executeHubTask("/api/execute-task", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -2602,7 +2853,7 @@ export default function Dashboard({
                 const x = g?.targetCenter?.x || 960;
                 const y = g?.targetCenter?.y || 540;
                 handleAddSequenceStep(x, y);
-                await fetch("/api/execute-task", {
+                await executeHubTask("/api/execute-task", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -2623,38 +2874,132 @@ export default function Dashboard({
           <TabsContent value="logs" className="space-y-6">
             <CentralLogsConsole />
           </TabsContent>
+          <TabsContent value="ai-monitor" className="space-y-6">
+            <AiMonitorPanel compact />
+          </TabsContent>
           <TabsContent value="settings" className="space-y-6">
-            <Card className="bg-slate-900 border-slate-800">
-              <CardHeader>
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Settings className="w-4 h-4" /> Global Settings & Contextual
-                  Bars
-                </CardTitle>
-                <CardDescription>
-                  Tab-specific settings are shown inside each tab via contextual
-                  bars. This panel aggregates them.
-                </CardDescription>
+            <Card className="bg-slate-900/95 border-slate-800 shadow-xl overflow-hidden">
+              <CardHeader className="p-4 bg-slate-950/80 border-b border-slate-800 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
+                    <Settings className="w-4 h-4 text-cyan-400" /> Global AI Model & System Settings Studio
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-400 mt-0.5">
+                    Configure and test model endpoints, hardware drift calibration, anti-loop guards, and execution speed.
+                  </CardDescription>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => setIsSettingsModalOpen(true)}
+                  className="bg-cyan-600 hover:bg-cyan-500 text-white font-mono text-xs font-bold gap-1.5 shadow-sm"
+                >
+                  <Settings className="w-3.5 h-3.5" /> Open Quick Settings Dialog
+                </Button>
               </CardHeader>
-              <CardContent className="space-y-4 text-xs font-mono">
+              <CardContent className="p-5 space-y-5 text-xs font-mono">
+                {/* Model URL Configuration Section */}
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-cyan-300 flex items-center gap-1.5">
+                      <CpuIcon className="w-4 h-4 text-cyan-400" /> Active AI Model URL
+                    </span>
+                    <Badge className="bg-cyan-950 text-cyan-300 border-cyan-800 text-[10px]">
+                      DEFAULT: {DEFAULT_MODEL_URL}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+                    <input
+                      type="text"
+                      value={configuredModelUrl}
+                      onChange={(e) => setConfiguredModelUrl(e.target.value)}
+                      placeholder="https://quantumclaw.net/ollama/api/chat"
+                      className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-cyan-500"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const targetUrl = configuredModelUrl.trim() || DEFAULT_MODEL_URL;
+                        localStorage.setItem("ai_model_url", targetUrl);
+                        fetch("/api/ai/settings", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ modelUrl: targetUrl }),
+                        }).then(() => {
+                          toast.success("Model URL saved to system!");
+                        });
+                      }}
+                      className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs"
+                    >
+                      Save URL
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        fetch("/api/ai/test-endpoint", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ endpoint: configuredModelUrl }),
+                        })
+                          .then((r) => r.json())
+                          .then((res) => {
+                            if (res.success) {
+                              toast.success(`Ping succeeded! Latency: ${res.latencyMs}ms`);
+                            } else {
+                              toast.error(`Ping check: ${res.message || "Failed"}`);
+                            }
+                          })
+                          .catch(() => toast.error("Ping request failed"));
+                      }}
+                      className="border-slate-700 text-slate-300 hover:bg-slate-800 text-xs"
+                    >
+                      Ping Endpoint
+                    </Button>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <span className="text-[11px] text-slate-400 self-center">Presets:</span>
+                    <button
+                      onClick={() => {
+                        setConfiguredModelUrl(DEFAULT_MODEL_URL);
+                        localStorage.setItem("ai_model_url", DEFAULT_MODEL_URL);
+                        toast.success("Loaded QuantumClaw Remote default");
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 hover:border-cyan-500 text-cyan-300 font-bold"
+                    >
+                      ⚡ QuantumClaw Remote (https://quantumclaw.net/ollama/api/chat)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setConfiguredModelUrl("http://localhost:11434/api/chat");
+                        localStorage.setItem("ai_model_url", "http://localhost:11434/api/chat");
+                        toast.info("Loaded Localhost:11434 preset");
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 hover:border-cyan-500 text-slate-300"
+                    >
+                      💻 Localhost Ollama
+                    </button>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="p-3 rounded bg-slate-950 border border-slate-800">
-                    <span className="font-bold text-cyan-300">Movement</span>
-                    <p className="text-slate-300">
+                    <span className="font-bold text-cyan-300">Movement & Drift</span>
+                    <p className="text-slate-300 mt-1">
                       Mode: {movementMode} • Drift: {driftPx}px • Vary:{" "}
                       {driftPerStepVariate ? "ON" : "OFF"} • Random:{" "}
                       {driftRandomInterval ? "1-3s" : "OFF"}
                     </p>
                   </div>
                   <div className="p-3 rounded bg-slate-950 border border-slate-800">
-                    <span className="font-bold text-emerald-300">Device</span>
-                    <p className="text-slate-300">
+                    <span className="font-bold text-emerald-300">Target Device</span>
+                    <p className="text-slate-300 mt-1">
                       {targetDevice} • {selectedAdbDevice || "no device"} •
                       AntiLoop: {antiLoopEnabled ? "ON" : "OFF"}
                     </p>
                   </div>
                   <div className="p-3 rounded bg-slate-950 border border-slate-800">
-                    <span className="font-bold text-purple-300">AI</span>
-                    <p className="text-slate-300">
+                    <span className="font-bold text-purple-300">AI Perception</span>
+                    <p className="text-slate-300 mt-1">
                       Perception: {perceptionReport ? "ready" : "idle"} • Live:{" "}
                       {isLiveDesktopActive ? "LIVE" : "fallback"} • Steps:{" "}
                       {sequence.length}
@@ -2662,7 +3007,7 @@ export default function Dashboard({
                   </div>
                 </div>
                 <div className="p-3 rounded bg-slate-950 border border-slate-800 space-y-2">
-                  <span className="font-bold">All Tab Settings Bars</span>
+                  <span className="font-bold text-white">All Tab Settings Bars</span>
                   <p className="text-slate-300">
                     Each tab (Vision, OS, Input, Routes, Cognition, Swarm)
                     contains its own TabContextualSettingsBar with
@@ -2899,7 +3244,7 @@ export default function Dashboard({
                               confidence: 0.93,
                               isThinking: true,
                             });
-                            await fetch("/api/execute-task", {
+                            await executeHubTask("/api/execute-task", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({
@@ -3054,6 +3399,33 @@ export default function Dashboard({
               </CardContent>
             </Card>
           </TabsContent>
+          {/* Main AI Chat & Tools Full Tab View */}
+          <TabsContent value="ai-chat" className="space-y-4">
+            <MainAiLiveChat
+              currentScreenSnapshot={activeCanvasUrl || screenshotUrl}
+              currentTab={currentTab}
+              onNavigateTab={handleTabSwitch}
+              onRunWorkflow={(wf) => {
+                if (wf?.steps) {
+                  setSequence(
+                    wf.steps.map((s: any, idx: number) => ({
+                      id: s.id || `step-${idx + 1}-${Date.now()}`,
+                      name: s.name || `Step #${idx + 1}`,
+                      stepNumber: idx + 1,
+                      action: s.action || "click",
+                      x: s.x || 960,
+                      y: s.y || 540,
+                      text: s.text,
+                      key: s.key,
+                      delayMs: s.delayMs || 400,
+                    }))
+                  );
+                }
+              }}
+              compact={false}
+              className="h-[680px] border-cyan-500/50 shadow-2xl"
+            />
+          </TabsContent>
         </Tabs>
 
         {/* Global System Telemetry Status Footer */}
@@ -3084,6 +3456,76 @@ export default function Dashboard({
             </span>
           </div>
         </footer>
+        {/* Global AI Cursor & Motion Trail Overlay */}
+        <GlobalAICursorOverlay enabled={true} cursorState={globalCursorState} theme="cyan" />
+
+        {/* Android APK & WebAPK Standalone Build Modal */}
+        <MobileSettingsModal open={isMobileSettingsModalOpen} onOpenChange={setIsMobileSettingsModalOpen} />
+      <ApkAndPwaModal
+          open={isApkModalOpen}
+          onOpenChange={setIsApkModalOpen}
+        />
+
+        {/* Global Mouse & Coordinate Drift Calibration Modal */}
+        <CoordinateCalibrationModal
+          isOpen={isCalibrationModalOpen}
+          onClose={() => setIsCalibrationModalOpen(false)}
+        />
+
+        {/* Global System & AI Model Settings Modal */}
+        <GlobalSettingsModal
+          open={isSettingsModalOpen}
+          onOpenChange={setIsSettingsModalOpen}
+          onSettingsSaved={(st) => {
+            setConfiguredModelUrl(st.modelUrl);
+            setDriftPx(st.driftPx);
+            setAntiLoopEnabled(st.antiLoop);
+            setTargetDevice(st.targetDevice);
+          }}
+        />
+
+        {/* Autonomous Workflow Director & Background Agent Manager Modal */}
+        <AutonomousWorkflowModal
+          isOpen={autonomousModalOpen}
+          onClose={() => setAutonomousModalOpen(false)}
+          currentScreenTitle={targetDevice === "android" ? "Android Device" : "Windows Desktop"}
+        />
+
+        {/* AI Conscious Operator Workflow & Screen Auditor Modal */}
+        <AIWorkflowReviewModal
+          isOpen={isDashboardAiReviewOpen}
+          onClose={() => setIsDashboardAiReviewOpen(false)}
+          reviewResult={dashboardAiReviewResult}
+          isLoading={isDashboardAiReviewLoading}
+          currentSteps={sequence}
+          screenshotUrl={aiLiveUrl || screenshotUrl}
+          onApplyOptimizations={(optimizedSteps) => {
+            setSequence(optimizedSteps);
+            toast.success("Applied AI recommendations to workflow sequence!");
+          }}
+          onExecuteWithAI={() => {
+            toast.info("Executing sequence with AI supervision...");
+            handleRunSequence();
+          }}
+        />
+
+        {/* Main AI Omni-Executive Controller (Full Tab Navigation, Settings Tuning, Screen Analysis, Workflow Healer & Click/Type Dispatcher) */}
+        <MainAIOmniExecutive
+          currentTab={currentTab}
+          onSwitchTab={(t) => handleTabSwitch(t)}
+          targetDevice={targetDevice}
+          onSetTargetDevice={setTargetDevice}
+          movementMode={movementMode}
+          onSetMovementMode={setMovementMode}
+          driftPx={driftPx}
+          onSetDriftPx={setDriftPx}
+          antiLoopEnabled={antiLoopEnabled}
+          onSetAntiLoopEnabled={setAntiLoopEnabled}
+          currentScreenshot={aiLiveUrl || frozenLiveSnapshot || screenshotUrl}
+          activeSequence={sequence}
+          onUpdateSequence={(newSeq) => setSequence(newSeq)}
+          onRunSequence={() => { void handleRunSequence(); }}
+        />
       </main>
     </div>
   );

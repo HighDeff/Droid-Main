@@ -96,13 +96,14 @@ export function AutoActorEngineStudio({
           currentScreen: currentLiveScreenshot,
           expectedScreen: stepImg,
           step: stepToEvaluate,
-          autoActEnabled: autoActEnabled,
+          autoActEnabled: false,
           threshold: similarityThreshold / 100,
           modeTransition: "auto_actor_evaluation",
         }),
       });
 
       const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Comparison failed");
       if (data.success) {
         const resultPayload = {
           matched: Boolean(data.matched),
@@ -129,12 +130,13 @@ export function AutoActorEngineStudio({
           ...prev.slice(0, 9),
         ]);
 
-        if (data.autoActExecuted && onExecuteStep) {
+        if (autoActEnabled && data.matched && !continuousScan && onExecuteStep) {
+          onToggleAutoAct(false);
           onExecuteStep(stepToEvaluate);
         }
       }
     } catch (err) {
-      console.error("Auto-Actor AI comparison failed:", err);
+      setComparisonResult({ matched: false, similarityScore: 0, reason: err instanceof Error ? err.message : "Comparison failed", identifiedElements: [], timestamp: Date.now(), autoActExecuted: false });
     } finally {
       setIsComparing(false);
     }

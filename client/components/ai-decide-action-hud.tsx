@@ -47,6 +47,7 @@ interface AIDecideActionHUDProps {
     text: string,
     action?: "type_text" | "clear_and_type",
   ) => void;
+  onReplayStep?: (step: any) => void;
 }
 
 export const AIDecideActionHUD: React.FC<AIDecideActionHUDProps> = ({
@@ -212,11 +213,11 @@ export const AIDecideActionHUD: React.FC<AIDecideActionHUDProps> = ({
         }),
       });
       const data = await res.json();
-      setStatus(
-        data.success
-          ? `✓ Typed "${typeText}" @ (${typeX},${typeY})`
-          : `✗ Type failed: ${data.error}`,
-      );
+      if (!data.success) {
+        setStatus(`✗ Type failed: ${data.error || "Execution failed"}`);
+        return;
+      }
+      setStatus(`✓ Typed "${typeText}" @ (${typeX},${typeY})`);
       onTypeText?.(typeX, typeY, typeText, typeAction);
       // Also add as step for reusability
       onAddStep?.({

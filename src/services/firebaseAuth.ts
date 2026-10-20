@@ -30,6 +30,11 @@ provider.addScope('https://www.googleapis.com/auth/userinfo.email');
 let cachedAccessToken: string | null = null;
 let isSigningIn = false;
 
+/**
+ * Subscribes to Firebase auth state changes, invoking `onAuthSuccess` when a
+ * signed-in user has a cached Drive access token, or `onAuthFailure`
+ * otherwise. Returns the unsubscribe function.
+ */
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
@@ -49,6 +54,10 @@ export const initAuth = (
   });
 };
 
+/**
+ * Opens the Google sign-in popup, caching and returning the resulting user
+ * and Drive access token. Throws if no access token is obtained.
+ */
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
     isSigningIn = true;
@@ -68,14 +77,17 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
   }
 };
 
+/** Returns the currently cached Google Drive access token, if any. */
 export const getAccessToken = (): string | null => {
   return cachedAccessToken;
 };
 
+/** Sets or clears the cached Google Drive access token. */
 export const setAccessToken = (token: string | null) => {
   cachedAccessToken = token;
 };
 
+/** Signs the current user out of Firebase and clears the cached access token. */
 export const logout = async (): Promise<void> => {
   await signOut(auth);
   cachedAccessToken = null;

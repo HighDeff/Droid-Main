@@ -359,6 +359,7 @@ export const AICanvasScreenManager: React.FC<AICanvasScreenManagerProps> = ({
               </div>
             </div>
             <Switch
+              aria-label="2nd HUD Path Overlay in Live View"
               checked={show2ndHudOverlay}
               onCheckedChange={onToggle2ndHudOverlay}
             />
@@ -374,6 +375,7 @@ export const AICanvasScreenManager: React.FC<AICanvasScreenManagerProps> = ({
               </div>
             </div>
             <Switch
+              aria-label="Live Screen Backdrop in 2nd HUD"
               checked={showLiveIn2ndHud}
               onCheckedChange={onToggleLiveIn2ndHud}
             />
@@ -396,6 +398,7 @@ export const AICanvasScreenManager: React.FC<AICanvasScreenManagerProps> = ({
               </div>
             </div>
             <Switch
+              aria-label="Auto-Act on Screen Match"
               checked={autoActEnabled}
               onCheckedChange={onToggleAutoAct}
             />

@@ -26,10 +26,11 @@ export function ExecutionControlPanel({ plan }: { plan: AssistantPlan }) {
       ["completed", "cancelled", "failed"].includes(execution.status)
     )
       return;
+    const executionId = execution.id;
     const timer = window.setInterval(async () => {
       try {
         const response = await request<{ execution: AssistantExecution }>(
-          `/api/assistant/execution/${execution.id}`,
+          `/api/assistant/execution/${executionId}`,
         );
         setExecution(response.execution);
       } catch (cause) {
@@ -39,9 +40,9 @@ export function ExecutionControlPanel({ plan }: { plan: AssistantPlan }) {
             : "Could not refresh execution",
         );
       }
-    }, 500);
+    }, 1500);
     return () => window.clearInterval(timer);
-  }, [execution]);
+  }, [execution?.id, execution?.status]);
 
   const run = async () => {
     setError("");

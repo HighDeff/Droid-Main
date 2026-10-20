@@ -26,6 +26,8 @@ interface MainScreenLoopVerificationHubProps {
     iterations: number,
     requireUserClarification: boolean,
   ) => void;
+  run?: any;
+  onStop?: () => Promise<void>;
 }
 
 export const MainScreenLoopVerificationHub: React.FC<

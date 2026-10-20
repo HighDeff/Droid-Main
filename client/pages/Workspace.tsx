@@ -1,6 +1,5 @@
-import { AssistantWorkspace, AssistantView } from "@/components/assistant-workspace";
+import { AssistantWorkspace } from "@/components/assistant-workspace";
 
-export default function Workspace({ view }: { view?: AssistantView }) {
-  return <AssistantWorkspace view={view} />;
+export default function Workspace({ view = "workspace" }: { view?: string }) {
+  return <AssistantWorkspace view={view as any} />;
 }
-

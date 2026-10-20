@@ -14,6 +14,7 @@ export interface FrameViewport extends ViewportRect {
   scale: number;
 }
 
+/** Clamps a value to be non-negative. */
 const positive = (value: number) => Math.max(0, value);
 
 /**
@@ -49,6 +50,11 @@ export function getContainedFrameViewport(
   };
 }
 
+/**
+ * Converts client (viewport) pixel coordinates into frame pixel coordinates,
+ * clamped to the frame bounds. Returns `{x: 0, y: 0}` when the viewport has
+ * no valid scale.
+ */
 export function framePointFromClient(
   clientX: number,
   clientY: number,
@@ -73,6 +79,10 @@ export function framePointFromClient(
   };
 }
 
+/**
+ * Converts frame pixel coordinates into client (viewport) pixel coordinates
+ * for the given displayed viewport rectangle.
+ */
 export function clientPointFromFrame(
   x: number,
   y: number,
@@ -89,6 +99,10 @@ export function clientPointFromFrame(
   };
 }
 
+/**
+ * Expresses a frame coordinate as CSS percentage offsets (`left`/`top`)
+ * relative to the frame size, clamped within the frame bounds.
+ */
 export function framePointAsPercent(x: number, y: number, frame: FrameSize) {
   return {
     left: `${(positive(Math.min(frame.width, x)) / frame.width) * 100}%`,

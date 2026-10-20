@@ -55,54 +55,72 @@ export const ComparisonGallery: React.FC<ComparisonGalleryProps> = ({
   onAddNewStep,
   className = "",
 }) => {
+  const [variableFrameCount, setVariableFrameCount] = useState<number>(10);
+  const [driftCurveModel, setDriftCurveModel] = useState<"linear" | "exponential" | "s-curve" | "bell" | "progressive">("progressive");
+  const [aiDriftHelpEnabled, setAiDriftHelpEnabled] = useState<boolean>(true);
   const [frames, setFrames] = useState<GalleryFrame[]>([]);
   const [selectedFrameIndex, setSelectedFrameIndex] = useState<number>(0);
   const [compareFrameIndex, setCompareFrameIndex] = useState<number>(1);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
   const [isCrossReferencing, setIsCrossReferencing] = useState<boolean>(false);
   const [activeShiftPrompt, setActiveShiftPrompt] = useState<GalleryFrame | null>(null);
+  const [showDriftCurvePanel, setShowDriftCurvePanel] = useState<boolean>(true);
   const lastRecordedImageRef = useRef<string | null>(null);
 
-  // Initialize with initial or simulated frames if empty
+  // Generate or resize frames buffer according to variableFrameCount
   useEffect(() => {
-    if (frames.length === 0) {
-      const initialFrames: GalleryFrame[] = Array.from({ length: 10 }).map((_, i) => {
-        const timeAgo = (10 - i) * 3;
-        const isShift = i === 4 || i === 7;
+    setFrames((prev) => {
+      const targetCount = variableFrameCount;
+      if (prev.length === targetCount) return prev;
+
+      const newFrames: GalleryFrame[] = Array.from({ length: targetCount }).map((_, i) => {
+        const timeAgo = (targetCount - i) * 2.5;
+        const isShift = i === Math.floor(targetCount * 0.4) || i === Math.floor(targetCount * 0.7);
+
+        // Calculate progressive drift percentage according to selected curve model
+        let progress = i / Math.max(1, targetCount - 1);
+        let curveFactor = progress;
+        if (driftCurveModel === "exponential") {
+          curveFactor = Math.pow(progress, 2);
+        } else if (driftCurveModel === "s-curve") {
+          curveFactor = 3 * Math.pow(progress, 2) - 2 * Math.pow(progress, 3);
+        } else if (driftCurveModel === "bell") {
+          curveFactor = Math.sin(progress * Math.PI);
+        } else if (driftCurveModel === "progressive") {
+          curveFactor = Math.sqrt(progress);
+        }
+
+        const calculatedDelta = Math.min(80, Math.round(4 + curveFactor * 36 + (isShift ? 18 : 0)));
+
         return {
-          id: `init_frame_${i}`,
+          id: `frame_var_${i}_${Date.now()}`,
           index: i + 1,
-          timestamp: `-${timeAgo}s`,
+          timestamp: `-${timeAgo.toFixed(1)}s`,
           imageUrl:
             currentLiveScreenshot ||
-            `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="320" height="180" fill="%230f172a"/><rect x="20" y="20" width="280" height="30" rx="4" fill="%231e293b"/><circle cx="${40 + i * 24}" cy="100" r="16" fill="%2306b6d4"/><text x="160" y="145" fill="%2394a3b8" font-size="12" font-family="monospace" text-anchor="middle">Frame %23${i + 1}</text></svg>`,
-          deltaPercent: Math.min(68, Math.round(5 + i * 4.2 + (isShift ? 22 : 0))),
+            `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="320" height="180" fill="%230f172a"/><rect x="20" y="20" width="280" height="30" rx="4" fill="%231e293b"/><circle cx="${30 + i * (260 / targetCount)}" cy="100" r="14" fill="%2306b6d4"/><text x="160" y="145" fill="%2394a3b8" font-size="11" font-family="monospace" text-anchor="middle">Frame %23${i + 1} (${driftCurveModel})</text></svg>`,
+          deltaPercent: calculatedDelta,
           shiftDetected: isShift,
           activityShiftSummary: isShift
-            ? i === 4
-              ? "New modal dialog popped open with 'Confirm' button at (780, 520)"
-              : "Navigation bar collapsed and search input focused at (450, 95)"
+            ? i === Math.floor(targetCount * 0.4)
+              ? `State transition at Frame #${i + 1}: Interactive target displacement with +${(curveFactor * 14).toFixed(1)}px drift`
+              : `Navigation flow shift at Frame #${i + 1}: Cross-referenced UI element anchor moved`
             : undefined,
           suggestedAction: isShift
             ? {
                 action: "click",
-                x: i === 4 ? 780 : 450,
-                y: i === 4 ? 520 : 95,
-                name: i === 4 ? "Click Confirm Dialog" : "Focus Search Field",
-                description:
-                  i === 4
-                    ? "Modal transition detected. Step clicks confirmation button."
-                    : "Viewport resized. Step inputs search filter.",
+                x: 780 + Math.round(curveFactor * 60),
+                y: 520 + Math.round(curveFactor * 40),
+                name: `Replay Step Frame #${i + 1} (${(curveFactor * 100).toFixed(0)}% Drift)`,
+                description: `Autonomous intervention at frame step #${i + 1} using ${driftCurveModel} drift curve.`,
               }
             : undefined,
         };
       });
-      setFrames(initialFrames);
-      if (initialFrames[4]?.shiftDetected) {
-        setActiveShiftPrompt(initialFrames[4]);
-      }
-    }
-  }, []);
+
+      return newFrames;
+    });
+  }, [variableFrameCount, driftCurveModel]);
 
   // Automatically sample fresh live screenshot when it changes significantly
   useEffect(() => {
@@ -113,8 +131,6 @@ export const ComparisonGallery: React.FC<ComparisonGalleryProps> = ({
 
     setFrames((prev) => {
       const now = new Date().toLocaleTimeString();
-      const lastFrame = prev[prev.length - 1];
-      // Random/heuristic delta calculation
       const calculatedDelta = Math.min(85, Math.max(4, Math.floor(Math.random() * 32) + 6));
       const hasSignificantShift = calculatedDelta > 16;
 
@@ -126,15 +142,15 @@ export const ComparisonGallery: React.FC<ComparisonGalleryProps> = ({
         deltaPercent: calculatedDelta,
         shiftDetected: hasSignificantShift,
         activityShiftSummary: hasSignificantShift
-          ? `Significant visual state change (${calculatedDelta}% delta). New UI interactive element discovered.`
+          ? `Significant visual state change (${calculatedDelta}% delta). Progressive frame anchor updated.`
           : undefined,
         suggestedAction: hasSignificantShift
           ? {
               action: "click",
               x: 960 + Math.floor((Math.random() - 0.5) * 400),
               y: 540 + Math.floor((Math.random() - 0.5) * 300),
-              name: `Interact with New State (Frame #${prev.length + 1})`,
-              description: `Autonomous recommendation for detected activity shift (${calculatedDelta}% change).`,
+              name: `Step Intervention (Frame #${prev.length + 1})`,
+              description: `Autonomous next-step recommendation (${calculatedDelta}% change).`,
             }
           : undefined,
       };
@@ -143,11 +159,11 @@ export const ComparisonGallery: React.FC<ComparisonGalleryProps> = ({
         setActiveShiftPrompt(newFrame);
       }
 
-      // Keep strictly 10 recent frames
+      // Maintain variableFrameCount capacity
       const updated = [...prev.slice(1), newFrame];
       return updated;
     });
-  }, [currentLiveScreenshot, autoUpdateEnabled]);
+  }, [currentLiveScreenshot, autoUpdateEnabled, variableFrameCount]);
 
   // Handle AI cross-reference trigger between two selected frames
   const handleCrossReference = async () => {
@@ -224,7 +240,7 @@ export const ComparisonGallery: React.FC<ComparisonGalleryProps> = ({
   return (
     <Card className={`border-slate-800 bg-slate-900/90 shadow-xl overflow-hidden ${className}`}>
       <CardHeader className="p-4 pb-2 border-b border-slate-800/80 bg-slate-950/60">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-lg bg-cyan-950 border border-cyan-500/70 text-cyan-400">
               <Layers className="w-5 h-5" />
@@ -232,19 +248,36 @@ export const ComparisonGallery: React.FC<ComparisonGalleryProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <CardTitle className="text-sm sm:text-base font-bold text-white tracking-wide">
-                  Comparison Gallery (10 Recent Frames)
+                  Comparison Gallery ({variableFrameCount} Sequential Frames)
                 </CardTitle>
                 <Badge variant="outline" className="text-[10px] font-mono border-cyan-600 bg-cyan-950 text-cyan-300">
                   AUTO-UPDATE: {autoUpdateEnabled ? "ON" : "PAUSED"}
                 </Badge>
+                <Badge variant="outline" className="text-[10px] font-mono border-purple-600 bg-purple-950 text-purple-300 uppercase">
+                  {driftCurveModel} CURVE
+                </Badge>
               </div>
               <CardDescription className="text-xs text-slate-300 font-mono">
-                Cross-references recent frames, measures visual activity shifts, and prompts step creation when shifts occur.
+                Cross-references recent frames across variable start-to-finish drift distribution with AI per-move recalibration.
               </CardDescription>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowDriftCurvePanel(!showDriftCurvePanel)}
+              className={`h-7 text-xs font-mono font-bold ${
+                showDriftCurvePanel
+                  ? "border-purple-600 bg-purple-950 text-purple-300"
+                  : "border-slate-700 bg-slate-900 text-slate-300"
+              }`}
+            >
+              <Sliders className="w-3 h-3 mr-1" />
+              Drift Curve Settings
+            </Button>
+
             <Button
               size="sm"
               variant="outline"
@@ -273,6 +306,102 @@ export const ComparisonGallery: React.FC<ComparisonGalleryProps> = ({
       </CardHeader>
 
       <CardContent className="p-4 space-y-4">
+        {/* Variable Frame Split & Drift Curve Distribution Settings Panel */}
+        {showDriftCurvePanel && (
+          <div className="p-3 rounded-xl bg-slate-950 border border-purple-900/50 shadow-inner space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              {/* Frame Count Split Choice */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-bold text-slate-300">
+                  Frame Split Buffer:
+                </span>
+                <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800">
+                  {[5, 8, 10, 12, 16, 20].map((cnt) => (
+                    <button
+                      key={cnt}
+                      onClick={() => setVariableFrameCount(cnt)}
+                      className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold transition-all ${
+                        variableFrameCount === cnt
+                          ? "bg-cyan-600 text-white shadow-sm"
+                          : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      {cnt}f
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Drift Curve Model Choice */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-bold text-slate-300">
+                  Start-to-Finish Drift Distribution:
+                </span>
+                <select
+                  value={driftCurveModel}
+                  onChange={(e) => setDriftCurveModel(e.target.value as any)}
+                  className="px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-xs font-mono text-purple-300 focus:outline-none"
+                >
+                  <option value="progressive">Progressive (Square Root Curve)</option>
+                  <option value="linear">Linear (Constant Gradient)</option>
+                  <option value="exponential">Exponential (Late Stage Acceleration)</option>
+                  <option value="s-curve">S-Curve (Sigmoid Smooth Transition)</option>
+                  <option value="bell">Bell Curve (Peak Mid-Way Drift)</option>
+                </select>
+              </div>
+
+              {/* AI Help Checkbox */}
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={aiDriftHelpEnabled}
+                  onChange={(e) => setAiDriftHelpEnabled(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-cyan-500 rounded"
+                />
+                <span className="text-xs font-mono font-bold text-cyan-300 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-cyan-400" />
+                  AI Replay Drift Recalibration
+                </span>
+              </label>
+            </div>
+
+            {/* Start to Finish Drift Progression Node Tracker */}
+            <div className="pt-2 border-t border-slate-900 space-y-1.5">
+              <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                <span className="text-emerald-400">Frame #1 (Start Baseline: 0% Δ)</span>
+                <span className="text-purple-400">Trajectory Compensation Curve: {driftCurveModel}</span>
+                <span className="text-amber-400">Frame #{variableFrameCount} (Finish Goal: Maximum Δ)</span>
+              </div>
+              <div className="flex items-center gap-1">
+                {frames.map((f, i) => {
+                  const factor = i / Math.max(1, frames.length - 1);
+                  return (
+                    <div
+                      key={f.id}
+                      className="flex-1 flex flex-col items-center gap-1 group cursor-pointer"
+                      onClick={() => setSelectedFrameIndex(i)}
+                    >
+                      <div
+                        className={`w-full h-2 rounded transition-all ${
+                          selectedFrameIndex === i
+                            ? "bg-cyan-400 ring-2 ring-cyan-300"
+                            : f.shiftDetected
+                            ? "bg-amber-400 animate-pulse"
+                            : "bg-slate-800 group-hover:bg-slate-700"
+                        }`}
+                        title={`Frame #${f.index} • Δ${f.deltaPercent}%`}
+                      />
+                      <span className="text-[9px] font-mono text-slate-500 group-hover:text-slate-300">
+                        F{f.index}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Significant Activity Shift AI Prompt Banner */}
         {activeShiftPrompt && (
           <div className="p-3.5 rounded-xl bg-gradient-to-r from-amber-950/80 via-slate-900 to-amber-950/80 border-2 border-amber-500/80 shadow-lg shadow-amber-950/30 flex flex-col md:flex-row md:items-center justify-between gap-3 animate-in fade-in slide-in-from-top duration-300">
@@ -326,12 +455,12 @@ export const ComparisonGallery: React.FC<ComparisonGalleryProps> = ({
           </div>
         )}
 
-        {/* 10 Recent Frames Horizontal Strip */}
+        {/* Recent Frames Strip */}
         <div>
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-mono font-bold text-slate-300 flex items-center gap-1.5">
               <History className="w-3.5 h-3.5 text-cyan-400" />
-              10 Recent Sequential Frames (Click to Select / Compare):
+              {variableFrameCount} Sequential Frames (Click to Select / Compare):
             </span>
             <span className="text-[11px] font-mono text-slate-400">
               Primary: <b className="text-cyan-400">F#{primaryFrame?.index}</b> | Compare:{" "}
@@ -339,7 +468,17 @@ export const ComparisonGallery: React.FC<ComparisonGalleryProps> = ({
             </span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-5 md:grid-cols-10 gap-2">
+          <div
+            className={`grid gap-2 ${
+              variableFrameCount <= 5
+                ? "grid-cols-2 sm:grid-cols-5"
+                : variableFrameCount <= 8
+                ? "grid-cols-2 sm:grid-cols-4 md:grid-cols-8"
+                : variableFrameCount <= 12
+                ? "grid-cols-3 sm:grid-cols-6 md:grid-cols-12"
+                : "grid-cols-4 sm:grid-cols-8 md:grid-cols-10"
+            }`}
+          >
             {frames.map((frame, idx) => {
               const isSelected = selectedFrameIndex === idx;
               const isCompare = compareFrameIndex === idx;

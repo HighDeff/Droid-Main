@@ -152,12 +152,21 @@ export const ContinuousMouseRoutePlayer: React.FC<
         setStatusLog(
           `✓ Physical OS mouse executed continuous route successfully.`,
         );
+      } else {
+        setStatusLog(
+          `❌ Execution failed: ${data.error || data.message || "Failed to execute route"}`,
+        );
+        setIsPlayingRoute(false);
+        return;
       }
     } catch (err) {
       console.error("Route playback error:", err);
+      setStatusLog(`❌ Network error while executing route`);
+      setIsPlayingRoute(false);
+      return;
     }
 
-    // Also animate visual playback in frontend
+    // Also animate visual playback in frontend and global AI cursor overlay
     let idx = 0;
     const interval = setInterval(
       () => {
@@ -168,6 +177,20 @@ export const ContinuousMouseRoutePlayer: React.FC<
           return;
         }
         setCurrentPlaybackIndex(idx);
+        const pt = routePoints[idx];
+        if (pt && typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("ai-cursor-action", {
+              detail: {
+                x: pt.x,
+                y: pt.y,
+                action: pt.is_click ? "clicking" : pt.is_drag ? "dragging" : "moving",
+                targetLabel: `Route Waypoint #${idx + 1}`,
+                isActing: true,
+              },
+            })
+          );
+        }
         idx++;
       },
       Math.max(15, Math.floor(35 / speedMultiplier)),

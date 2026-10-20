@@ -5,7 +5,7 @@ import type {
   TimingHint,
   WaitCondition,
 } from "@shared/assistant";
-import { Check, Pencil, ShieldAlert, Sparkles, X } from "lucide-react";
+import { Check, Pencil, ShieldAlert, Sparkles, X, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -73,12 +73,14 @@ export function PlanReview({
   onChange,
   onApprove,
   onReject,
+  onRegenerate,
   busy,
 }: {
   plan: AssistantPlan;
   onChange: (plan: AssistantPlan) => void;
   onApprove: () => void;
   onReject: () => void;
+  onRegenerate?: () => void;
   busy: boolean;
 }) {
   const updateStep = (stepId: string, patch: Partial<PlannedStep>) => {
@@ -99,9 +101,24 @@ export function PlanReview({
             Nothing executes until you explicitly approve this exact plan.
           </p>
         </div>
-        <Badge className="border-amber-400/20 bg-amber-400/10 text-amber-300">
-          {plan.approvalState.replace("_", " ")}
-        </Badge>
+        <div className="flex items-center gap-2">
+          {onRegenerate && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onRegenerate}
+              disabled={busy}
+              className="h-7 text-xs border-cyan-400/30 text-cyan-300 hover:bg-cyan-950/40 gap-1 font-medium"
+              title="Regenerate plan using original instruction"
+            >
+              <RotateCcw className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
+              Regenerate
+            </Button>
+          )}
+          <Badge className="border-amber-400/20 bg-amber-400/10 text-amber-300">
+            {plan.approvalState.replace("_", " ")}
+          </Badge>
+        </div>
       </div>
       <div className="mt-4 space-y-3">
         {plan.steps.map((step) => (
@@ -309,6 +326,7 @@ export function InstructionPlanningPanel() {
             onChange={setPlan}
             onApprove={() => void savePlan(plan, "approve")}
             onReject={() => void savePlan(plan, "reject")}
+            onRegenerate={prepare}
             busy={busy}
           />
           {plan.approvalState === "approved" && (

@@ -70,7 +70,7 @@ export interface WorkflowSlide {
 interface ScreenshotLayeringProps {
   currentScreenshot?: string;
   onSelectLayerTarget?: (x: number, y: number, name: string) => void;
-  onExecuteLayerSequence?: (slideId: string) => void;
+  onExecuteLayerSequence?: (slideId: string, x?: number, y?: number, action?: string) => void;
 }
 
 export const ScreenshotLayeringPanel: React.FC<ScreenshotLayeringProps> = ({
@@ -313,6 +313,42 @@ export const ScreenshotLayeringPanel: React.FC<ScreenshotLayeringProps> = ({
         `[Step ${currentStep + 1}/${slides.length}] Executing ${slide.actionType.toUpperCase()} at (${slide.targetX}, ${slide.targetY}) with ${flowrateSpeed}px/s flowrate...`,
       );
 
+      // Handle OCR verification without click dispatch
+      if (slide.actionType === "ocr_verify") {
+        let ocrFound = false;
+        let ocrDetail = "no screen capture available";
+        if (currentScreenshot) {
+          try {
+            const res = await fetch("/api/ocr/analyze", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ image: currentScreenshot }),
+            });
+            const data = await res.json();
+            const expected = slide.ocrExpectedText?.trim() || "";
+            const haystack = (data.text || "").toLowerCase();
+            ocrFound = expected ? haystack.includes(expected.toLowerCase()) : false;
+            ocrDetail = expected
+              ? ocrFound
+                ? `verified "${expected}" on screen`
+                : `expected "${expected}" NOT found on screen`
+              : "no expected OCR text specified";
+          } catch (e) {
+            ocrDetail = `verify error: ${String(e).slice(0, 60)}`;
+          }
+        }
+        setExecutionLog(
+          (prev) => prev + ` | OCR ${ocrFound ? "✓" : "✗"} ${ocrDetail}`,
+        );
+        if (requireOcrGate && !ocrFound) {
+          setIsPlayingReplication(false);
+          setExecutionLog((prev) => prev + " | ⛔ OCR gate failed — replication halted");
+          return;
+        }
+        await new Promise((r) => setTimeout(r, Math.max(300, 1200 - flowrateSpeed / 4)));
+        continue;
+      }
+
       // Dispatch to live OS for real pyautogui execution
       try {
         const payload: any = {
@@ -355,7 +391,6 @@ export const ScreenshotLayeringPanel: React.FC<ScreenshotLayeringProps> = ({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        onExecuteLayerSequence?.(slide.id);
       } catch (e) {
         console.warn("Layer execution error:", e);
       }
@@ -770,7 +805,14 @@ export const ScreenshotLayeringPanel: React.FC<ScreenshotLayeringProps> = ({
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => onExecuteLayerSequence?.(activeSlide.id)}
+                  onClick={() =>
+                    onExecuteLayerSequence?.(
+                      activeSlide.id,
+                      activeSlide.targetX,
+                      activeSlide.targetY,
+                      activeSlide.actionType === "type" ? "type_text" : activeSlide.actionType,
+                    )
+                  }
                   className="w-full h-8 text-xs font-mono border-slate-700 hover:bg-slate-800"
                 >
                   Execute Slide #{activeSlide.slideNumber} Only

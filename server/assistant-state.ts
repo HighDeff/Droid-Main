@@ -246,7 +246,7 @@ export class AssistantStateRepository {
     if (!capture) return undefined;
     return this.updateResource("captures", captureId, sessionId, {
       annotations: [
-        ...(capture.annotations || []),
+        ...capture.annotations,
         { ...annotation, id: createId("annotation") },
       ],
     });

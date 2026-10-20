@@ -18,18 +18,42 @@ export interface GlobalAICursorState {
     | "moving"
     | "clicking"
     | "double_clicking"
+    | "right_clicking"
     | "typing"
     | "dragging"
     | "verifying";
   targetLabel?: string;
   textPayload?: string;
-  isActing: boolean;
+  isActing?: boolean;
 }
 
 export interface GlobalAICursorOverlayProps {
-  enabled: boolean;
+  enabled?: boolean;
   theme?: "cyan" | "purple" | "amber" | "emerald";
   cursorState?: GlobalAICursorState | null;
+}
+
+// Synthesize realistic subtle keypress tick sound via Web Audio API
+function playKeypressAudio() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(320 + Math.random() * 80, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(120, ctx.currentTime + 0.035);
+
+    gain.gain.setValueAtTime(0.04, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.035);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.04);
+  } catch {}
 }
 
 export const GlobalAICursorOverlay: React.FC<GlobalAICursorOverlayProps> = ({
@@ -38,12 +62,11 @@ export const GlobalAICursorOverlay: React.FC<GlobalAICursorOverlayProps> = ({
   cursorState,
 }) => {
   const [currentPos, setCurrentPos] = useState<{ x: number; y: number }>({
-    x: 960,
-    y: 540,
+    x: typeof window !== "undefined" ? window.innerWidth / 2 : 960,
+    y: typeof window !== "undefined" ? window.innerHeight / 2 : 540,
   });
-  const [trail, setTrail] = useState<{ x: number; y: number; id: number }[]>(
-    [],
-  );
+
+  const [trail, setTrail] = useState<{ x: number; y: number; id: number; opacity: number }[]>([]);
   const [ripples, setRipples] = useState<
     { id: string; x: number; y: number; action: string }[]
   >([]);
@@ -51,74 +74,127 @@ export const GlobalAICursorOverlay: React.FC<GlobalAICursorOverlayProps> = ({
   const [isTypingActive, setIsTypingActive] = useState(false);
 
   const trailCounter = useRef(0);
+  const animFrameRef = useRef<number | null>(null);
+  const currentPosRef = useRef(currentPos);
+  currentPosRef.current = currentPos;
 
-  // Sync with incoming cursor state or animate smoothly
+  // Convert 1920x1080 or normalized (0..1) coords to current viewport pixels
+  const normalizeToViewport = (rawX: number, rawY: number) => {
+    const vw = typeof window !== "undefined" ? window.innerWidth : 1920;
+    const vh = typeof window !== "undefined" ? window.innerHeight : 1080;
+
+    let targetX = rawX;
+    let targetY = rawY;
+
+    if (rawX <= 1.0 && rawY <= 1.0 && rawX >= 0 && rawY >= 0) {
+      targetX = rawX * vw;
+      targetY = rawY * vh;
+    } else if (rawX > 0 && rawX <= 1920 && rawY > 0 && rawY <= 1080) {
+      targetX = (rawX / 1920) * vw;
+      targetY = (rawY / 1080) * vh;
+    }
+
+    return {
+      x: Math.max(20, Math.min(vw - 20, Math.round(targetX))),
+      y: Math.max(20, Math.min(vh - 20, Math.round(targetY))),
+    };
+  };
+
+  // Sync with incoming cursor state and generate fluid curved motion trail
   useEffect(() => {
     if (!cursorState || !enabled) return;
 
-    const targetX = cursorState.x || 960;
-    const targetY = cursorState.y || 540;
+    const { x: destX, y: destY } = normalizeToViewport(cursorState.x || 960, cursorState.y || 540);
+    const startX = currentPosRef.current.x;
+    const startY = currentPosRef.current.y;
+    const dist = Math.hypot(destX - startX, destY - startY);
 
-    // Add trail point
-    trailCounter.current += 1;
-    const newPoint = { x: targetX, y: targetY, id: trailCounter.current };
+    // If there's movement, interpolate bezier steps with natural human curvature
+    const steps = Math.max(8, Math.min(24, Math.round(dist / 35)));
+    const controlX = (startX + destX) / 2 + (Math.random() - 0.5) * 45;
+    const controlY = (startY + destY) / 2 + (Math.random() - 0.5) * 45;
 
-    setTrail((prev) => [...prev.slice(-16), newPoint]);
-    setCurrentPos({ x: targetX, y: targetY });
+    let stepIdx = 0;
+    const interval = setInterval(() => {
+      stepIdx++;
+      const t = stepIdx / steps;
+      // Quadratic Bezier Interpolation
+      const curX = Math.round((1 - t) * (1 - t) * startX + 2 * (1 - t) * t * controlX + t * t * destX);
+      const curY = Math.round((1 - t) * (1 - t) * startY + 2 * (1 - t) * t * controlY + t * t * destY);
 
-    // Handle click shockwaves
-    if (
-      cursorState.action === "clicking" ||
-      cursorState.action === "double_clicking"
-    ) {
-      const ripId = `rip_${Date.now()}`;
-      setRipples((prev) => [
-        ...prev.slice(-4),
-        {
-          id: ripId,
-          x: targetX,
-          y: targetY,
-          action: cursorState.action.toUpperCase(),
-        },
-      ]);
-      setTimeout(() => {
-        setRipples((prev) => prev.filter((r) => r.id !== ripId));
-      }, 1000);
-    }
+      trailCounter.current += 1;
+      const newPoint = { x: curX, y: curY, id: trailCounter.current, opacity: 1 };
 
-    // Handle character-by-character typing animation
+      setTrail((prev) => [...prev.slice(-32), newPoint]);
+      setCurrentPos({ x: curX, y: curY });
+
+      if (stepIdx >= steps) {
+        clearInterval(interval);
+
+        // Click Shockwave
+        if (
+          cursorState.action === "clicking" ||
+          cursorState.action === "double_clicking" ||
+          cursorState.action === "right_clicking"
+        ) {
+          const ripId = `rip_${Date.now()}`;
+          setRipples((prev) => [
+            ...prev.slice(-5),
+            {
+              id: ripId,
+              x: destX,
+              y: destY,
+              action: cursorState.action.toUpperCase().replace("_", " "),
+            },
+          ]);
+          setTimeout(() => {
+            setRipples((prev) => prev.filter((r) => r.id !== ripId));
+          }, 900);
+        }
+      }
+    }, 16);
+
+    // Handle character-by-character typing animation with audio feedback
     if (cursorState.action === "typing" && cursorState.textPayload) {
       setIsTypingActive(true);
       const text = cursorState.textPayload;
       let charIdx = 0;
       setTypedChars("");
-      const typeInterval = setInterval(() => {
+
+      const typeTimer = setInterval(() => {
         if (charIdx <= text.length) {
           setTypedChars(text.slice(0, charIdx));
+          playKeypressAudio();
           charIdx++;
         } else {
-          clearInterval(typeInterval);
-          setTimeout(() => setIsTypingActive(false), 1200);
+          clearInterval(typeTimer);
+          setTimeout(() => setIsTypingActive(false), 1800);
         }
-      }, 60);
-      return () => clearInterval(typeInterval);
+      }, 55 + Math.floor(Math.random() * 25));
+
+      return () => {
+        clearInterval(interval);
+        clearInterval(typeTimer);
+      };
     } else {
       setIsTypingActive(false);
     }
+
+    return () => clearInterval(interval);
   }, [cursorState, enabled]);
 
-  // Clean up old trail points periodically
+  // Clean up old trail points periodically with fading opacity
   useEffect(() => {
     if (!enabled) return;
     const interval = setInterval(() => {
       setTrail((prev) => (prev.length > 0 ? prev.slice(1) : prev));
-    }, 90);
+    }, 60);
     return () => clearInterval(interval);
   }, [enabled]);
 
-  if (!enabled) return null;
+  if (!enabled || !cursorState) return null;
 
-  const themeColors = {
+  const colorPalettes = {
     cyan: {
       stroke: "#06b6d4",
       fill: "rgba(6, 182, 212, 0.4)",
@@ -151,9 +227,10 @@ export const GlobalAICursorOverlay: React.FC<GlobalAICursorOverlayProps> = ({
       bg: "bg-emerald-950/90 border-emerald-500",
       accent: "#34d399",
     },
-  }[theme];
+  };
+  const themeColors = colorPalettes[theme] || colorPalettes.cyan;
 
-  // Generate SVG spline path string from trail points
+  // Generate SVG path string from trail points
   const generateTrailPath = () => {
     if (trail.length < 2) return "";
     let d = `M ${trail[0].x} ${trail[0].y}`;
@@ -169,8 +246,13 @@ export const GlobalAICursorOverlay: React.FC<GlobalAICursorOverlayProps> = ({
       {/* 1. Motion Ribbon Trail SVG Overlay */}
       <svg className="w-full h-full absolute inset-0">
         <defs>
+          <linearGradient id="ai-trail-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.2" />
+            <stop offset="50%" stopColor="#a855f7" stopOpacity="0.8" />
+            <stop offset="100%" stopColor="#22d3ee" stopOpacity="1" />
+          </linearGradient>
           <filter id="trail-glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feGaussianBlur stdDeviation="3.5" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />
               <feMergeNode in="SourceGraphic" />
@@ -182,12 +264,12 @@ export const GlobalAICursorOverlay: React.FC<GlobalAICursorOverlayProps> = ({
           <path
             d={generateTrailPath()}
             fill="none"
-            stroke={themeColors.stroke}
-            strokeWidth="3"
+            stroke="url(#ai-trail-gradient)"
+            strokeWidth="3.5"
             strokeLinecap="round"
             strokeLinejoin="round"
             filter="url(#trail-glow)"
-            opacity="0.85"
+            opacity="0.9"
           />
         )}
 
@@ -197,9 +279,9 @@ export const GlobalAICursorOverlay: React.FC<GlobalAICursorOverlayProps> = ({
             key={pt.id}
             cx={pt.x}
             cy={pt.y}
-            r={2 + (idx / trail.length) * 3.5}
+            r={1.5 + (idx / trail.length) * 3.5}
             fill={themeColors.accent}
-            opacity={(idx / trail.length) * 0.9}
+            opacity={(idx / trail.length) * 0.95}
           />
         ))}
       </svg>
@@ -223,7 +305,7 @@ export const GlobalAICursorOverlay: React.FC<GlobalAICursorOverlayProps> = ({
       <div
         style={{
           transform: `translate(${currentPos.x}px, ${currentPos.y}px)`,
-          transition: "transform 0.08s ease-out",
+          transition: "transform 0.04s linear",
         }}
         className="absolute top-0 left-0 -translate-x-1 -translate-y-1 flex flex-col items-start pointer-events-none"
       >
@@ -268,7 +350,7 @@ export const GlobalAICursorOverlay: React.FC<GlobalAICursorOverlayProps> = ({
 
         {/* 4. Live Typing Keystroke Balloon (Animates character-by-character) */}
         {isTypingActive && (
-          <div className="mt-1 ml-4 px-2.5 py-1.5 rounded-lg bg-purple-950/95 border border-purple-500 text-purple-200 text-xs font-mono font-bold shadow-2xl flex items-center gap-2 backdrop-blur-md animate-in zoom-in-95">
+          <div className="mt-1.5 ml-4 px-2.5 py-1.5 rounded-lg bg-purple-950/95 border border-purple-500 text-purple-200 text-xs font-mono font-bold shadow-2xl flex items-center gap-2 backdrop-blur-md animate-in zoom-in-95">
             <Keyboard className="w-3.5 h-3.5 text-amber-400 animate-bounce" />
             <span>
               Typing:{" "}

@@ -85,7 +85,7 @@ export const handleAnalyzeAndAct: RequestHandler = async (req, res) => {
         const base64Data = activeImage.split(",")[1];
         const mimeType = activeImage.substring(activeImage.indexOf(":") + 1, activeImage.indexOf(";"));
         const response = await ai.models.generateContent({
-          model: "gemini-3.8-flash",
+          model: "gemini-2.5-flash",
           contents: [
             {
               role: "user",

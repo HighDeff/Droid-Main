@@ -151,6 +151,7 @@ export const TabContextualSettingsBar: React.FC<
                         {Boolean(st.value) ? "ON" : "OFF"}
                       </span>
                       <Switch
+                        aria-label={st.label}
                         checked={Boolean(st.value)}
                         onCheckedChange={() =>
                           handleToggleSwitch(st.id, Boolean(st.value))
@@ -163,6 +164,7 @@ export const TabContextualSettingsBar: React.FC<
                     <div className="flex items-center gap-2.5">
                       <div className="w-28 sm:w-40">
                         <Slider
+                          aria-label={st.label}
                           value={[
                             typeof st.value === "number" ? st.value : 50,
                           ]}

@@ -1,24 +1,29 @@
-export interface DriveFile {
-  id: string;
-  name: string;
-  mimeType: string;
-  size?: string;
-  modifiedTime?: string;
-  createdTime?: string;
-  starred?: boolean;
-  trashed?: boolean;
-  iconLink?: string;
-  thumbnailLink?: string;
-  webViewLink?: string;
-  webContentLink?: string;
-  parents?: string[];
-  owners?: Array<{
-    displayName?: string;
-    emailAddress?: string;
-    photoLink?: string;
-    me?: boolean;
-  }>;
-  shared?: boolean;
+export type ActiveSection =
+  | 'my-drive'
+  | 'shared'
+  | 'recent'
+  | 'starred'
+  | 'trash'
+  | 'storage'
+  | 'all';
+
+export type FileFilter =
+  | 'all'
+  | 'folders'
+  | 'documents'
+  | 'spreadsheets'
+  | 'presentations'
+  | 'images'
+  | 'videos'
+  | 'audio'
+  | 'archives'
+  | 'pdfs';
+
+export interface DriveUser {
+  displayName?: string;
+  emailAddress?: string;
+  photoLink?: string;
+  me?: boolean;
 }
 
 export interface StorageQuota {
@@ -28,34 +33,32 @@ export interface StorageQuota {
   usageInDriveTrash?: string;
 }
 
-export interface DriveAboutUser {
-  displayName?: string;
-  emailAddress?: string;
-  photoLink?: string;
-}
-
 export interface DriveAbout {
-  user?: DriveAboutUser;
+  user?: DriveUser;
   storageQuota?: StorageQuota;
 }
 
-export type ViewMode = 'grid' | 'list';
-
-export type ActiveSection = 'my-drive' | 'starred' | 'trash' | 'analytics';
-
-export type FileFilter = 'all' | 'folders' | 'documents' | 'spreadsheets' | 'presentations' | 'pdfs' | 'media';
-
-export interface BreadcrumbItem {
+export interface DriveFile {
   id: string;
   name: string;
-}
-
-export interface DestructiveActionConfig {
-  isOpen: boolean;
-  title: string;
-  message: string;
-  confirmLabel: string;
-  fileIds: string[];
-  fileNames: string[];
-  isPermanent: boolean;
+  mimeType: string;
+  size?: string;
+  modifiedTime?: string;
+  createdTime?: string;
+  iconLink?: string;
+  thumbnailLink?: string;
+  webViewLink?: string;
+  webContentLink?: string;
+  starred?: boolean;
+  trashed?: boolean;
+  parents?: string[];
+  owners?: DriveUser[];
+  shared?: boolean;
+  capabilities?: {
+    canEdit?: boolean;
+    canDelete?: boolean;
+    canShare?: boolean;
+    canRename?: boolean;
+    canDownload?: boolean;
+  };
 }

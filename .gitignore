@@ -1,8 +1,17 @@
-node_modules/
-build/
-dist/
-coverage/
-.DS_Store
-*.log
-.env*
+
 !.env.example
+"1"  
+"GameAI-MainApp-v2.5.0.apk"  
+"android-apk-project/"  
+"console.log('Server" 
+# Private on-device recordings copied to the host
+*.log
+*.tsbuildinfo
+.DS_Store
+.env*
+.phone-recordings/
+android-apk-project/
+build/
+coverage/
+dist/
+node_modules/

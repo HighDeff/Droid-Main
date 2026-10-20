@@ -3,6 +3,7 @@ import { DriveAbout, DriveFile, FileFilter } from '../types/drive';
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
+/** Fetches the authenticated user's Drive profile and storage quota information. */
 export async function fetchDriveAbout(accessToken: string): Promise<DriveAbout> {
   const res = await fetch(`${DRIVE_API_BASE}/about?fields=user,storageQuota`, {
     headers: {
@@ -28,6 +29,11 @@ interface ListFilesOptions {
   pageToken?: string;
 }
 
+/**
+ * Lists Drive files matching the given folder, search, starred/trashed, and
+ * mime-type filter options, building the Drive API query string and
+ * returning the resulting files along with a pagination token.
+ */
 export async function listDriveFiles(
   accessToken: string,
   options: ListFilesOptions = {}
@@ -132,6 +138,7 @@ export async function listDriveFiles(
   return res.json();
 }
 
+/** Creates a new folder in Drive under `parentId` (defaults to the root folder). */
 export async function createDriveFolder(
   accessToken: string,
   folderName: string,
@@ -160,6 +167,7 @@ export async function createDriveFolder(
   return res.json();
 }
 
+/** Creates a new blank Google Doc or Sheet in Drive under `parentId`. */
 export async function createBlankGoogleDoc(
   accessToken: string,
   docName: string,
@@ -189,6 +197,10 @@ export async function createBlankGoogleDoc(
   return res.json();
 }
 
+/**
+ * Uploads a local `File` to Drive under `parentId` using a multipart
+ * request that combines JSON metadata with the raw file bytes.
+ */
 export async function uploadFileToDrive(
   accessToken: string,
   file: File,
@@ -247,6 +259,7 @@ export async function uploadFileToDrive(
   return res.json();
 }
 
+/** Patches a Drive file's metadata (name, starred, or trashed state). */
 export async function updateDriveFile(
   accessToken: string,
   fileId: string,
@@ -269,6 +282,7 @@ export async function updateDriveFile(
   return res.json();
 }
 
+/** Permanently deletes a Drive file, bypassing the trash. */
 export async function deleteDriveFilePermanently(
   accessToken: string,
   fileId: string
@@ -286,6 +300,7 @@ export async function deleteDriveFilePermanently(
   }
 }
 
+/** Permanently deletes all files currently in the Drive trash. */
 export async function emptyDriveTrash(accessToken: string): Promise<void> {
   const res = await fetch(`${DRIVE_API_BASE}/files/trash`, {
     method: 'DELETE',

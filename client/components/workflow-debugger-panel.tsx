@@ -528,6 +528,45 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
     }
   };
 
+  // Re-execute a single failed step or small sequence of steps without restarting entire workflow
+  const handleRetrySegment = async (fromIndex?: number, toIndex?: number) => {
+    const startIdx = typeof fromIndex === "number" ? fromIndex : currentStepIndex;
+    const endIdx = typeof toIndex === "number" ? toIndex : startIdx;
+    const targetSteps = steps.slice(startIdx, endIdx + 1);
+
+    if (targetSteps.length === 0) return;
+
+    addLog(
+      `[RETRY SEGMENT] Re-executing ${targetSteps.length} step(s) [Steps #${startIdx + 1} to #${endIdx + 1}] without resetting workflow...`,
+      "info"
+    );
+
+    try {
+      const res = await fetch("/api/pyautogui/retry-segment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          steps: targetSteps,
+          segmentStartIndex: startIdx,
+          segmentEndIndex: endIdx,
+          reason: `Debugger retry segment: Steps #${startIdx + 1} to #${endIdx + 1}`,
+        }),
+      });
+
+      if (res.ok) {
+        addLog(
+          `[RETRY SEGMENT SUCCESS] Segment [Steps #${startIdx + 1} to #${endIdx + 1}] executed via PyAutoGUI bridge.`,
+          "success"
+        );
+      } else {
+        const data = await res.json();
+        addLog(`[RETRY SEGMENT WARN] ${data.error || "Execution completed with warnings."}`, "warn");
+      }
+    } catch (err) {
+      addLog(`Retry Segment Error: ${String(err)}`, "warn");
+    }
+  };
+
   const problematicCount = steps.filter(
     (s) => (s.driftDistancePx ?? Math.hypot(s.offsetX || 0, s.offsetY || 0)) > driftThresholdPx
   ).length;
@@ -735,6 +774,17 @@ export const WorkflowDebuggerPanel: React.FC<WorkflowDebuggerPanelProps> = ({
                 <span>Run to Breakpoint</span>
               </>
             )}
+          </Button>
+
+          {/* Targeted Retry Segment Feature */}
+          <Button
+            size="sm"
+            onClick={() => handleRetrySegment(currentStepIndex, currentStepIndex)}
+            className="h-7 px-3 text-xs font-bold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white gap-1.5 shadow-md shadow-cyan-950 border border-cyan-400/40"
+            title="Re-executes active failed automation step without needing to restart the entire workflow"
+          >
+            <RotateCcw className="w-3 h-3 text-cyan-200" />
+            <span>Retry Step #{currentStepIndex + 1}</span>
           </Button>
         </div>
 

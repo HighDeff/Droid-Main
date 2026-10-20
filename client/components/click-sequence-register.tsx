@@ -66,8 +66,14 @@ interface ClickSequenceRegisterProps {
   isRunning: boolean;
   isRecordMode: boolean;
   currentScreenshot?: string;
+  repeatCount?: number;
+  onRepeatCountChange?: (count: number) => void;
+  adDismissalEnabled?: boolean;
+  onToggleAdDismissal?: (enabled: boolean) => void;
+  fuzzyDriftTolerance?: boolean;
+  onToggleFuzzyDrift?: (enabled: boolean) => void;
   onToggleRecordMode: () => void;
-  onRunSequence: () => void;
+  onRunSequence: (repeatCount?: number) => void;
   onStopSequence: () => void;
   onResetSequence: () => void;
   onAddStep: () => void;
@@ -76,6 +82,9 @@ interface ClickSequenceRegisterProps {
   onMoveStep: (id: string, direction: "up" | "down") => void;
   onClearSequence: () => void;
   onSelectStep: (id: string) => void;
+  onAiReviewSteps?: () => void;
+  onImportSequence?: (steps: any) => void;
+  onExportSequence?: () => void;
 }
 
 export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
@@ -84,6 +93,12 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
   isRunning,
   isRecordMode,
   currentScreenshot,
+  repeatCount,
+  onRepeatCountChange,
+  adDismissalEnabled,
+  onToggleAdDismissal,
+  fuzzyDriftTolerance,
+  onToggleFuzzyDrift,
   onToggleRecordMode,
   onRunSequence,
   onStopSequence,
@@ -100,6 +115,34 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
   const [isAiRepeatEnabled, setIsAiRepeatEnabled] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<"steps" | "live_stream">("steps");
   const [draggedStepId, setDraggedStepId] = useState<string | null>(null);
+
+  const [internalRepeatCount, setInternalRepeatCount] = useState<number>(repeatCount ?? 1);
+  const currentRepeatCount = repeatCount ?? internalRepeatCount;
+  const setRepeatCount = onRepeatCountChange ?? setInternalRepeatCount;
+
+  const [internalAdDismiss, setInternalAdDismiss] = useState<boolean>(adDismissalEnabled ?? true);
+  const isAdDismiss = adDismissalEnabled ?? internalAdDismiss;
+  const setAdDismiss = onToggleAdDismissal ?? setInternalAdDismiss;
+
+  const [internalFuzzyDrift, setInternalFuzzyDrift] = useState<boolean>(fuzzyDriftTolerance ?? true);
+  const isFuzzyDrift = fuzzyDriftTolerance ?? internalFuzzyDrift;
+  const setFuzzyDrift = onToggleFuzzyDrift ?? setInternalFuzzyDrift;
+
+  // Attached screenshot preview modal and history picker
+  const [selectedScreenshotPreview, setSelectedScreenshotPreview] = useState<string | null>(null);
+  const [screenshotHistoryList, setScreenshotHistoryList] = useState<Array<{ id: string; url: string; timestamp: number }>>([]);
+  const [isHistoryPickerOpen, setIsHistoryPickerOpen] = useState<boolean>(false);
+  const [attachingStepId, setAttachingStepId] = useState<string | null>(null);
+
+  const fetchScreenshotHistory = async () => {
+    try {
+      const res = await fetch("/api/screenshots/history");
+      if (res.ok) {
+        const data = await res.json();
+        setScreenshotHistoryList(data.screenshots || []);
+      }
+    } catch {}
+  };
 
   // Live Activity Events Ledger (Logs Navigation, Clicks, and Typing as they happen)
   const [activityEvents, setActivityEvents] = useState<LiveActivityEvent[]>([
@@ -307,6 +350,55 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                 : "Record Actions on Screen"}
             </Button>
 
+            {/* Repeat Count Selector */}
+            <div className="flex items-center gap-1 bg-slate-900 px-2 py-1 rounded border border-slate-700 text-xs font-mono">
+              <RotateCcw className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="text-slate-400 font-bold text-[10px]">REPEAT:</span>
+              <Select
+                value={String(currentRepeatCount)}
+                onValueChange={(val) => setRepeatCount(Number(val))}
+              >
+                <SelectTrigger className="h-6 w-20 text-[11px] bg-slate-950 border-slate-700 font-bold text-cyan-300">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-950 border-slate-700 text-xs">
+                  <SelectItem value="1">1x (Once)</SelectItem>
+                  <SelectItem value="2">2x</SelectItem>
+                  <SelectItem value="3">3x</SelectItem>
+                  <SelectItem value="5">5x Cycles</SelectItem>
+                  <SelectItem value="10">10x Cycles</SelectItem>
+                  <SelectItem value="25">25x Cycles</SelectItem>
+                  <SelectItem value="50">50x Cycles</SelectItem>
+                  <SelectItem value="999">∞ Infinite</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Resilience Toggles: Ad & Popup Dismissal, Fuzzy Drift Tolerance */}
+            <button
+              onClick={() => setAdDismiss(!isAdDismiss)}
+              className={`h-7 px-2 text-[10px] rounded border font-mono font-bold flex items-center gap-1 transition-all ${
+                isAdDismiss
+                  ? "bg-amber-950/80 border-amber-500 text-amber-300 shadow-sm"
+                  : "bg-slate-900 border-slate-700 text-slate-500"
+              }`}
+              title="Automatically detect and dismiss ads and popups before executing each step"
+            >
+              <span>🛡️ Auto-Dismiss Ads</span>
+            </button>
+
+            <button
+              onClick={() => setFuzzyDrift(!isFuzzyDrift)}
+              className={`h-7 px-2 text-[10px] rounded border font-mono font-bold flex items-center gap-1 transition-all ${
+                isFuzzyDrift
+                  ? "bg-emerald-950/80 border-emerald-500 text-emerald-300 shadow-sm"
+                  : "bg-slate-900 border-slate-700 text-slate-500"
+              }`}
+              title="Fuzzy OCR anchor and drift tolerance for slight screen shifts"
+            >
+              <span>🎯 Fuzzy Anchor</span>
+            </button>
+
             {/* Run / Stop Sequence */}
             {isRunning ? (
               <Button
@@ -321,12 +413,11 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
             ) : (
               <Button
                 size="sm"
-                onClick={onRunSequence}
-                disabled={sequence.length === 0}
+                onClick={() => onRunSequence(currentRepeatCount)}
                 className="gap-1.5 text-xs font-semibold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg shadow-cyan-900/30"
               >
                 <Play className="w-3.5 h-3.5" />
-                Run Sequence
+                Run Sequence {currentRepeatCount > 1 ? `(${currentRepeatCount}x)` : ""}
               </Button>
             )}
 
@@ -528,16 +619,34 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                           >
                             {step.stepNumber}
                           </span>
-                          <div className="w-14 h-9 rounded border border-slate-700 overflow-hidden bg-black flex-shrink-0">
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (step.referenceScreenshotUrl) {
+                                setSelectedScreenshotPreview(step.referenceScreenshotUrl);
+                              } else {
+                                setAttachingStepId(step.id);
+                                fetchScreenshotHistory();
+                                setIsHistoryPickerOpen(true);
+                              }
+                            }}
+                            title={step.referenceScreenshotUrl ? "Click to view full reference screenshot" : "Click to attach screenshot from history or live frame"}
+                            className="w-14 h-9 rounded border border-slate-700 hover:border-cyan-400 cursor-pointer overflow-hidden bg-black flex-shrink-0 relative group transition-all"
+                          >
                             {step.referenceScreenshotUrl ? (
-                              <img
-                                src={step.referenceScreenshotUrl}
-                                alt={step.name}
-                                className="w-full h-full object-cover"
-                              />
+                              <>
+                                <img
+                                  src={step.referenceScreenshotUrl}
+                                  alt={step.name}
+                                  className="w-full h-full object-cover"
+                                />
+                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-[8px] text-cyan-300 font-bold">
+                                  View
+                                </div>
+                              </>
                             ) : (
-                              <div className="w-full h-full flex items-center justify-center text-[7px] text-slate-400">
-                                no img
+                              <div className="w-full h-full flex flex-col items-center justify-center text-[7px] text-slate-500 group-hover:text-cyan-300">
+                                <span>+ Snap</span>
                               </div>
                             )}
                           </div>
@@ -806,6 +915,110 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
           </ScrollArea>
         )}
       </CardContent>
+
+      {/* Attached Screenshot Full Preview Modal */}
+      {selectedScreenshotPreview && (
+        <div
+          onClick={() => setSelectedScreenshotPreview(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-3xl max-h-[85vh] bg-slate-950 border border-cyan-500/50 rounded-xl p-3 shadow-2xl flex flex-col items-center gap-2"
+          >
+            <div className="w-full flex items-center justify-between text-xs font-mono text-cyan-300 border-b border-slate-800 pb-2">
+              <span>Attached Reference Screenshot</span>
+              <button
+                onClick={() => setSelectedScreenshotPreview(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            <img
+              src={selectedScreenshotPreview}
+              alt="Reference Preview"
+              className="max-h-[70vh] object-contain rounded border border-slate-800"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Attach Screenshot from History Modal */}
+      {isHistoryPickerOpen && (
+        <div
+          onClick={() => setIsHistoryPickerOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-xl max-h-[80vh] bg-slate-950 border border-cyan-500/50 rounded-xl p-4 shadow-2xl flex flex-col font-mono text-xs"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+              <span className="font-bold text-slate-100 flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-cyan-400" />
+                Select Reference Screenshot
+              </span>
+              <button
+                onClick={() => setIsHistoryPickerOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Option to attach current screenshot */}
+            {currentScreenshot && (
+              <div className="mb-3 p-2 rounded bg-cyan-950/40 border border-cyan-500/50 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <img src={currentScreenshot} alt="Current" className="w-16 h-10 object-cover rounded border border-slate-700" />
+                  <span className="text-cyan-300 font-bold">Use Current Active Screen</span>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (attachingStepId) {
+                      onUpdateStep(attachingStepId, { referenceScreenshotUrl: currentScreenshot });
+                    }
+                    setIsHistoryPickerOpen(false);
+                  }}
+                  className="h-7 text-xs bg-cyan-600 hover:bg-cyan-500 text-white"
+                >
+                  Attach Current
+                </Button>
+              </div>
+            )}
+
+            <span className="text-[11px] text-slate-400 mb-2">Or choose from recent screenshot history ({screenshotHistoryList.length}):</span>
+
+            <div className="flex-1 overflow-y-auto grid grid-cols-3 gap-2 pr-1 max-h-[350px]">
+              {screenshotHistoryList.length === 0 ? (
+                <div className="col-span-3 text-center py-8 text-slate-500">
+                  No screenshot history captured yet. Run live mode to record frames.
+                </div>
+              ) : (
+                screenshotHistoryList.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => {
+                      if (attachingStepId) {
+                        onUpdateStep(attachingStepId, { referenceScreenshotUrl: item.url });
+                      }
+                      setIsHistoryPickerOpen(false);
+                    }}
+                    className="p-1 rounded bg-slate-900 border border-slate-800 hover:border-cyan-400 cursor-pointer group flex flex-col gap-1"
+                  >
+                    <img src={item.url} alt="History frame" className="w-full h-20 object-cover rounded" />
+                    <span className="text-[9px] text-slate-400 group-hover:text-cyan-300 truncate">
+                      {new Date(item.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 };

@@ -2,6 +2,7 @@ import { MobileSettingsModal } from "@/components/mobile-settings-modal";
 import type { ReplayRun } from "@shared/replay";
 import { ReplayMonitor } from "@/components/replay-monitor";
 import { generateDefaultMobileFrame, generateDefaultDesktopFrame } from "@/lib/mobile-screen-generator";
+import { prepareAiReviewFrame } from "@/lib/ai-review-frame";
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -221,6 +222,7 @@ export default function Dashboard({
     useState<RecalibrationNotice | null>(null);
   const [perceptionReport, setPerceptionReport] =
     useState<ScreenPerceptionReport | null>(null);
+  const perceptionScreenshotRef = useRef<string | null>(null);
   const [verificationBadge, setVerificationBadge] =
     useState<VerificationBadgeState | null>(null);
   const [isAutonomousRunning, setIsAutonomousRunning] = useState(false);
@@ -240,23 +242,23 @@ export default function Dashboard({
     setDashboardAiReviewResult(null);
 
     try {
-      const snap = aiLiveUrl || screenshotUrl;
+      const capture = await replayRequest("/api/replay/capture", { targetDevice, deviceId: selectedAdbDevice || undefined });
+      const frame = await prepareAiReviewFrame(capture.frame.image);
       const res = await fetch("/api/ai/review-steps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           steps: sequence,
-          screenshotUrl: snap,
+          screenshotUrl: frame.screenshotUrl,
+          frameSize: frame.frameSize,
           userObjective: userObjective || "Execute automated desktop task",
         }),
       });
       const data = await res.json();
-      if (data.success) {
-        setDashboardAiReviewResult(data);
+      if (!res.ok || !data.success) throw new Error(data.error || "AI workflow review failed.");
+      if (!Array.isArray(data.reviewedSteps)) throw new Error("AI review returned an incomplete response. Please retry.");
+      setDashboardAiReviewResult(data);
         toast.success(`🧠 AI Review: Score ${data.overallScore}%`);
-      } else {
-        toast.error(`Review failed: ${data.error || "Unknown error"}`);
-      }
     } catch (err: any) {
       toast.error(`Review error: ${err.message}`);
     } finally {
@@ -886,6 +888,7 @@ export default function Dashboard({
     if (sequenceRunningRef.current) return;
     const steps = Array.isArray(stepsToRun) ? stepsToRun : sequence;
     if (!steps.length) { toast.info("Add or record steps first."); return; }
+    if (steps.length * iterations > 100) { toast.error("A replay may include at most 100 actions. Reduce the step selection or iteration count."); return; }
     sequenceRunningRef.current = true;
     replayStopRequested.current = false;
     setIsSequenceRunning(true);
@@ -912,6 +915,19 @@ export default function Dashboard({
     await handleReplayControl("cancel");
     setIsRecordMode(false);
     toast.info("Stop requested. In-flight device actions cannot be undone; the monitor confirms when replay stops.");
+  };
+  const handleResetMasterWorkflow = async () => {
+    if (replayRun && ["running", "paused"].includes(replayRun.status)) {
+      await handleReplayControl("cancel");
+    }
+    replayIdRef.current = null;
+    sessionStorage.removeItem("screen-replay-id");
+    setReplayRun(null);
+    sequenceRunningRef.current = false;
+    setIsSequenceRunning(false);
+    setIsAutonomousRunning(false);
+    setActiveStepId(null);
+    setSequence((steps) => steps.map((step) => ({ ...step, status: "pending" })));
   };
   const executeHubTask = async (_url: string, options: RequestInit) => {
     const body = JSON.parse(String(options.body));
@@ -1037,6 +1053,7 @@ export default function Dashboard({
         message: "Perceive error: " + String(e).slice(0, 50),
       setScreenshotUrl(capture.frame.image);
       setAiLiveUrl(capture.frame.image);
+      perceptionScreenshotRef.current = capture.frame.image;
       const data = await replayRequest("/api/ai/describe-screen", {
         imageData: capture.frame.image,
         signal: combinedSignal,
@@ -1047,6 +1064,7 @@ export default function Dashboard({
       return data.report;
     } catch (error: any) {
       setPerceptionReport(null);
+      perceptionScreenshotRef.current = null;
       const msg =
         error?.name === "TimeoutError"
           ? "Perceive timed out (45s) — vision model hung, aborted"
@@ -1556,7 +1574,7 @@ export default function Dashboard({
           className="w-full"
         >
           <div className="mb-6">
-            <MasterWorkflowOrchestrator run={replayRun} onRun={() => { void handleRunSequence(); }} onControl={handleReplayControl} />
+            <MasterWorkflowOrchestrator run={replayRun} stepCount={sequence.length} onRun={(iterations) => { void handleRunSequence(undefined, iterations); }} onControl={handleReplayControl} onReset={handleResetMasterWorkflow} />
           </div>
           <TabsList aria-label="Main application tabs navigation" className="flex flex-wrap h-auto gap-1.5 bg-slate-900 border border-slate-800 p-2 rounded-xl mb-4">
             <div role="group" aria-label="Vision feature tabs" className="flex flex-wrap items-center gap-1.5">
@@ -1947,8 +1965,41 @@ export default function Dashboard({
             {/* Tri-Agent Cooperative Operations Squad: 1 Assists User, 1 Reads Logs, 1 Corrects AI Actions & Heals */}
             <ThreeAiAgentsSquad
               className="border-cyan-500/50 shadow-2xl"
-              onDispatchFix={(action) => {
-                toast.success(`Autonomous Agent Corrector: Dispatched self-healing fix (${action})`);
+              onRefreshScreen={async () => {
+                const report = await handleTriggerDescribeScreen();
+                if (!report) throw new Error("Fresh screen perception failed.");
+                return report;
+              }}
+              onDispatchFix={async () => {
+                const failedStep = sequence.find((step) => step.status === "failed");
+                if (!failedStep) throw new Error("No failed workflow step is available to retry.");
+                const report = await handleTriggerDescribeScreen();
+                if (!report) throw new Error("Fresh screen perception failed; retry was not prepared.");
+                const retryResponse = await replayRequest("/api/ai/adaptive-retry", {
+                  stepId: failedStep.id,
+                  actionType: failedStep.action,
+                  targetName: failedStep.targetOcrLabel || failedStep.name,
+                  currentX: failedStep.x,
+                  currentY: failedStep.y,
+                  textPayload: failedStep.text,
+                  perception: report,
+                });
+                const retryPlan = retryResponse.retryPlan;
+                if (!retryPlan?.retryNeeded) throw new Error("The retry limit for this step has been reached.");
+                const retryStep = {
+                  ...failedStep,
+                  action: retryPlan.adaptedActionType,
+                  x: retryPlan.newCoordinates.x,
+                  y: retryPlan.newCoordinates.y,
+                  delayMs: retryPlan.delayMs,
+                  text: retryPlan.textPayload ?? failedStep.text,
+                  keyPayload: retryPlan.keyPayload ?? failedStep.keyPayload,
+                  status: "pending" as const,
+                  referenceScreenshotUrl: perceptionScreenshotRef.current || failedStep.referenceScreenshotUrl,
+                };
+                const runId = await handleRunSequence([retryStep]);
+                if (!runId) throw new Error("Verified retry could not start.");
+                toast.info(retryPlan.strategyRationale);
               }}
             />
 
@@ -2030,7 +2081,14 @@ export default function Dashboard({
                 <LiveScreenHUD
                   onReplaySteps={steps => { void handleRunSequence(steps); }}
                   onExecuteTask={executeHubTask}
+                  onPointerAlignmentFailure={() => {
+                    setVerificationBadge({ status: "failed", message: "Pointer alignment failed; capturing and re-perceiving the current screen." });
+                    void handleTriggerDescribeScreen().then((report) => {
+                      if (report) setVerificationBadge({ status: "failed", message: `Pointer retry blocked. AI recommends: ${report.primarySuggestion}` });
+                    });
+                  }}
                   screenshotUrl={activeCanvasUrl || screenshotUrl}
+                  targetDevice={targetDevice}
                   isCapturing={isCapturing}
                   aiThinking={aiThinking}
                   entities={[]}
@@ -2160,7 +2218,7 @@ export default function Dashboard({
                   isRunning={isSequenceRunning}
                   isRecordMode={isRecordMode}
                   onToggleRecordMode={() => setIsRecordMode(!isRecordMode)}
-                  onRunSequence={() => { void handleRunSequence(); }}
+                  onRunSequence={(repeatCount) => { void handleRunSequence(undefined, repeatCount || 1); }}
                   onStopSequence={handleStopSequence}
                   onResetSequence={() =>
                     setSequence((prev) =>
@@ -3470,6 +3528,8 @@ export default function Dashboard({
         <CoordinateCalibrationModal
           isOpen={isCalibrationModalOpen}
           onClose={() => setIsCalibrationModalOpen(false)}
+          screenshotUrl={activeCanvasUrl || screenshotUrl}
+          targetDevice={targetDevice}
         />
 
         {/* Global System & AI Model Settings Modal */}

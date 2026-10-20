@@ -74,56 +74,24 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
   screenshotUrl,
 }) => {
   const [isSavingToMemory, setIsSavingToMemory] = useState(false);
-  const [isApplyingWithQwen, setIsApplyingWithQwen] = useState(false);
+  const reviewedSteps = Array.isArray(reviewResult?.reviewedSteps) ? reviewResult.reviewedSteps : [];
 
-  const handleApply = async () => {
-    if (!reviewResult || !reviewResult.reviewedSteps.length) return;
-
-    setIsApplyingWithQwen(true);
-    try {
-      const res = await fetch("/api/ai/apply-suggestions-with-qwen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          steps: currentSteps,
-          reviewResult,
-          userObjective: reviewResult.summary || "Calibrate workflow sequence",
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success && Array.isArray(data.optimizedSteps)) {
-        onApplyOptimizations?.(data.optimizedSteps);
-        toast.success(
-          `🤖 Qwen Orchestrator: Applied & calibrated ${data.optimizedSteps.length} steps!`,
-          {
-            description: `${data.adjustmentsMade || 0} movement adjustments made. ${data.qwenExplanation || ""}`,
-          }
-        );
-        onClose();
-        return;
-      }
-    } catch (e) {
-      console.warn("Qwen apply suggestion fallback:", e);
-    } finally {
-      setIsApplyingWithQwen(false);
-    }
-
-    // Direct fallback if endpoint unreachable
-    const updated: SequenceStep[] = currentSteps.map((orig, idx) => {
-      const reviewed = reviewResult.reviewedSteps.find((r) => r.stepId === orig.id) || reviewResult.reviewedSteps[idx];
-      if (!reviewed) return orig;
+  const handleApply = () => {
+    if (!reviewedSteps.length) return;
+    const reviewedById = new Map(reviewedSteps.map((step) => [step.stepId, step]));
+    const updated: SequenceStep[] = currentSteps.map((original) => {
+      const reviewed = reviewedById.get(original.id);
+      if (!reviewed) return original;
       return {
-        ...orig,
-        x: reviewed.recommendedCoords?.x ?? orig.x,
-        y: reviewed.recommendedCoords?.y ?? orig.y,
-        delayMs: reviewed.recommendedDelayMs ?? orig.delayMs ?? 400,
-        confidence: reviewed.confidence ?? orig.confidence ?? 0.95,
+        ...original,
+        x: reviewed.recommendedCoords.x,
+        y: reviewed.recommendedCoords.y,
+        delayMs: reviewed.recommendedDelayMs ?? original.delayMs,
+        confidence: reviewed.confidence,
       };
     });
-
     onApplyOptimizations?.(updated);
-    toast.success(`Applied AI optimizations to ${updated.length} workflow steps!`);
+    toast.success(`Applied the AI review to ${updated.length} workflow steps.`);
     onClose();
   };
 
@@ -172,7 +140,7 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
                 <DialogTitle className="text-sm font-bold flex items-center gap-2 text-white">
                   <span>AI Conscious Operator: Workflow & Screen Review</span>
                   <Badge className="bg-purple-950 text-purple-300 border-purple-600 text-[10px] font-mono">
-                    QWEN & GEMINI DUAL-AI
+                    {reviewResult?.aiModelUsed || "VISION MODEL"}
                   </Badge>
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-400">
@@ -196,7 +164,7 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
             <div className="space-y-1">
               <p className="text-sm font-bold text-cyan-300">Auditing Sequence & Screen Frame...</p>
               <p className="text-xs text-slate-400 max-w-sm">
-                Cross-referencing coordinates against 1920x1080 visual viewport, checking UI element bounding boxes, and validating execution paths.
+                Cross-referencing coordinates against the current screenshot and selected workflow steps.
               </p>
             </div>
           </div>
@@ -232,12 +200,12 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
             {/* Step-by-Step Breakdown */}
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-bold text-slate-300 px-1">
-                <span>Audited Step Sequence ({reviewResult.reviewedSteps.length} Steps)</span>
+                <span>Audited Step Sequence ({reviewedSteps.length} Steps)</span>
                 <span className="text-[11px] text-slate-400">Target UI & Coordinate Verification</span>
               </div>
 
               <div className="space-y-2">
-                {reviewResult.reviewedSteps.map((step, sIdx) => {
+                {reviewedSteps.map((step, sIdx) => {
                   const hasShift =
                     step.originalCoords &&
                     step.recommendedCoords &&
@@ -338,19 +306,14 @@ export const AIWorkflowReviewModal: React.FC<AIWorkflowReviewModalProps> = ({
               Close
             </Button>
 
-            {onApplyOptimizations && reviewResult && reviewResult.reviewedSteps.length > 0 && (
+            {onApplyOptimizations && reviewResult && reviewedSteps.length > 0 && (
               <Button
                 size="sm"
                 onClick={handleApply}
-                disabled={isApplyingWithQwen}
                 className="h-8 text-xs font-mono font-bold bg-cyan-700 hover:bg-cyan-600 text-white gap-1.5 shadow-md"
               >
-                {isApplyingWithQwen ? (
-                  <Brain className="w-3.5 h-3.5 text-cyan-300 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-cyan-300" />
-                )}
-                {isApplyingWithQwen ? "Qwen Orchestrating..." : "Apply AI Suggestions"}
+                <CheckCircle2 className="w-3.5 h-3.5 text-cyan-300" />
+                Apply AI Suggestions
               </Button>
             )}
 

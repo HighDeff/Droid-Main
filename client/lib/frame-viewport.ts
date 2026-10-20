@@ -21,9 +21,10 @@ const positive = (value: number) => Math.max(0, value);
  * Returns the displayed frame rectangle for an object-contain media element.
  * Coordinates inside this rectangle are in CSS pixels, independent of DPR.
  */
-export function getContainedFrameViewport(
+export function getFrameViewport(
   viewport: ViewportRect,
   frame: FrameSize,
+  fit: "contain" | "cover" = "contain",
 ): FrameViewport {
   if (
     viewport.width <= 0 ||
@@ -34,7 +35,8 @@ export function getContainedFrameViewport(
     return { ...viewport, scale: 0 };
   }
 
-  const scale = Math.min(
+  const ratio = fit === "cover" ? Math.max : Math.min;
+  const scale = ratio(
     viewport.width / frame.width,
     viewport.height / frame.height,
   );
@@ -48,6 +50,13 @@ export function getContainedFrameViewport(
     height,
     scale,
   };
+}
+
+export function getContainedFrameViewport(
+  viewport: ViewportRect,
+  frame: FrameSize,
+): FrameViewport {
+  return getFrameViewport(viewport, frame, "contain");
 }
 
 /**

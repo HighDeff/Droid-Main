@@ -1,7 +1,7 @@
 import { replayRouter } from "./routes/replay";
 import { createPhoneRouter } from "./routes/phone";
 import { handleStopBridge, handleExecutePyAutoGUI, handleReplayTrail } from "./routes/pyautogui-bridge";
-import { handleAiReviewSteps, handleApplySuggestionsWithQwen } from "./routes/ai-workflow-review";
+import { handleAiReviewSteps } from "./routes/ai-workflow-review";
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -1150,7 +1150,6 @@ except Exception as e:
     app.post("/api/pyautogui/replay-trail", handleReplayTrail);
     app.post("/api/ai/review-steps", handleAiReviewSteps);
     app.post("/api/dual-ai/review-steps", handleAiReviewSteps);
-    app.post("/api/ai/apply-suggestions-with-qwen", handleApplySuggestionsWithQwen);
   } catch (err) {
     console.warn("Optional replay/phone routes init warning:", err);
   }

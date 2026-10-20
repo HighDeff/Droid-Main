@@ -9,7 +9,7 @@ import {
   type ReplayEvent,
 } from "../shared/replay";
 import type { PhoneFrame } from "../shared/phone";
-import { type ReplayAdapter, createReplayAdapter } from "./replay-adapter";
+import { type ReplayAdapter, createReplayAdapter, PointerAlignmentError } from "./replay-adapter";
 import { sendQwenChatRequest } from "./ai-endpoint";
 import { aiMonitorStore } from "./ai-monitor-store";
 
@@ -108,8 +108,6 @@ export class ReplayEngine {
       request.targetDevice === "desktop"
         ? "desktop"
         : `android:${request.deviceId}`;
-    if (this.locks.has(target))
-      throw new Error("Device already has an active replay");
     // Keep bounded screenshot memory; finished evidence is ephemeral.
     for (const [id, item] of this.runs)
       if (!["running", "paused"].includes(item.run.status))
@@ -136,8 +134,9 @@ export class ReplayEngine {
       pause: false,
       evidence: new Map(),
     };
+    if (!this.locks.acquire(target))
+      throw new Error("Device already has an active replay");
     this.runs.set(run.id, item);
-    this.locks.add(target);
     void this.execute(item);
     return this.get(run.id)!;
   }
@@ -302,7 +301,46 @@ export class ReplayEngine {
             stepId: step.id,
             beforeHash: before.hash,
           });
-          await item.adapter.execute(planned, before);
+          try {
+            await item.adapter.execute(planned, before);
+          } catch (error) {
+            if (!(error instanceof PointerAlignmentError)) throw error;
+            this.event(item, "recovery", "Pointer preflight could not align; inspecting a fresh screenshot before retrying", {
+              stepId: step.id,
+              beforeHash: before.hash,
+            });
+            await this.checkpoint(item);
+            const recoveryFrame = await this.capture(item);
+            this.event(item, "perception", "Captured fresh screen for pointer recovery", {
+              stepId: step.id,
+              beforeHash: recoveryFrame.hash,
+            });
+            const recoveryDecision = decisionSchema.parse(await this.judge("planning", planned, recoveryFrame));
+            this.event(item, "planning", recoveryDecision.explanation, {
+              stepId: step.id,
+              beforeHash: recoveryFrame.hash,
+            });
+            if (!recoveryDecision.certain) throw new Error("AI could not confirm a target after pointer alignment failed.");
+            const pointerAction = ["click", "double_click", "right_click", "clear_and_type"].includes(step.action);
+            if (pointerAction && (recoveryDecision.x === undefined || recoveryDecision.y === undefined))
+              throw new Error("AI did not locate a safe retry target after pointer alignment failed.");
+            planned = {
+              ...planned,
+              x: pointerAction ? recoveryDecision.x! : planned.x,
+              y: pointerAction ? recoveryDecision.y! : planned.y,
+            };
+            if (planned.x >= recoveryFrame.width || planned.y >= recoveryFrame.height)
+              throw new Error("Replanned target lies outside the fresh screenshot.");
+            const confirmedFrame = await this.capture(item);
+            if (confirmedFrame.hash !== recoveryFrame.hash)
+              throw new Error("Screen changed during pointer recovery; review the current frame before retrying.");
+            before = confirmedFrame;
+            this.event(item, "recovery", `Replanned ${step.name} at (${planned.x}, ${planned.y}) after fresh screenshot review`, {
+              stepId: step.id,
+              beforeHash: before.hash,
+            });
+            await item.adapter.execute(planned, before);
+          }
           const executedAt = Date.now();
           await this.checkpoint(item);
           await new Promise((r) => setTimeout(r, 500));
@@ -350,7 +388,7 @@ export class ReplayEngine {
         run.steps[run.currentStep].status = "failed";
       this.event(item, "system", run.error);
     } finally {
-      this.locks.delete(run.target);
+      this.locks.release(run.target);
       aiMonitorStore.setStatus({ status: "idle", currentAction: null });
     }
   }

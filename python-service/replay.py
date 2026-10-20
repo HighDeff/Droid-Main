@@ -5,6 +5,8 @@ import json
 import sys
 import time
 
+from coordinate_guard import align_pointer
+
 try:
     import pyautogui as gui
     gui.FAILSAFE = True
@@ -14,6 +16,9 @@ try:
         output = io.BytesIO()
         image.save(output, format="PNG")
         print(json.dumps({"success": True, "image": "data:image/png;base64," + base64.b64encode(output.getvalue()).decode(), "width": image.width, "height": image.height}))
+    elif request["operation"] == "position_check":
+        check = align_pointer(gui, request["step"]["x"], request["step"]["y"])
+        print(json.dumps({"success": True, "positionCheck": check}))
     else:
         step = request["step"]
         action = step["action"]
@@ -27,6 +32,11 @@ try:
         keys = step.get("keyPayload", "").lower().split("+")
         if action in ("press_key", "hotkey") and any(key not in gui.KEYBOARD_KEYS for key in keys):
             raise ValueError("Unsupported keyboard key")
+        position_check = None
+        if action in ("click", "double_click", "right_click", "clear_and_type", "type_text", "press_key", "hotkey", "scroll"):
+            position_check = align_pointer(gui, x, y)
+            if not position_check["aligned"]:
+                raise ValueError("Pointer did not align with the intended target; action was not executed")
         if action == "click": gui.click(x, y)
         elif action == "double_click": gui.doubleClick(x, y, interval=0.1)
         elif action == "right_click": gui.rightClick(x, y)
@@ -42,7 +52,7 @@ try:
             gui.scroll(3 if keys[0] == "up" else -3, x=x, y=y)
         elif action == "wait": time.sleep(step["delayMs"] / 1000)
         else: raise ValueError("Unsupported action")
-        print(json.dumps({"success": True}))
+        print(json.dumps({"success": True, "positionCheck": position_check}))
 except Exception as error:
     print(json.dumps({"success": False, "error": str(error)}))
     sys.exit(1)

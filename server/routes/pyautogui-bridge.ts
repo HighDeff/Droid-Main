@@ -9,6 +9,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import os from "os";
+import { z } from "zod";
 import { queueMobileAction } from "./mobile-stream";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1258,58 +1259,75 @@ export const handlePreReplaySnapshotCheck: RequestHandler = async (req, res) => 
  * Executes an immediate real-time interaction (click, double-click, right-click, drag, type, keypress)
  * from the Device Mirror screen directly onto physical PC / device hardware (Android Studio-style direct control).
  */
+const interactiveActionSchema = z.object({
+  action: z.enum(["click", "double_click", "right_click", "drag", "type", "press_key", "hotkey", "swipe_up", "swipe_down", "swipe_left", "swipe_right"]).default("click"),
+  x: z.number().finite().nonnegative().max(16384).default(960),
+  y: z.number().finite().nonnegative().max(16384).default(540),
+  toX: z.number().finite().nonnegative().max(16384).optional(),
+  toY: z.number().finite().nonnegative().max(16384).optional(),
+  frameWidth: z.number().int().min(1).max(16384).default(1920),
+  frameHeight: z.number().int().min(1).max(16384).default(1080),
+  text: z.string().max(4000).default(""),
+  key: z.string().max(100).default(""),
+  hotkey: z.string().max(100).default(""),
+  deviceMode: z.enum(["desktop", "desktop_mirror", "android_studio_mirror", "android_adb"]).default("android_studio_mirror"),
+});
+
 export const handleInteractiveDeviceAction: RequestHandler = async (req, res) => {
-  const {
-    action = "click",
-    x = 960,
-    y = 540,
-    toX,
-    toY,
-    text = "",
-    key = "",
-    deviceMode = "android_studio_mirror",
-  } = req.body;
+  const parsed = interactiveActionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, error: "Invalid device action or frame coordinates." });
 
-  // Also bridge action directly to mobile action queue for real-time mobile touch/drag/type execution
-  const normX = typeof x === "number" ? (x > 1 ? Math.min(1, x / 1920) : x) : 0.5;
-  const normY = typeof y === "number" ? (y > 1 ? Math.min(1, y / 1080) : y) : 0.5;
-  const normToX = typeof toX === "number" ? (toX > 1 ? Math.min(1, toX / 1920) : toX) : undefined;
-  const normToY = typeof toY === "number" ? (toY > 1 ? Math.min(1, toY / 1080) : toY) : undefined;
+  const { action, x, y, toX, toY, frameWidth, frameHeight, text, key, hotkey, deviceMode } = parsed.data;
 
-  queueMobileAction({
-    type: action === "drag" ? "swipe" : action === "double_click" ? "double_tap" : action === "type" ? "type_text" : action === "press_key" ? "key" : "tap",
-    x: normX,
-    y: normY,
-    toX: normToX,
-    toY: normToY,
-    text,
-    key: key ? (key.toUpperCase() === "ENTER" ? "ENTER" : key.toUpperCase() === "BACKSPACE" ? "BACK" : key) : undefined,
-    description: `Interactive ${action.toUpperCase()} @ (${Math.round(x)}, ${Math.round(y)})`,
-  });
+  if (deviceMode === "android_adb") {
+    const norm = (value: number, size: number) => value <= 1 ? value : value / size;
+    const mobileAction = queueMobileAction({
+      type: action === "drag" ? "swipe" : action === "double_click" ? "double_tap" : action === "type" ? "type_text" : action === "press_key" || action === "hotkey" ? "key" : "tap",
+      x: norm(x, frameWidth),
+      y: norm(y, frameHeight),
+      toX: toX === undefined ? undefined : norm(toX, frameWidth),
+      toY: toY === undefined ? undefined : norm(toY, frameHeight),
+      text,
+      key: key || hotkey,
+      description: `Interactive ${action.toUpperCase()} @ (${Math.round(x)}, ${Math.round(y)})`,
+    });
+    return res.json({ success: true, action, queued: true, actionId: mobileAction.id });
+  }
 
   const startTime = Date.now();
+  const pythonPrefix = `import pyautogui; pyautogui.FAILSAFE = False; _sw, _sh = pyautogui.size(); x = max(0, min(_sw - 1, round(${x} * _sw / ${frameWidth}))); y = max(0, min(_sh - 1, round(${y} * _sh / ${frameHeight})))`;
+  const mapEnd = `to_x = max(0, min(_sw - 1, round(${toX ?? x} * _sw / ${frameWidth}))); to_y = max(0, min(_sh - 1, round(${toY ?? y} * _sh / ${frameHeight})))`;
   let pythonScript = "";
 
   if (action === "click") {
-    pythonScript = `import pyautogui; pyautogui.FAILSAFE = False; pyautogui.click(${Math.round(x)}, ${Math.round(y)})`;
+    pythonScript = `${pythonPrefix}; pyautogui.click(x, y)`;
   } else if (action === "double_click") {
-    pythonScript = `import pyautogui; pyautogui.FAILSAFE = False; pyautogui.doubleClick(${Math.round(x)}, ${Math.round(y)})`;
+    pythonScript = `${pythonPrefix}; pyautogui.doubleClick(x, y)`;
   } else if (action === "right_click") {
-    pythonScript = `import pyautogui; pyautogui.FAILSAFE = False; pyautogui.rightClick(${Math.round(x)}, ${Math.round(y)})`;
+    pythonScript = `${pythonPrefix}; pyautogui.rightClick(x, y)`;
   } else if (action === "drag" && toX !== undefined && toY !== undefined) {
-    pythonScript = `import pyautogui; pyautogui.FAILSAFE = False; pyautogui.moveTo(${Math.round(x)}, ${Math.round(y)}); pyautogui.dragTo(${Math.round(toX)}, ${Math.round(toY)}, duration=0.25)`;
+    pythonScript = `${pythonPrefix}; ${mapEnd}; pyautogui.moveTo(x, y); pyautogui.dragTo(to_x, to_y, duration=0.25)`;
   } else if (action === "type" && text) {
-    const escaped = JSON.stringify(text);
-    pythonScript = `import pyautogui; pyautogui.FAILSAFE = False; pyautogui.write(${escaped}, interval=0.01)`;
+    pythonScript = `${pythonPrefix}; pyautogui.write(${JSON.stringify(text)}, interval=0.01)`;
   } else if (action === "press_key" && key) {
-    const escapedKey = JSON.stringify(key.toLowerCase());
-    pythonScript = `import pyautogui; pyautogui.FAILSAFE = False; pyautogui.press(${escapedKey})`;
+    pythonScript = `${pythonPrefix}; pyautogui.press(${JSON.stringify(key.toLowerCase())})`;
+  } else if (action === "hotkey" && hotkey) {
+    pythonScript = `${pythonPrefix}; pyautogui.hotkey(*${JSON.stringify(hotkey.split("+"))})`;
+  } else if (action === "swipe_up") {
+    pythonScript = `${pythonPrefix}; pyautogui.scroll(3, x=x, y=y)`;
+  } else if (action === "swipe_down") {
+    pythonScript = `${pythonPrefix}; pyautogui.scroll(-3, x=x, y=y)`;
+  } else if (action === "swipe_left") {
+    pythonScript = `${pythonPrefix}; pyautogui.hscroll(-3, x=x, y=y)`;
+  } else if (action === "swipe_right") {
+    pythonScript = `${pythonPrefix}; pyautogui.hscroll(3, x=x, y=y)`;
   } else {
-    pythonScript = `import pyautogui; pyautogui.FAILSAFE = False; pyautogui.click(${Math.round(x)}, ${Math.round(y)})`;
+    pythonScript = `${pythonPrefix}; pyautogui.click(x, y)`;
   }
+  pythonScript += `; print(f'ACTION_RESULT_{x}_{y}_{_sw}_{_sh}')`;
 
   try {
-    const py = spawn("python3", ["-c", pythonScript], {
+    const py = spawn(process.env.PYTHON_CMD || (process.platform === "win32" ? "python" : "python3"), [pythonScript], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, DISPLAY: process.env.DISPLAY || ":0" },
     });
@@ -1318,6 +1336,8 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
     let stderr = "";
     py.stdout.on("data", (d) => (stdout += d.toString()));
     py.stderr.on("data", (d) => (stderr += d.toString()));
+    py.stdin.on("error", () => {});
+    py.stdin.end(JSON.stringify(parsed.data));
 
     // Guard so the process `close` and `error` events can never both respond
     // (e.g. python3 missing -> `error` fires, then `close` fires too).
@@ -1325,31 +1345,20 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
     const sendOnce = (payload: any) => {
       if (responded) return;
       responded = true;
-      res.json(payload);
+      res.status(payload.success ? 200 : 409).json(payload);
     };
-
-    // Also forward action to mobile stream queue so connected mobile devices receive the interaction
-    try {
-      queueMobileAction({
-        type: action === "click" ? "tap" : action === "double_click" ? "double_tap" : action === "drag" ? "drag" : action === "type" ? "type_text" : action === "press_key" ? "key" : "tap",
-        x: typeof x === "number" ? (x > 1 ? x / 1920 : x) : 0.5,
-        y: typeof y === "number" ? (y > 1 ? y / 1080 : y) : 0.5,
-        toX: typeof toX === "number" ? (toX > 1 ? toX / 1920 : toX) : undefined,
-        toY: typeof toY === "number" ? (toY > 1 ? toY / 1080 : toY) : undefined,
-        text,
-        key,
-        description: `Action from PC Deck: ${action} (${Math.round(x)}, ${Math.round(y)})`,
-      });
-    } catch {}
 
     py.on("close", (code) => {
       const durationMs = Date.now() - startTime;
-      const success = code === 0 || !stderr.includes("Error");
+      let result: any;
+      try { result = JSON.parse(stdout); } catch {}
+      const success = code === 0 && result?.success === true;
+      const message = success ? `Desktop ${action} completed.` : result?.error || stderr || "Desktop action failed before execution.";
 
       addBridgeLog(
         "INTERACTIVE_DEVICE_MIRROR_ACTION",
         success ? "success" : "warning",
-        `[Device Bridge] Dispatched ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)})${text ? ` Text: "${text}"` : ""}${key ? ` Key: "${key}"` : ""}. Duration: ${durationMs}ms.`,
+        `[Device Bridge] ${message} Duration: ${durationMs}ms.`,
         {
           action,
           type: "command",
@@ -1362,50 +1371,25 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
       );
 
       sendOnce({
-        success: true,
+        success,
         action,
-        x: Math.round(x),
-        y: Math.round(y),
-        toX: toX !== undefined ? Math.round(toX) : undefined,
-        toY: toY !== undefined ? Math.round(toY) : undefined,
-        text,
-        key,
-        deviceMode,
+        targetPosition: result?.targetPosition,
+        positionCheck: result?.positionCheck,
+        screenResolution: result?.screenResolution,
         durationMs,
-        executedOnPC: true,
-        message: `Interactive action ${action.toUpperCase()} executed at (${Math.round(x)}, ${Math.round(y)}).`,
+        executedOnPC: success,
+        message,
+        error: success ? undefined : message,
         timestamp: Date.now(),
       });
     });
 
-    py.on("error", () => {
-      // Fallback response for environments without X11 server
-      addBridgeLog(
-        "INTERACTIVE_DEVICE_MIRROR_ACTION_SIMULATED",
-        "success",
-        `[Device Bridge Virtual] Emulated ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)}) across mirror viewport.`,
-        { action }
-      );
-      sendOnce({
-        success: true,
-        action,
-        x: Math.round(x),
-        y: Math.round(y),
-        deviceMode,
-        simulated: true,
-        message: `Virtual interaction executed: ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)}).`,
-        timestamp: Date.now(),
-      });
+    py.on("error", (error) => {
+      addBridgeLog("INTERACTIVE_DEVICE_MIRROR_ACTION", "error", `Desktop action unavailable: ${error.message}`, { action });
+      sendOnce({ success: false, action, error: `Desktop action unavailable: ${error.message}`, timestamp: Date.now() });
     });
   } catch (err: any) {
-    res.json({
-      success: true,
-      action,
-      x: Math.round(x),
-      y: Math.round(y),
-      simulated: true,
-      error: err.message,
-    });
+    res.status(500).json({ success: false, action, error: err instanceof Error ? err.message : String(err) });
   }
 };
 
@@ -1654,6 +1638,3 @@ export const handleReplayTrail: RequestHandler = async (req, res) => {
     timestamp: Date.now(),
   });
 };
-
-
-

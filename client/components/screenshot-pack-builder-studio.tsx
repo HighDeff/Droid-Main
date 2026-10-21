@@ -561,6 +561,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
   const handleExecuteOnLiveScreen = async () => {
     updateStatus(
       `⚡ Dispatching "${selectedFrame.action.toUpperCase()}" at (${selectedFrame.targetCoords.x}, ${selectedFrame.targetCoords.y}) to ${targetDevice}...`,
+    );
     if (selectedFrame.action === "ocr_verify") {
       const expected = (selectedFrame.payloadText || "").trim();
       setStatusLog(
@@ -796,7 +797,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
             </Button>
             <Button
               size="sm"
-              onClick={handlePlayDemonstration}
+              onClick={() => handlePlayDemonstration()}
               disabled={isPlayingDemonstration}
               className="h-8 text-xs font-mono font-bold bg-purple-600 hover:bg-purple-500 text-white"
             >
@@ -1084,7 +1085,7 @@ export const ScreenshotPackBuilderStudio: React.FC<
                 </Button>
                 <Button
                   size="sm"
-                  onClick={handlePlayDemonstration}
+                  onClick={() => handlePlayDemonstration()}
                   disabled={isPlayingDemonstration}
                   className="w-full h-8 text-xs font-mono font-bold bg-cyan-600 hover:bg-cyan-500 text-white"
                 >

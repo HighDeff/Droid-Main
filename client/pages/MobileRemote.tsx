@@ -244,7 +244,7 @@ export default function MobileRemote() {
             lastDetectedCodeRef.current = result.rawValue;
             setDetectedBarcode(result);
             playScanBeep(true);
-            toast.success(`ðŸ” Scanned [${result.format}]: ${result.rawValue}`);
+            toast.success(`🔍 Scanned [${result.format}]: ${result.rawValue}`);
             lookupBarcodeItem(result.rawValue).then((it) => {
               setDetectedBarcodeItem(it);
             });
@@ -1090,7 +1090,7 @@ export default function MobileRemote() {
 
           ctx.fillStyle = "#38bdf8";
           ctx.font = "11px monospace";
-          ctx.fillText(`ðŸ”’ ${virtualOsAppUrl || "https://google.com"}`, 28, 70);
+          ctx.fillText(`🔒 ${virtualOsAppUrl || "https://google.com"}`, 28, 70);
 
           ctx.fillStyle = "#0f172a";
           ctx.beginPath();
@@ -1141,7 +1141,7 @@ export default function MobileRemote() {
 
           ctx.fillStyle = "#a5b4fc";
           ctx.font = "bold 16px sans-serif";
-          ctx.fillText("ðŸ“ Notes & Workflow Telemetry", 32, 80);
+          ctx.fillText("📝 Notes & Workflow Telemetry", 32, 80);
 
           ctx.fillStyle = "#f8fafc";
           ctx.font = "12px sans-serif";
@@ -1158,16 +1158,16 @@ export default function MobileRemote() {
 
           ctx.fillStyle = "#94a3b8";
           ctx.font = "11px sans-serif";
-          ctx.fillText("ðŸ” Search apps, actions, or ask AI...", 28, 70);
+          ctx.fillText("🔍 Search apps, actions, or ask AI...", 28, 70);
 
           // Draw 6 Quick App Tiles
           const apps = [
-            { name: "Chrome", color: "#2563eb", icon: "ðŸŒ", x: 30, y: 110 },
-            { name: "Calc", color: "#d97706", icon: "ðŸ”¢", x: 140, y: 110 },
-            { name: "Notes", color: "#4f46e5", icon: "ðŸ“", x: 250, y: 110 },
-            { name: "Camera", color: "#059669", icon: "ðŸ“·", x: 360, y: 110 },
+            { name: "Chrome", color: "#2563eb", icon: "🌐", x: 30, y: 110 },
+            { name: "Calc", color: "#d97706", icon: "🔢", x: 140, y: 110 },
+            { name: "Notes", color: "#4f46e5", icon: "📝", x: 250, y: 110 },
+            { name: "Camera", color: "#059669", icon: "📷", x: 360, y: 110 },
             { name: "Terminal", color: "#0f172a", icon: "âš¡", x: 30, y: 220 },
-            { name: "Files", color: "#ea580c", icon: "ðŸ“", x: 140, y: 220 },
+            { name: "Files", color: "#ea580c", icon: "📁", x: 140, y: 220 },
             { name: "Settings", color: "#334155", icon: "âš™ï¸", x: 250, y: 220 },
             { name: "YouTube", color: "#e11d48", icon: "â–¶ï¸", x: 360, y: 220 },
           ];
@@ -1421,10 +1421,10 @@ export default function MobileRemote() {
       }
 
       if (mode === "mirror_pc") {
-        setStatus("â— LIVE: ðŸ–¥ï¸ PC Desktop Screen Mirror & Remote Controller");
+        setStatus("● LIVE: 🖥️ PC Desktop Screen Mirror & Remote Controller");
         requestWakeLock();
         startBackgroundAudioKeepalive();
-        toast.info("ðŸ–¥ï¸ PC Mirror Active: Control PC from phone");
+        toast.info("🖥️ PC Mirror Active: Control PC from phone");
         return;
       }
 
@@ -1517,7 +1517,7 @@ export default function MobileRemote() {
       }),
     }).catch(() => {});
 
-    toast.success(`ðŸ–¥ï¸ Dispatched Click to PC at (${Math.round(relX * 100)}%, ${Math.round(relY * 100)}%)`);
+    toast.success(`🖥️ Dispatched Click to PC at (${Math.round(relX * 100)}%, ${Math.round(relY * 100)}%)`);
   };
 
   // Dispatch Action Helper for Mobile Remote
@@ -1566,7 +1566,7 @@ export default function MobileRemote() {
         deviceMode: "desktop_mirror",
       }),
     }).catch(() => {});
-    toast.success(`âŒ¨ï¸ Typed to PC: "${pcTextInput}"`);
+    toast.success(`⌨️ Typed to PC: "${pcTextInput}"`);
     setPcTextInput("");
   };
 
@@ -1580,7 +1580,7 @@ export default function MobileRemote() {
         deviceMode: "desktop_mirror",
       }),
     }).catch(() => {});
-    toast.success(`âŒ¨ï¸ Sent [${label}] to PC`);
+    toast.success(`⌨️ Sent [${label}] to PC`);
   };
 
   // Windows Key Toggle (Opens/Closes Windows Start Menu & dispatches Win Key)
@@ -1612,7 +1612,7 @@ export default function MobileRemote() {
       }),
     }).catch(() => {});
 
-    toast.success(`âŒ¨ï¸ Triggered Shortcut: [${label}]`);
+    toast.success(`⌨️ Triggered Shortcut: [${label}]`);
   };
 
   // Real Screen Sharing (WebRTC / getDisplayMedia) for Phone and PC Desktop
@@ -1628,7 +1628,7 @@ export default function MobileRemote() {
           await realScreenVideoRef.current.play().catch(() => {});
         }
         setIsRealPcScreenActive(true);
-        toast.success("ðŸ–¥ï¸ Real PC Screen Share Active & Streaming Live!");
+        toast.success("🖥️ Real PC Screen Share Active & Streaming Live!");
         stream.getVideoTracks()[0].onended = () => {
           setIsRealPcScreenActive(false);
           toast.info("PC Screen share ended");
@@ -1705,7 +1705,7 @@ export default function MobileRemote() {
           parsedSummary: content.slice(0, 140) + (content.length > 140 ? "..." : ""),
         };
         setUploadedDocs((prev) => [newDocItem, ...prev]);
-        toast.success(`ðŸ“„ Ingested "${file.name}" for AI task grounding!`);
+        toast.success(`📄 Ingested "${file.name}" for AI task grounding!`);
 
         // Notify chat
         setChatMessages((prev) => [
@@ -1714,7 +1714,7 @@ export default function MobileRemote() {
             id: `sys_doc_${Date.now()}`,
             role: "agent",
             agentName: "Vision Co-Pilot",
-            text: `ðŸ“Ž Ingested document "${file.name}" (${(file.size / 1024).toFixed(1)} KB). I will use its instructions and SOPs to guide my actions!`,
+            text: `📎 Ingested document "${file.name}" (${(file.size / 1024).toFixed(1)} KB). I will use its instructions and SOPs to guide my actions!`,
             time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           },
         ]);
@@ -1763,7 +1763,7 @@ export default function MobileRemote() {
     };
 
     setTenFramesPack((prev) => [...prev.slice(-9), newFrame]);
-    toast.success(`ðŸ“¸ Added Snapshot #${nextStep} to 10-Pack!`);
+    toast.success(`📸 Added Snapshot #${nextStep} to 10-Pack!`);
   };
 
   // AI Assistant Chat Handler for Mobile Remote
@@ -1788,19 +1788,19 @@ export default function MobileRemote() {
 
     if (lower.includes("snap") || lower.includes("screen") || lower.includes("capture")) {
       handleAddSingleSnapshotTo10Pack("Chat AI Snapshot Trigger");
-      replyText = "ðŸ“¸ Captured snapshot and added to 10-Screenshots Pack for workflow building!";
+      replyText = "📸 Captured snapshot and added to 10-Screenshots Pack for workflow building!";
       actionDone = "Snapshot Captured";
     } else if (lower.includes("calc") || lower.includes("math")) {
       sendMobileAction({ type: "open_app", appName: "Calculator" });
-      replyText = "ðŸ§® Opened Calculator app and ready for math inputs!";
+      replyText = "🧮 Opened Calculator app and ready for math inputs!";
       actionDone = "Launched Calculator";
     } else if (lower.includes("chrome") || lower.includes("search") || lower.includes("browser")) {
       sendMobileAction({ type: "open_app", appName: "Google Chrome", appUrl: "https://google.com" });
-      replyText = "ðŸŒ Launched Google Chrome browser with web navigation active!";
+      replyText = "🌐 Launched Google Chrome browser with web navigation active!";
       actionDone = "Launched Chrome";
     } else if (lower.includes("note") || lower.includes("write")) {
       sendMobileAction({ type: "open_app", appName: "Notes", text: messageText });
-      replyText = "ðŸ“ Opened Notes app and synced entry!";
+      replyText = "📝 Opened Notes app and synced entry!";
       actionDone = "Updated Notes";
     } else if (lower.includes("settings") || lower.includes("config")) {
       sendMobileAction({ type: "open_app", appName: "Settings" });
@@ -1817,7 +1817,7 @@ export default function MobileRemote() {
       actionDone = "Navigated Back";
     } else if (lower.includes("home")) {
       sendMobileAction({ type: "key", key: "HOME", description: "Navigated Home" });
-      replyText = "ðŸ  Returned to Home Launcher screen!";
+      replyText = "🏠 Returned to Home Launcher screen!";
       actionDone = "Navigated Home";
     } else if (lower.includes("app") || lower.includes("switcher")) {
       sendMobileAction({ type: "key", key: "APPS", description: "App Switcher" });
@@ -1825,11 +1825,11 @@ export default function MobileRemote() {
       actionDone = "Opened App Switcher";
     } else if (lower.includes("vibrate")) {
       if (navigator.vibrate) navigator.vibrate(50);
-      replyText = "ðŸ“³ Phone vibrated";
+      replyText = "📳 Phone vibrated";
       actionDone = "Vibrated";
     } else if (lower.includes("volume") || lower.includes("sound")) {
       sendMobileAction({ type: "key", key: "VOLUME_UP", description: "Volume Up" });
-      replyText = "ðŸ”Š Volume increased";
+      replyText = "🔊 Volume increased";
       actionDone = "Volume Up";
     } else {
       sendMobileAction({ type: "tap", x: 0.5, y: 0.5, description: messageText });
@@ -1859,7 +1859,7 @@ export default function MobileRemote() {
     setIsRecording10Pack(true);
     setPackProgress(0);
     const frames: DifferentialFrame[] = [];
-    toast.info("ðŸ“¸ Starting 10-Screenshot Workflow Sequence Recording...");
+    toast.info("📸 Starting 10-Screenshot Workflow Sequence Recording...");
 
     try {
       const actionsSequence = [
@@ -1928,9 +1928,9 @@ export default function MobileRemote() {
       a.href = dataUrl;
       a.download = `sightline-snapshot-${Date.now()}.png`;
       a.click();
-      toast.success("ðŸ“· Snapshot downloaded");
+      toast.success("📸 Snapshot downloaded");
     } else {
-      toast.info("ðŸ“· Snapshot captured & logged to Hub");
+      toast.info("📸 Snapshot captured & logged to Hub");
     }
   };
 
@@ -2034,7 +2034,7 @@ export default function MobileRemote() {
     try {
       const res = await fetch(`/api/mobile-stream/scheduled-workflows/${id}`, { method: "DELETE" });
       if (res.ok) {
-        toast.success("ðŸ—‘ï¸ Removed scheduled workflow");
+        toast.success("🗑️ Removed scheduled workflow");
         fetchScheduledWorkflows();
       }
     } catch {
@@ -2061,7 +2061,7 @@ export default function MobileRemote() {
         }),
       });
       if (res.ok) {
-        toast.success("ðŸ“… Converted 10-Snap pack to active schedule!");
+        toast.success("📅 Converted 10-Snap pack to active schedule!");
         fetchScheduledWorkflows();
         setActiveTab("scheduled");
       }
@@ -2162,7 +2162,7 @@ export default function MobileRemote() {
                 <span className={`text-[8px] px-1.5 py-0.5 rounded font-mono border ${
                   isStandaloneApp ? "bg-amber-950 text-amber-300 border-amber-700" : "bg-indigo-950 text-indigo-300 border-indigo-700"
                 }`}>
-                  {isStandaloneApp ? "📱 Standalone" : "ðŸ”„ Synced"}
+                  {isStandaloneApp ? "📱 Standalone" : "🔄 Synced"}
                 </span>
               </h1>
               <p className="text-[10px] text-slate-400 font-mono">
@@ -2223,19 +2223,19 @@ export default function MobileRemote() {
                 checked={!isStandaloneApp}
                 onCheckedChange={(checked) => {
                   setIsStandaloneApp(!checked);
-                  toast.info(checked ? "ðŸ”„ Synced with Workspace" : "📱 Running as Standalone Companion App");
+                  toast.info(checked ? "🔄 Synced with Workspace" : "📱 Running as Standalone Companion App");
                 }}
                 className="scale-75 data-[state=checked]:bg-indigo-500"
               />
             </div>
             {/* Auto Switch Back and Forth Toggle */}
             <div className="flex items-center gap-1 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800" title="Auto switch back and forth between stream and background phone app">
-              <span className="text-[8px] text-slate-400">ðŸ”„ Auto</span>
+              <span className="text-[8px] text-slate-400">🔄 Auto</span>
               <Switch
                 checked={autoSwitchMode}
                 onCheckedChange={(checked) => {
                   setAutoSwitchMode(checked);
-                  toast.info(checked ? "ðŸ”„ Auto-Switch ON: Keeps app open & syncs phone usage" : "Auto-Switch OFF");
+                  toast.info(checked ? "🔄 Auto-Switch ON: Keeps app open & syncs phone usage" : "Auto-Switch OFF");
                 }}
                 className="scale-75 data-[state=checked]:bg-emerald-500"
               />
@@ -2552,7 +2552,7 @@ export default function MobileRemote() {
                       onClick={(e) => {
                         e.stopPropagation();
                         sendMobileAction({ type: "key", key: "HOME", description: "Navigated Home" });
-                        toast.info("ðŸ  Home");
+                        toast.info("🏠 Home");
                       }}
                       className="p-1 text-cyan-400 hover:text-cyan-300"
                     >
@@ -2562,7 +2562,7 @@ export default function MobileRemote() {
                       onClick={(e) => {
                         e.stopPropagation();
                         sendMobileAction({ type: "key", key: "RECENTS", description: "App Switcher" });
-                        toast.info("ðŸ“‘ Recents");
+                        toast.info("📑 Recents");
                       }}
                       className="p-1 hover:text-white"
                     >
@@ -2644,10 +2644,10 @@ export default function MobileRemote() {
                   <div className="flex items-center gap-1.5">
                     <Laptop className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
                     <span className="text-[10px] font-mono font-bold text-indigo-300">
-                      ðŸ–¥ï¸ FULL PC DESKTOP (WINDOWS 11)
+                      🖥️ FULL PC DESKTOP (WINDOWS 11) (WINDOWS 11)
                     </span>
                     <Badge className="bg-indigo-950 text-indigo-300 border-indigo-700 text-[8px] font-mono">
-                      {isRealPcScreenActive ? "ðŸ“¹ Live Stream" : "ðŸ’» Virtual OS"}
+                      {isRealPcScreenActive ? "📹 Live Stream" : "💻 Virtual OS"}
                     </Badge>
                   </div>
                   <div className="flex items-center gap-1">
@@ -2713,7 +2713,7 @@ export default function MobileRemote() {
                               e.stopPropagation();
                               setActivePcWindow(iconItem.app);
                               setIsPcStartMenuOpen(false);
-                              toast.success(`ðŸ’» Opened ${iconItem.name} on PC Desktop`);
+                              toast.success(`💻 Opened ${iconItem.name} on PC Desktop`);
                             }}
                             className="flex flex-col items-center gap-1 p-1.5 rounded-xl hover:bg-white/10 active:scale-95 cursor-pointer transition-all group max-w-[68px]"
                           >
@@ -2786,9 +2786,9 @@ export default function MobileRemote() {
                                 <div className="p-2 rounded bg-black border border-slate-800 text-emerald-400 space-y-1">
                                   <p>Microsoft Windows [Version 10.0.22631.3085]</p>
                                   <p>(c) Microsoft Corporation. All rights reserved.</p>
-                                  <p className="text-cyan-300">PS C:\Sightline\Automation&gt; adb devices</p>
+                                  <p className="text-cyan-300">{"PS C:\\Sightline\\Automation> adb devices"}</p>
                                   <p className="text-slate-300">List of devices attached: 1080x1920_ARM64 device</p>
-                                  <p className="text-cyan-300">PS C:\Sightline\Automation&gt; ai --status</p>
+                                  <p className="text-cyan-300">{"PS C:\\Sightline\\Automation> ai --status"}</p>
                                   <p className="text-emerald-300">â— Sightline Perception + Planner: READY (Zero Drift)</p>
                                 </div>
                                 <div className="flex gap-1">
@@ -2819,7 +2819,7 @@ export default function MobileRemote() {
                                 <div className="flex items-center justify-between text-[10px] font-mono p-1 bg-slate-900 rounded-lg">
                                   <Button size="sm" variant="ghost" className="h-6 px-2 text-white">â–¶ Play</Button>
                                   <span className="text-slate-400">01:45 / 03:20</span>
-                                  <Button size="sm" variant="ghost" className="h-6 px-2 text-white">ðŸ”Š 100%</Button>
+                                  <Button size="sm" variant="ghost" className="h-6 px-2 text-white">🔊 100%</Button>
                                 </div>
                               </div>
                             )}
@@ -2972,7 +2972,7 @@ export default function MobileRemote() {
                             <button
                               onClick={() => {
                                 setIsPcStartMenuOpen(false);
-                                toast.info("ðŸ”’ PC Locked");
+                                toast.info("🔒 PC Locked");
                               }}
                               className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white"
                             >
@@ -3205,7 +3205,7 @@ export default function MobileRemote() {
               <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-3 z-20">
                 <div className="flex items-center justify-between pointer-events-auto">
                   <span className="px-2 py-0.5 rounded bg-black/70 text-[9px] font-mono text-teal-300 border border-teal-500/40">
-                    ðŸ“· LIVE CAMERA ({streamMode === "camera_front" ? "FRONT" : "REAR"})
+                    📷 LIVE CAMERA ({streamMode === "camera_front" ? "FRONT" : "REAR"})
                   </span>
                   <div className="flex items-center gap-1.5">
                     <button
@@ -3311,7 +3311,7 @@ export default function MobileRemote() {
                 )}
 
                 <div className="text-center text-[9px] font-mono text-slate-300 bg-black/75 p-1 rounded-md border border-slate-800">
-                  {autoBarcodeScan ? "ðŸ” Auto-scanning camera for barcodes & QR codes" : "Point camera at barcode or screen"}
+                  {autoBarcodeScan ? "🔍 Auto-scanning camera for barcodes & QR codes" : "Point camera at barcode or screen"}
                 </div>
               </div>
             )}
@@ -3433,13 +3433,13 @@ export default function MobileRemote() {
                   setIsRecordingWorkflow((prev) => !prev);
                   if (!isRecordingWorkflow) {
                     setRecordedSteps([]);
-                    toast.info("ðŸ”´ Workflow Recording Started: Tap apps to record steps");
+                    toast.info("🔴 Workflow Recording Started: Tap apps to record steps");
                   }
                 } else {
                   handleSwitchStreamSource("interactive_phone");
                   setIsRecordingWorkflow(true);
                   setRecordedSteps([]);
-                  toast.info("ðŸ”´ Switched to Phone & Started Recording Steps");
+                  toast.info("🔴 Switched to Phone & Started Recording Steps");
                 }
               }}
               variant="outline"

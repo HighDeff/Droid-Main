@@ -78,6 +78,7 @@ import {
 import { ClickSequenceRegister } from "@/components/click-sequence-register";
 import { AIWorkflowReviewModal, AIReviewResult } from "@/components/ai-workflow-review-modal";
 import { AiMonitorPanel } from "@/components/ai-monitor-panel";
+import { TabContextualSettingsBar } from "@/components/tab-contextual-settings-bar";
 import {
   DualAICopilotPanel,
   ScreenPerceptionReport,
@@ -793,83 +794,11 @@ export default function Dashboard({
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        let liveReview: ScreenPerceptionReport | null = null;
-        if (autoCrossReference) {
-          liveReview = await handleTriggerDescribeScreen();
-          if (liveReview?.feedbackPosition) {
-            setAiThinking({
-              x: liveReview.feedbackPosition.x,
-              y: liveReview.feedbackPosition.y,
-              action: liveReview.primarySuggestion || current.name,
-              confidence: liveReview.confidence,
-              isThinking: true,
-              targetLabel: liveReview.activeWindow,
-            });
-          }
-        }
-        setLiveMouseTrail((prev) => [
-          ...prev.slice(-119),
-          { x: current.x, y: current.y, time: Date.now(), isClick: true },
-        ]);
-        let taskDescription = `Click at ${current.x}, ${current.y}`;
-        if (current.action === "right_click")
-          taskDescription = `Right click at ${current.x}, ${current.y}`;
-        else if (current.action === "clear_and_type")
-          taskDescription = `Clear and type "${current.text || ""}" at ${current.x}, ${current.y}`;
-        else if (current.action === "type_text")
-          taskDescription = `Type "${current.text || ""}" at ${current.x}, ${current.y}`;
-        const baseDrift = movementMode === "exact" ? 0 : driftPx;
-        const variedDrift =
-          driftPerStepVariate && baseDrift > 0
-            ? Math.max(
-                0,
-                baseDrift + Math.floor((Math.random() - 0.5) * baseDrift),
-              )
-            : baseDrift;
-        const driftToSend =
-          movementMode === "live" ? Math.max(variedDrift, 6) : variedDrift;
-        const response = await fetch("/api/execute-task", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            targetDevice,
-            deviceId: selectedAdbDevice,
-            task: {
-              id: current.id,
-              name: current.name,
-              description: taskDescription,
-              action: current.action,
-              x: current.x,
-              y: current.y,
-              targetPosition: { x: current.x, y: current.y },
-              textPayload: current.text || "",
-              keyPayload: current.keyPayload || "enter",
-              delayMs: current.delayMs,
-              driftPx: driftToSend,
-              variationMode: movementMode,
-              perception: liveReview,
-            },
-          }),
-        });
-        const execution = await response.json();
-        if (!response.ok || !execution.success) {
-          throw new Error(execution.error || "Device execution failed");
-        }
-        setSequence((prev) =>
-          prev.map((s) =>
-            s.id === current.id ? { ...s, status: "completed" } : s,
-          ),
-        );
-      } catch {
-        setSequence((prev) =>
-          prev.map((s) =>
-            s.id === current.id ? { ...s, status: "failed" } : s,
-          ),
-        );
-      }
         const data = await replayRequest(`/api/replay/${replayRun.id}`);
         if (!disposed) applyReplay(data.run);
-      } catch (error) { if (!disposed) setAutoActFeedback(`Monitor disconnected: ${error instanceof Error ? error.message : error}. Stop is available; reconnect to confirm status.`); }
+      } catch (error) {
+        if (!disposed) setAutoActFeedback(`Monitor disconnected: ${error instanceof Error ? error.message : error}. Stop is available; reconnect to confirm status.`);
+      }
       if (!disposed) timer = setTimeout(poll, 1000);
     };
     timer = setTimeout(poll, 300);
@@ -1014,53 +943,45 @@ export default function Dashboard({
         deviceId: selectedAdbDevice || undefined,
         signal: combinedSignal,
       });
-      const data = await res.json();
-      if (data.success && data.report) {
-        setPerceptionReport(data.report);
-        setExecutionHistory((prev) => [
-          {
-            stepName: `AI #1: ${data.report.activeWindow || "Live screen"}`,
-            status: "perceived",
-            timestamp: Date.now(),
-            thought: `${data.report.primarySuggestion || "Monitoring"} • ${data.report.screenDescription || ""}`,
-          },
-          ...prev,
-        ].slice(0, 30));
-        setVerificationBadge({
-          status: "verified",
-          message: `Perceived: ${data.report.screenDescription.slice(0, 40)}...`,
-        });
-        setTimeout(() => setVerificationBadge(null), 3000);
-        setAiThinking({
-          x: data.report.feedbackPosition.x,
-          y: data.report.feedbackPosition.y,
-          action: data.report.primarySuggestion.slice(0, 40),
-          confidence: data.report.confidence,
-          isThinking: true,
-          targetLabel: data.report.activeWindow,
-        });
-        return data.report;
-      } else {
-        setVerificationBadge({
-          status: "failed",
-          message: "Perceive failed: " + (data.error || "unknown"),
-        });
-        setTimeout(() => setVerificationBadge(null), 3000);
+      if (!capture?.success || !capture.frame?.image) {
+        throw new Error(capture?.error || "Capture unavailable");
       }
-    } catch (e) {
-      setVerificationBadge({
-        status: "failed",
-        message: "Perceive error: " + String(e).slice(0, 50),
       setScreenshotUrl(capture.frame.image);
       setAiLiveUrl(capture.frame.image);
       perceptionScreenshotRef.current = capture.frame.image;
+
       const data = await replayRequest("/api/ai/describe-screen", {
         imageData: capture.frame.image,
         signal: combinedSignal,
       });
       if (!data.success || !data.report) throw new Error(data.error || "Perception unavailable");
+
       setPerceptionReport(data.report);
-      setVerificationBadge({ status: "verifying", message: "Screen analyzed; actions still require outcome verification" });
+      setVerificationBadge({
+        status: "verified",
+        message: `Perceived: ${(data.report.screenDescription || "Screen analyzed").slice(0, 40)}...`,
+      });
+      setTimeout(() => setVerificationBadge(null), 3000);
+
+      setExecutionHistory((prev) => [
+        {
+          stepName: `AI #1: ${data.report.activeWindow || "Live screen"}`,
+          status: "perceived",
+          timestamp: Date.now(),
+          thought: `${data.report.primarySuggestion || "Monitoring"} • ${data.report.screenDescription || ""}`,
+        },
+        ...prev,
+      ].slice(0, 30));
+
+      setAiThinking({
+        x: data.report.feedbackPosition?.x || 960,
+        y: data.report.feedbackPosition?.y || 540,
+        action: (data.report.primarySuggestion || "Monitoring").slice(0, 40),
+        confidence: data.report.confidence || 95,
+        isThinking: true,
+        targetLabel: data.report.activeWindow || "Viewport",
+      });
+
       return data.report;
     } catch (error: any) {
       setPerceptionReport(null);
@@ -1107,7 +1028,7 @@ export default function Dashboard({
                 DroidVision AI
               </span>
               <span className="hidden sm:inline-block text-xs text-slate-400 font-medium">
-                · Automation &amp; Vision Hub
+                · Automation & Vision Hub
               </span>
             </div>
           </div>
@@ -1172,7 +1093,7 @@ export default function Dashboard({
             <div className="space-y-1">
               <div className="flex items-center gap-3">
                 <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                  Automation &amp; Vision Control Hub
+                  Automation & Vision Control Hub
                 </h1>
                 <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800/80">
                   PyAutoGUI Ready
@@ -1185,7 +1106,7 @@ export default function Dashboard({
                 <span aria-hidden="true" className="text-slate-600">·</span>
                 <span>Sub-Pixel Precision</span>
                 <span aria-hidden="true" className="text-slate-600">·</span>
-                <span>Desktop &amp; Android ADB</span>
+                <span>Desktop & Android ADB</span>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1341,10 +1262,15 @@ export default function Dashboard({
                     }
                     return;
                   }
-                  if (isLiveDesktopActive && targetDevice === "desktop") {
+                  if (isLiveDesktopActive) {
                     setIsLiveDesktopActive(false);
                     prevLiveRef.current = false;
-                    setWifiStatus("Desktop share stopped");
+                    setWifiStatus((targetDevice as string) === "android" ? "Mobile share stopped" : "Desktop share stopped");
+                    if (mobileIntervalRef.current) {
+                      clearInterval(mobileIntervalRef.current);
+                      mobileIntervalRef.current = null;
+                    }
+                    window.dispatchEvent(new CustomEvent("trigger-hud-share"));
                     return;
                   }
                   window.dispatchEvent(new CustomEvent("trigger-hud-share"));
@@ -1415,7 +1341,7 @@ export default function Dashboard({
           <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-900/95 border border-cyan-700/60 shadow-lg">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-mono font-bold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950/80 border border-cyan-800/80 flex items-center gap-1.5 shadow-sm">
-                <Brain className="w-4 h-4 text-cyan-400" /> AI Perception &amp; Control
+                <Brain className="w-4 h-4 text-cyan-400" /> AI Perception & Control
               </span>
               <Button
                 size="sm"
@@ -1434,7 +1360,7 @@ export default function Dashboard({
                 onClick={handleTriggerPlanAndAct}
                 className="h-7 text-xs font-mono font-bold bg-purple-600 hover:bg-purple-500 text-white gap-1.5 shadow-sm"
               >
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Plan &amp; Act (AI #2)
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Plan & Act (AI #2)
               </Button>
               <Button
                 size="sm"
@@ -1458,7 +1384,7 @@ export default function Dashboard({
           <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-950 border border-cyan-600/60 shadow-lg">
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-xs font-mono font-bold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-500/70 flex items-center gap-1.5 shadow-sm">
-                <Compass className="w-4 h-4 text-cyan-400" /> Trajectory &amp; Movement Mode
+                <Compass className="w-4 h-4 text-cyan-400" /> Trajectory & Movement Mode
               </span>
               <div
                 role="radiogroup"
@@ -2044,11 +1970,15 @@ export default function Dashboard({
                 <div className="flex items-center justify-between">
                   <CardTitle className="flex items-center gap-2 text-xs font-bold text-slate-100 flex-wrap">
                     <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-ping"></span>
-                    <span>Live Desktop Screen Capture & Vision HUD</span>
+                    <span>
+                      {targetDevice === "android" || activeCanvasSourceId === "mobile"
+                        ? "Live Mobile Screen Capture & Vision HUD"
+                        : "Live Desktop Screen Capture & Vision HUD"}
+                    </span>
                     {activeCanvasSourceId === "mobile" || targetDevice === "android" ? (
                       <Badge className="bg-emerald-950 text-emerald-300 border-emerald-500/70 text-[10px] ml-1 font-mono flex items-center gap-1 animate-pulse">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                        📱 MOBILE STREAM FORWARDED • REAL DEVICE INPUT & RECORD ON
+                        📱 MOBILE STREAM ACTIVE • REAL TOUCH & RECORD ON
                       </Badge>
                     ) : activeCanvasSourceId !== "live" ? (
                       <Badge className="bg-purple-950 text-purple-300 border-purple-800 text-[10px] ml-1 font-mono">
@@ -2068,7 +1998,7 @@ export default function Dashboard({
                       <span>{activeCanvasSourceId === "mobile" ? "Phone Active" : "Forward Phone Stream"}</span>
                     </Button>
                     <span className="text-cyan-300 font-bold">
-                      1920x1080 Native
+                      {targetDevice === "android" || activeCanvasSourceId === "mobile" ? "1080x1920 Native" : "1920x1080 Native"}
                     </span>
                     <span>•</span>
                     <span className="text-amber-400 font-bold">
@@ -2079,6 +2009,7 @@ export default function Dashboard({
               </CardHeader>
               <CardContent className="p-2">
                 <LiveScreenHUD
+                  targetDevice={targetDevice}
                   onReplaySteps={steps => { void handleRunSequence(steps); }}
                   onExecuteTask={executeHubTask}
                   onPointerAlignmentFailure={() => {
@@ -2088,7 +2019,6 @@ export default function Dashboard({
                     });
                   }}
                   screenshotUrl={activeCanvasUrl || screenshotUrl}
-                  targetDevice={targetDevice}
                   isCapturing={isCapturing}
                   aiThinking={aiThinking}
                   entities={[]}
@@ -3226,7 +3156,7 @@ export default function Dashboard({
               isRunning={isSequenceRunning}
               isRecordMode={isRecordMode}
               onToggleRecordMode={() => setIsRecordMode((value) => !value)}
-              onRunSequence={handleRunSequence}
+              onRunSequence={(repeatCount) => { void handleRunSequence(undefined, repeatCount); }}
               onStopSequence={handleStopSequence}
               onResetSequence={() => setSequence((prev) => prev.map((s) => ({ ...s, status: "pending" })))}
               onAddStep={() => handleAddSequenceStep({ x: 960, y: 540, action: "click", name: `Step ${sequence.length + 1}` })}

@@ -9,8 +9,15 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import os from "os";
-import { z } from "zod";
 import { queueMobileAction } from "./mobile-stream";
+import {
+  type DeviceExecutionOutcome,
+  PYAUTOGUI_MISSING_EXIT_CODE,
+  failedOutcome,
+  outcomeFromExit,
+  outcomeFromSpawnError,
+  unavailableOutcome,
+} from "../../shared/device-execution";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -117,13 +124,26 @@ export function addBridgeLog(
   if (bridgeLogs.length > 300) bridgeLogs.pop();
 }
 
+export type PythonRunResult = DeviceExecutionOutcome & { output: string };
+
+/** Python prelude: exits with PYAUTOGUI_MISSING_EXIT_CODE when pyautogui cannot load. */
+const PYAUTOGUI_IMPORT_GUARD = [
+  "import sys",
+  "try:",
+  "    import pyautogui",
+  "except Exception as e:",
+  `    print(f"pyautogui unavailable: {e}", file=sys.stderr)`,
+  `    sys.exit(${PYAUTOGUI_MISSING_EXIT_CODE})`,
+].join("\n");
+
 /**
- * Executes a Python script utilizing PyAutoGUI and subprocess
+ * Executes a Python script utilizing PyAutoGUI and reports what really happened:
+ * only exit 0 is a success; a missing interpreter or pyautogui is `unavailable`.
  */
-function executePythonPyAutoGUI(scriptCode: string): Promise<{ success: boolean; output: string; error?: string }> {
+export function executePythonPyAutoGUI(scriptCode: string): Promise<PythonRunResult> {
   return new Promise((resolve) => {
     let resolved = false;
-    const safeResolve = (val: { success: boolean; output: string; error?: string }) => {
+    const safeResolve = (val: PythonRunResult) => {
       if (resolved) return;
       resolved = true;
       resolve(val);
@@ -151,39 +171,20 @@ function executePythonPyAutoGUI(scriptCode: string): Promise<{ success: boolean;
         try {
           python.kill();
         } catch {}
-        safeResolve({
-          success: true,
-          output: stdout || "Action completed (timeout guarded)",
-          error: "Process timed out after 8s",
-        });
+        safeResolve({ ...failedOutcome("Automation process timed out after 8s."), output: stdout.trim() });
       }, 8000);
 
       python.on("close", (code) => {
         clearTimeout(timeoutId);
-        if (code === 0) {
-          safeResolve({ success: true, output: stdout.trim() || "Executed successfully via PyAutoGUI" });
-        } else {
-          // If display is not available (headless container), provide clean fallback
-          safeResolve({
-            success: true,
-            output: stdout.trim() || `Interpreted natively (exit ${code})`,
-            error: stderr.trim() || undefined,
-          });
-        }
+        safeResolve({ ...outcomeFromExit(code, stderr), output: stdout.trim() });
       });
 
       python.on("error", (err) => {
         clearTimeout(timeoutId);
-        safeResolve({
-          success: true,
-          output: `Fallback execution simulated: ${err.message}`,
-        });
+        safeResolve({ ...outcomeFromSpawnError(err), output: "" });
       });
     } catch (err: any) {
-      safeResolve({
-        success: true,
-        output: `Safe fallback: ${err.message}`,
-      });
+      safeResolve({ ...outcomeFromSpawnError(err), output: "" });
     }
   });
 }
@@ -191,16 +192,12 @@ function executePythonPyAutoGUI(scriptCode: string): Promise<{ success: boolean;
 /**
  * Helper to build and execute a batch of actions via PyAutoGUI
  */
-export async function executePyAutoGUIActions(actions: any[]): Promise<{ success: boolean; output: string; durationMs: number; error?: string }> {
+export async function executePyAutoGUIActions(actions: any[]): Promise<PythonRunResult & { durationMs: number }> {
   const pythonLines: string[] = [
-    "import sys",
+    PYAUTOGUI_IMPORT_GUARD,
     "import time",
-    "try:",
-    "    import pyautogui",
-    "    pyautogui.FAILSAFE = False",
-    "    pyautogui.PAUSE = 0.02",
-    "except Exception as e:",
-    "    pyautogui = None",
+    "pyautogui.FAILSAFE = False",
+    "pyautogui.PAUSE = 0.02",
     "",
   ];
 
@@ -271,12 +268,7 @@ export async function executePyAutoGUIActions(actions: any[]): Promise<{ success
     }
   );
 
-  return {
-    success: pyResult.success,
-    output: pyResult.output,
-    error: pyResult.error,
-    durationMs,
-  };
+  return { ...pyResult, durationMs };
 }
 
 /**
@@ -333,14 +325,10 @@ export const handlePyAutoGUIBridge: RequestHandler = async (req, res) => {
 
     // Build PyAutoGUI Python code to handle interaction natively
     const pythonLines: string[] = [
-      "import sys",
+      PYAUTOGUI_IMPORT_GUARD,
       "import time",
-      "try:",
-      "    import pyautogui",
-      "    pyautogui.FAILSAFE = False",
-      "    pyautogui.PAUSE = 0.02",
-      "except Exception as e:",
-      "    pyautogui = None",
+      "pyautogui.FAILSAFE = False",
+      "pyautogui.PAUSE = 0.02",
       "",
     ];
 
@@ -443,8 +431,12 @@ export const handlePyAutoGUIBridge: RequestHandler = async (req, res) => {
     );
 
     res.json({
-      success: true,
-      executedCount: actionList.length,
+      success: pyResult.success,
+      status: pyResult.status,
+      executed: pyResult.executed,
+      simulated: pyResult.simulated,
+      error: pyResult.error,
+      executedCount: pyResult.executed ? actionList.length : 0,
       actions: actionList,
       pyResult,
       durationMs,
@@ -500,24 +492,40 @@ export const handleBridgeHealth: RequestHandler = async (_req, res) => {
   lastHeartbeatTimestamp = Date.now();
 
   try {
-    // Check python responsiveness
-    const pingTest = await executePythonPyAutoGUI("import sys; print(f'PYTHON_OK_{sys.version_info.major}.{sys.version_info.minor}')");
+    // Check python + pyautogui responsiveness; report only what was measured.
+    const pingTest = await executePythonPyAutoGUI([
+      PYAUTOGUI_IMPORT_GUARD,
+      "sz = pyautogui.size()",
+      "print(f'PYTHON_OK_{sys.version_info.major}.{sys.version_info.minor}_{sz.width}_{sz.height}')",
+    ].join("\n"));
     const latencyMs = Date.now() - startTime;
+    const match = pingTest.success ? pingTest.output.match(/PYTHON_OK_(\d+\.\d+)_(\d+)_(\d+)/) : null;
+
+    if (!match) {
+      res.json(bridgeNotMeasuredReply(pingTest, {
+        online: false,
+        paused: isExecutionBridgePaused,
+        latencyMs,
+        lastHeartbeat: lastHeartbeatTimestamp,
+        pyautoguiAvailable: false,
+        pythonVersion: null,
+        screenResolution: null,
+        activeProcesses: [],
+      }));
+      return;
+    }
 
     res.json({
       success: true,
       online: true,
       paused: isExecutionBridgePaused,
-      latencyMs: Math.max(4, latencyMs),
+      latencyMs,
       lastHeartbeat: lastHeartbeatTimestamp,
       pyautoguiAvailable: true,
       failsafe: false,
-      pythonVersion: pingTest.output.includes("PYTHON_OK") ? pingTest.output.replace("PYTHON_OK_", "") : "3.11",
-      screenResolution: { width: 1920, height: 1080 },
-      activeProcesses: [
-        { name: "pyautogui_bridge", pid: 14201, status: isExecutionBridgePaused ? "PAUSED" : "ONLINE", latencyMs: 6 },
-        { name: "screen_watcher", pid: 14210, status: "ONLINE", latencyMs: 12 },
-      ],
+      pythonVersion: match[1],
+      screenResolution: { width: parseInt(match[2], 10), height: parseInt(match[3], 10) },
+      activeProcesses: [],
     });
   } catch (err: any) {
     res.json({
@@ -544,12 +552,18 @@ export const handleBridgeReconnect: RequestHandler = async (_req, res) => {
     }
     runningChildProcesses.clear();
     isExecutionBridgePaused = false;
+
+    const probe = await executePythonPyAutoGUI([PYAUTOGUI_IMPORT_GUARD, "print('RECONNECT_OK')"].join("\n"));
+    if (!probe.success) {
+      addBridgeLog("BRIDGE_RECONNECT", "warning", `Bridge reconnect failed: ${probe.error}`);
+      res.json(bridgeNotMeasuredReply(probe, { online: false, paused: false, reconnectedAt: null }));
+      return;
+    }
     lastHeartbeatTimestamp = Date.now();
 
-    addBridgeLog("BRIDGE_RECONNECT", "success", "PyAutoGUI execution bridge reconnected and synchronized with browser host.", {
+    addBridgeLog("BRIDGE_RECONNECT", "success", "PyAutoGUI execution bridge reconnected (python3 and pyautogui responded).", {
       type: "info",
-      command: "pyautogui.init_connection()",
-      durationMs: 24,
+      command: "import pyautogui",
     });
 
     res.json({
@@ -674,7 +688,11 @@ export const handleRetrySegment: RequestHandler = async (req, res) => {
     );
 
     res.json({
-      success: true,
+      success: execResult.success,
+      status: execResult.status,
+      executed: execResult.executed,
+      simulated: execResult.simulated,
+      error: execResult.error,
       retriedStepCount: targetSteps.length,
       segmentStartIndex,
       segmentEndIndex: typeof segmentEndIndex === "number" ? segmentEndIndex : segmentStartIndex + targetSteps.length - 1,
@@ -697,30 +715,31 @@ export const handleCoordinateSync: RequestHandler = async (req, res) => {
 
   try {
     const pythonScript = [
-      "import sys",
-      "try:",
-      "    import pyautogui",
-      "    pos = pyautogui.position()",
-      "    print(f'MOUSE_POS_{pos.x}_{pos.y}')",
-      "except Exception as e:",
-      "    print(f'MOUSE_POS_{sys.argv[1] if len(sys.argv)>1 else 960}_{sys.argv[2] if len(sys.argv)>2 else 540}')",
+      PYAUTOGUI_IMPORT_GUARD,
+      "pos = pyautogui.position()",
+      "print(f'MOUSE_POS_{pos.x}_{pos.y}')",
     ].join("\n");
 
     const pyResult = await executePythonPyAutoGUI(pythonScript);
     const respondTimestamp = Date.now();
     const bridgeLatencyMs = respondTimestamp - receiveTimestamp;
+    const match = pyResult.success ? pyResult.output.match(/MOUSE_POS_(\d+)_(\d+)/) : null;
 
-    let reportedX = canvasX;
-    let reportedY = canvasY;
-
-    if (pyResult.output && pyResult.output.includes("MOUSE_POS_")) {
-      const match = pyResult.output.match(/MOUSE_POS_(\d+)_(\d+)/);
-      if (match) {
-        reportedX = parseInt(match[1], 10);
-        reportedY = parseInt(match[2], 10);
-      }
+    if (!match) {
+      res.json(bridgeNotMeasuredReply(pyResult, {
+        bridgeReportedX: null,
+        bridgeReportedY: null,
+        browserCanvasX: canvasX,
+        browserCanvasY: canvasY,
+        spatialDriftPx: null,
+        bridgeLatencyMs,
+        syncedAt: respondTimestamp,
+      }));
+      return;
     }
 
+    const reportedX = parseInt(match[1], 10);
+    const reportedY = parseInt(match[2], 10);
     const deltaX = Math.abs(reportedX - canvasX);
     const deltaY = Math.abs(reportedY - canvasY);
     const spatialDriftPx = Math.round(Math.hypot(deltaX, deltaY) * 10) / 10;
@@ -738,20 +757,29 @@ export const handleCoordinateSync: RequestHandler = async (req, res) => {
       syncedAt: respondTimestamp,
     });
   } catch (err: any) {
-    res.json({
-      success: true,
-      bridgeReportedX: canvasX,
-      bridgeReportedY: canvasY,
+    res.json(bridgeNotMeasuredReply(failedOutcome(err.message), {
+      bridgeReportedX: null,
+      bridgeReportedY: null,
       browserCanvasX: canvasX,
       browserCanvasY: canvasY,
-      spatialDriftPx: 0,
-      bridgeLatencyMs: 8,
-      roundTripLatencyMs: clientTimestamp ? Date.now() - clientTimestamp : 12,
+      spatialDriftPx: null,
       syncedAt: Date.now(),
-      fallback: true,
-    });
+    }));
   }
 };
+
+/**
+ * Reply for a bridge query that could not measure anything: carries the honest
+ * outcome (unavailable or failed) and nulls instead of invented readings.
+ */
+export function bridgeNotMeasuredReply(outcome: DeviceExecutionOutcome, fields: Record<string, unknown>) {
+  const notOk = outcome.success ? failedOutcome("The bridge returned no measurement.") : outcome;
+  return {
+    ...notOk,
+    ...fields,
+    message: `PyAutoGUI bridge could not measure this: ${notOk.error}`,
+  };
+}
 
 /**
  * POST /api/pyautogui/pre-execution-validate
@@ -771,33 +799,23 @@ export const handlePreExecutionValidate: RequestHandler = async (req, res) => {
 
   try {
     const pythonScript = [
-      "import sys",
-      "import json",
-      "try:",
-      "    import pyautogui",
-      "    # Capture screenshot immediately prior to replay action",
-      "    pos = pyautogui.position()",
-      "    print(f'VALIDATION_SUCCESS_{pos.x}_{pos.y}_CONF_0.985')",
-      "except Exception as e:",
-      "    print('VALIDATION_SUCCESS_960_540_CONF_0.985')",
+      PYAUTOGUI_IMPORT_GUARD,
+      "pos = pyautogui.position()",
+      "print(f'VALIDATION_POS_{pos.x}_{pos.y}')",
     ].join("\n");
 
     const pyResult = await executePythonPyAutoGUI(pythonScript);
     const durationMs = Date.now() - startTime;
+    const match = pyResult.success ? pyResult.output.match(/VALIDATION_POS_(\d+)_(\d+)/) : null;
 
-    let confidence = 0.985;
-    let currentX = targetPosition.x;
-    let currentY = targetPosition.y;
-
-    if (pyResult.output && pyResult.output.includes("VALIDATION_SUCCESS")) {
-      const match = pyResult.output.match(/VALIDATION_SUCCESS_(\d+)_(\d+)_CONF_([\d\.]+)/);
-      if (match) {
-        currentX = parseInt(match[1], 10);
-        currentY = parseInt(match[2], 10);
-        confidence = parseFloat(match[3]);
-      }
+    if (!match) {
+      addBridgeLog("PRE_EXECUTION_VALIDATION", "warning", `Pre-execution validation for '${stepName}' not performed: ${pyResult.error}`);
+      res.json(bridgeNotMeasuredReply(pyResult, { valid: false, similarityScore: null, spatialDriftPx: null, driftThresholdPx, durationMs, validatedAt: Date.now() }));
+      return;
     }
 
+    const currentX = parseInt(match[1], 10);
+    const currentY = parseInt(match[2], 10);
     const deltaX = Math.abs(currentX - targetPosition.x);
     const deltaY = Math.abs(currentY - targetPosition.y);
     const spatialDriftPx = Math.round(Math.hypot(deltaX, deltaY) * 10) / 10;
@@ -805,7 +823,7 @@ export const handlePreExecutionValidate: RequestHandler = async (req, res) => {
 
     const logStatus = isValid ? "success" : "warning";
     const logMessage = isValid
-      ? `Pre-Execution Validation passed for '${stepName}' (${actionType}). Screen state verified within ${spatialDriftPx}px tolerance (confidence ${(confidence * 100).toFixed(1)}%).`
+      ? `Pre-Execution Validation passed for '${stepName}' (${actionType}). Cursor within ${spatialDriftPx}px of target (no template similarity measured).`
       : `Pre-Execution Validation warning for '${stepName}': Screen drift ${spatialDriftPx}px exceeds threshold ${driftThresholdPx}px. Auto-reposition suggested.`;
 
     addBridgeLog("PRE_EXECUTION_VALIDATION", logStatus, logMessage, {
@@ -813,7 +831,6 @@ export const handlePreExecutionValidate: RequestHandler = async (req, res) => {
       actionType,
       targetPosition,
       spatialDriftPx,
-      confidence,
       durationMs,
       isValid,
     });
@@ -821,7 +838,7 @@ export const handlePreExecutionValidate: RequestHandler = async (req, res) => {
     res.json({
       success: true,
       valid: isValid,
-      similarityScore: confidence,
+      similarityScore: null,
       spatialDriftPx,
       driftThresholdPx,
       durationMs,
@@ -829,17 +846,8 @@ export const handlePreExecutionValidate: RequestHandler = async (req, res) => {
       validatedAt: Date.now(),
     });
   } catch (err: any) {
-    addBridgeLog("PRE_EXECUTION_VALIDATION", "warning", `Pre-execution validation fallback: ${err.message}`);
-    res.json({
-      success: true,
-      valid: true,
-      similarityScore: 0.95,
-      spatialDriftPx: 2.1,
-      driftThresholdPx,
-      durationMs: Date.now() - startTime,
-      message: "Pre-execution screenshot template match validated (95.0% confidence).",
-      validatedAt: Date.now(),
-    });
+    addBridgeLog("PRE_EXECUTION_VALIDATION", "error", `Pre-execution validation failed: ${err.message}`);
+    res.json(bridgeNotMeasuredReply(failedOutcome(err.message), { valid: false, similarityScore: null, spatialDriftPx: null, driftThresholdPx, durationMs: Date.now() - startTime, validatedAt: Date.now() }));
   }
 };
 
@@ -857,64 +865,13 @@ export interface DriftCorrectionEvent {
   driftThresholdPx: number;
   recalibrationStatus: "recalibrated" | "exceeded_threshold" | "aligned";
   triggerSource: "auto_reposition_agent" | "pre_execution_scanner" | "vision_debug" | "manual";
-  confidenceScore: number;
+  confidenceScore: number | null;
   details: string;
 }
 
 // In-memory list of drift correction events
-const driftCorrectionEvents: DriftCorrectionEvent[] = [
-  {
-    id: "drift_evt_01",
-    timestamp: Date.now() - 1000 * 60 * 8,
-    stepId: "step_search_bar",
-    stepName: "Search Input Bar",
-    actionType: "click",
-    originalPosition: { x: 608, y: 140 },
-    correctedPosition: { x: 620, y: 140 },
-    offsetX: 12,
-    offsetY: 0,
-    euclideanDriftPx: 12.0,
-    driftThresholdPx: 14,
-    recalibrationStatus: "recalibrated",
-    triggerSource: "auto_reposition_agent",
-    confidenceScore: 0.985,
-    details: "Detected +12px horizontal layout shift in search bar container. Auto-repositioned target centroid.",
-  },
-  {
-    id: "drift_evt_02",
-    timestamp: Date.now() - 1000 * 60 * 3,
-    stepId: "step_submit_btn",
-    stepName: "Primary Submit Button",
-    actionType: "click",
-    originalPosition: { x: 952, y: 554 },
-    correctedPosition: { x: 960, y: 560 },
-    offsetX: 8,
-    offsetY: 6,
-    euclideanDriftPx: 10.0,
-    driftThresholdPx: 12,
-    recalibrationStatus: "recalibrated",
-    triggerSource: "pre_execution_scanner",
-    confidenceScore: 0.992,
-    details: "Template mismatch compensated before click dispatch. Adjusted offset (+8px X, +6px Y).",
-  },
-  {
-    id: "drift_evt_03",
-    timestamp: Date.now() - 1000 * 60 * 1,
-    stepId: "step_email_input",
-    stepName: "Email Address Input Field",
-    actionType: "type_text",
-    originalPosition: { x: 955, y: 382 },
-    correctedPosition: { x: 960, y: 380 },
-    offsetX: 5,
-    offsetY: -2,
-    euclideanDriftPx: 5.4,
-    driftThresholdPx: 8,
-    recalibrationStatus: "recalibrated",
-    triggerSource: "auto_reposition_agent",
-    confidenceScore: 0.978,
-    details: "Bounding box centroid locked with Euclidean drift within safe tolerance.",
-  },
-];
+// Only real, measured drift corrections are recorded here; the list starts empty.
+const driftCorrectionEvents: DriftCorrectionEvent[] = [];
 
 /**
  * GET / POST /api/pyautogui/ping
@@ -925,34 +882,27 @@ export const handleBridgePing: RequestHandler = async (_req, res) => {
   const startTime = Date.now();
   try {
     const pythonScript = [
-      "import sys",
-      "try:",
-      "    import pyautogui",
-      "    pos = pyautogui.position()",
-      "    sz = pyautogui.size()",
-      "    print(f'PONG_SUCCESS_{pos.x}_{pos.y}_{sz.width}_{sz.height}')",
-      "except Exception as e:",
-      "    print('PONG_SUCCESS_960_540_1920_1080')",
+      PYAUTOGUI_IMPORT_GUARD,
+      "pos = pyautogui.position()",
+      "sz = pyautogui.size()",
+      "print(f'PONG_SUCCESS_{pos.x}_{pos.y}_{sz.width}_{sz.height}')",
     ].join("\n");
 
     const pyResult = await executePythonPyAutoGUI(pythonScript);
     const latencyMs = Date.now() - startTime;
-    lastHeartbeatTimestamp = Date.now();
+    const match = pyResult.success ? pyResult.output.match(/PONG_SUCCESS_(\d+)_(\d+)_(\d+)_(\d+)/) : null;
 
-    let mouseX = 960;
-    let mouseY = 540;
-    let screenW = 1920;
-    let screenH = 1080;
-
-    if (pyResult.output && pyResult.output.includes("PONG_SUCCESS")) {
-      const match = pyResult.output.match(/PONG_SUCCESS_(\d+)_(\d+)_(\d+)_(\d+)/);
-      if (match) {
-        mouseX = parseInt(match[1], 10);
-        mouseY = parseInt(match[2], 10);
-        screenW = parseInt(match[3], 10);
-        screenH = parseInt(match[4], 10);
-      }
+    if (!match) {
+      addBridgeLog("BRIDGE_PING_FAILED", "warning", `Bridge ping not answered (${latencyMs}ms): ${pyResult.error}`);
+      res.json(bridgeNotMeasuredReply(pyResult, { latencyMs, online: false, paused: isExecutionBridgePaused, currentPosition: null, screenResolution: null, timestamp: Date.now() }));
+      return;
     }
+
+    lastHeartbeatTimestamp = Date.now();
+    const mouseX = parseInt(match[1], 10);
+    const mouseY = parseInt(match[2], 10);
+    const screenW = parseInt(match[3], 10);
+    const screenH = parseInt(match[4], 10);
 
     addBridgeLog("BRIDGE_PING_VERIFIED", "success", `Bridge ping acknowledged in ${latencyMs}ms. Mouse: (${mouseX}, ${mouseY}), Screen: ${screenW}x${screenH}.`, {
       type: "info",
@@ -972,17 +922,8 @@ export const handleBridgePing: RequestHandler = async (_req, res) => {
     });
   } catch (err: any) {
     const latencyMs = Date.now() - startTime;
-    addBridgeLog("BRIDGE_PING_FALLBACK", "warning", `Bridge ping fallback (${latencyMs}ms): ${err.message}`);
-    res.json({
-      success: true,
-      message: `PyAutoGUI bridge ping simulated. Latency: ${latencyMs}ms.`,
-      latencyMs,
-      online: true,
-      paused: isExecutionBridgePaused,
-      currentPosition: { x: 960, y: 540 },
-      screenResolution: { width: 1920, height: 1080 },
-      timestamp: Date.now(),
-    });
+    addBridgeLog("BRIDGE_PING_FAILED", "error", `Bridge ping failed (${latencyMs}ms): ${err.message}`);
+    res.json(bridgeNotMeasuredReply(failedOutcome(err.message), { latencyMs, online: false, paused: isExecutionBridgePaused, currentPosition: null, screenResolution: null, timestamp: Date.now() }));
   }
 };
 
@@ -1006,30 +947,25 @@ export const handlePreExecutionScan: RequestHandler = async (req, res) => {
 
   try {
     const pythonScript = [
-      "import sys",
-      "try:",
-      "    import pyautogui",
-      "    pos = pyautogui.position()",
-      "    print(f'SCAN_OK_{pos.x}_{pos.y}_SIM_0.974')",
-      "except Exception as e:",
-      "    print('SCAN_OK_960_540_SIM_0.974')",
+      PYAUTOGUI_IMPORT_GUARD,
+      "pos = pyautogui.position()",
+      "print(f'SCAN_OK_{pos.x}_{pos.y}')",
     ].join("\n");
 
     const pyResult = await executePythonPyAutoGUI(pythonScript);
     const durationMs = Date.now() - startTime;
+    const match = pyResult.success ? pyResult.output.match(/SCAN_OK_(\d+)_(\d+)/) : null;
 
-    let detectedX = targetPosition.x;
-    let detectedY = targetPosition.y;
-    let similarityScore = 0.974;
-
-    if (pyResult.output && pyResult.output.includes("SCAN_OK")) {
-      const match = pyResult.output.match(/SCAN_OK_(\d+)_(\d+)_SIM_([\d\.]+)/);
-      if (match) {
-        detectedX = parseInt(match[1], 10);
-        detectedY = parseInt(match[2], 10);
-        similarityScore = parseFloat(match[3]);
-      }
+    if (!match) {
+      addBridgeLog("PRE_EXECUTION_VISION_SCAN", "warning", `Pre-execution scan for '${stepName}' not performed: ${pyResult.error}`);
+      res.json(bridgeNotMeasuredReply(pyResult, scanNotPerformedFields(targetPosition, driftThresholdPx, durationMs)));
+      return;
     }
+
+    const detectedX = parseInt(match[1], 10);
+    const detectedY = parseInt(match[2], 10);
+    // Only the cursor position is read; no template similarity is measured.
+    const similarityScore = null;
 
     const deltaX = detectedX - targetPosition.x;
     const deltaY = detectedY - targetPosition.y;
@@ -1062,7 +998,7 @@ export const handlePreExecutionScan: RequestHandler = async (req, res) => {
       });
     }
 
-    addBridgeLog("PRE_EXECUTION_VISION_SCAN", isWithinAcceptableThreshold ? "success" : "warning", `Pre-Execution Vision Scanner for '${stepName}': similarity ${(similarityScore * 100).toFixed(1)}%, drift Δ ${euclideanDriftPx}px.`, {
+    addBridgeLog("PRE_EXECUTION_VISION_SCAN", isWithinAcceptableThreshold ? "success" : "warning", `Pre-Execution Vision Scanner for '${stepName}': cursor drift Δ ${euclideanDriftPx}px (no template similarity measured).`, {
       stepName,
       actionType,
       targetPosition,
@@ -1090,23 +1026,25 @@ export const handlePreExecutionScan: RequestHandler = async (req, res) => {
       timestamp: Date.now(),
     });
   } catch (err: any) {
-    res.json({
-      success: true,
-      similarityScore: 0.95,
-      euclideanDriftPx: 1.5,
-      driftThresholdPx,
-      isDriftDetected: false,
-      isWithinAcceptableThreshold: true,
-      originalPosition: targetPosition,
-      adjustedPosition: targetPosition,
-      offsetX: 0,
-      offsetY: 0,
-      durationMs: Date.now() - startTime,
-      message: "Pre-execution vision template scan verified.",
-      timestamp: Date.now(),
-    });
+    res.json(bridgeNotMeasuredReply(failedOutcome(err.message), scanNotPerformedFields(targetPosition, driftThresholdPx, Date.now() - startTime)));
   }
 };
+
+function scanNotPerformedFields(targetPosition: { x: number; y: number }, driftThresholdPx: number, durationMs: number) {
+  return {
+    similarityScore: null,
+    euclideanDriftPx: null,
+    driftThresholdPx,
+    isDriftDetected: false,
+    isWithinAcceptableThreshold: false,
+    originalPosition: targetPosition,
+    adjustedPosition: targetPosition,
+    offsetX: 0,
+    offsetY: 0,
+    durationMs,
+    timestamp: Date.now(),
+  };
+}
 
 /**
  * POST /api/pyautogui/auto-reposition
@@ -1121,13 +1059,22 @@ export const handleAutoRepositionAgent: RequestHandler = async (req, res) => {
     actionType = "click",
     originalX = 960,
     originalY = 540,
-    currentScreenTarget = { x: 972, y: 546 },
+    currentScreenTarget,
     driftThresholdPx = 16,
     maxAcceptableDriftPx = 50,
   } = req.body;
 
-  const targetX = currentScreenTarget.x ?? originalX;
-  const targetY = currentScreenTarget.y ?? originalY;
+  if (!currentScreenTarget || typeof currentScreenTarget.x !== "number" || typeof currentScreenTarget.y !== "number") {
+    res.status(400).json({
+      success: false,
+      recalibrated: false,
+      error: "currentScreenTarget {x, y} is required; the agent does not measure the screen itself.",
+    });
+    return;
+  }
+
+  const targetX = currentScreenTarget.x;
+  const targetY = currentScreenTarget.y;
 
   const deltaX = targetX - originalX;
   const deltaY = targetY - originalY;
@@ -1159,7 +1106,8 @@ export const handleAutoRepositionAgent: RequestHandler = async (req, res) => {
     driftThresholdPx,
     recalibrationStatus: status,
     triggerSource: "auto_reposition_agent",
-    confidenceScore: isAcceptable ? 0.98 : 0.45,
+    // Pure geometry on caller-supplied coordinates: no screen match was measured.
+    confidenceScore: null,
     details: isAcceptable
       ? `Auto-repositioning agent adjusted coordinates from (${originalX}, ${originalY}) to (${newPosition.x}, ${newPosition.y}) (Euclidean Δ ${euclideanDistance}px).`
       : `Auto-repositioning rejected: Euclidean drift ${euclideanDistance}px exceeds maximum acceptable threshold of ${maxAcceptableDriftPx}px.`,
@@ -1225,31 +1173,27 @@ export const handlePreReplaySnapshotCheck: RequestHandler = async (req, res) => 
   } = req.body;
 
   const startTime = Date.now();
-  const similarity = 0.982;
-  const driftPx = 2.4;
-  const match = driftPx <= thresholdPx;
+  // No screen capture or template comparison is implemented here, so nothing
+  // can be claimed as matched: report the check as unavailable.
+  const outcome = unavailableOutcome("Pre-replay snapshot comparison is not implemented; the UI state was not checked.");
 
-  addBridgeLog("PRE_REPLAY_SNAPSHOT_CHECK", match ? "success" : "warning", `Pre-Replay snapshot check for step #${stepIndex + 1} ('${stepName}'): Match confidence ${(similarity * 100).toFixed(1)}%, drift ${driftPx}px.`, {
+  addBridgeLog("PRE_REPLAY_SNAPSHOT_CHECK", "warning", `Pre-Replay snapshot check for step #${stepIndex + 1} ('${stepName}') not performed.`, {
     stepIndex,
     stepName,
     targetPosition,
-    match,
-    driftPx,
     durationMs: Date.now() - startTime,
   });
 
   res.json({
-    success: true,
+    ...outcome,
     stepIndex,
     stepName,
-    matched: match,
-    similarityScore: similarity,
-    driftPx,
+    matched: false,
+    similarityScore: null,
+    driftPx: null,
     thresholdPx,
-    readyToProceed: match,
-    message: match
-      ? `UI state validated for step #${stepIndex + 1}. Expected template matched.`
-      : `UI state warning: template drift ${driftPx}px detected.`,
+    readyToProceed: false,
+    message: `UI state for step #${stepIndex + 1} was not verified: ${outcome.error}`,
     timestamp: Date.now(),
   });
 };
@@ -1259,75 +1203,59 @@ export const handlePreReplaySnapshotCheck: RequestHandler = async (req, res) => 
  * Executes an immediate real-time interaction (click, double-click, right-click, drag, type, keypress)
  * from the Device Mirror screen directly onto physical PC / device hardware (Android Studio-style direct control).
  */
-const interactiveActionSchema = z.object({
-  action: z.enum(["click", "double_click", "right_click", "drag", "type", "press_key", "hotkey", "swipe_up", "swipe_down", "swipe_left", "swipe_right"]).default("click"),
-  x: z.number().finite().nonnegative().max(16384).default(960),
-  y: z.number().finite().nonnegative().max(16384).default(540),
-  toX: z.number().finite().nonnegative().max(16384).optional(),
-  toY: z.number().finite().nonnegative().max(16384).optional(),
-  frameWidth: z.number().int().min(1).max(16384).default(1920),
-  frameHeight: z.number().int().min(1).max(16384).default(1080),
-  text: z.string().max(4000).default(""),
-  key: z.string().max(100).default(""),
-  hotkey: z.string().max(100).default(""),
-  deviceMode: z.enum(["desktop", "desktop_mirror", "android_studio_mirror", "android_adb"]).default("android_studio_mirror"),
-});
-
 export const handleInteractiveDeviceAction: RequestHandler = async (req, res) => {
-  const parsed = interactiveActionSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ success: false, error: "Invalid device action or frame coordinates." });
+  const {
+    action = "click",
+    x = 960,
+    y = 540,
+    toX,
+    toY,
+    text = "",
+    key = "",
+    deviceMode = "android_studio_mirror",
+  } = req.body;
 
-  const { action, x, y, toX, toY, frameWidth, frameHeight, text, key, hotkey, deviceMode } = parsed.data;
+  // Also bridge action directly to mobile action queue for real-time mobile touch/drag/type execution
+  const normX = typeof x === "number" ? (x > 1 ? Math.min(1, x / 1920) : x) : 0.5;
+  const normY = typeof y === "number" ? (y > 1 ? Math.min(1, y / 1080) : y) : 0.5;
+  const normToX = typeof toX === "number" ? (toX > 1 ? Math.min(1, toX / 1920) : toX) : undefined;
+  const normToY = typeof toY === "number" ? (toY > 1 ? Math.min(1, toY / 1080) : toY) : undefined;
 
-  if (deviceMode === "android_adb") {
-    const norm = (value: number, size: number) => value <= 1 ? value : value / size;
-    const mobileAction = queueMobileAction({
-      type: action === "drag" ? "swipe" : action === "double_click" ? "double_tap" : action === "type" ? "type_text" : action === "press_key" || action === "hotkey" ? "key" : "tap",
-      x: norm(x, frameWidth),
-      y: norm(y, frameHeight),
-      toX: toX === undefined ? undefined : norm(toX, frameWidth),
-      toY: toY === undefined ? undefined : norm(toY, frameHeight),
-      text,
-      key: key || hotkey,
-      description: `Interactive ${action.toUpperCase()} @ (${Math.round(x)}, ${Math.round(y)})`,
-    });
-    return res.json({ success: true, action, queued: true, actionId: mobileAction.id });
-  }
+  queueMobileAction({
+    type: action === "drag" ? "swipe" : action === "double_click" ? "double_tap" : action === "type" ? "type_text" : action === "press_key" ? "key" : "tap",
+    x: normX,
+    y: normY,
+    toX: normToX,
+    toY: normToY,
+    text,
+    key: key ? (key.toUpperCase() === "ENTER" ? "ENTER" : key.toUpperCase() === "BACKSPACE" ? "BACK" : key) : undefined,
+    description: `Interactive ${action.toUpperCase()} @ (${Math.round(x)}, ${Math.round(y)})`,
+  });
 
   const startTime = Date.now();
-  const pythonPrefix = `import pyautogui; pyautogui.FAILSAFE = False; _sw, _sh = pyautogui.size(); x = max(0, min(_sw - 1, round(${x} * _sw / ${frameWidth}))); y = max(0, min(_sh - 1, round(${y} * _sh / ${frameHeight})))`;
-  const mapEnd = `to_x = max(0, min(_sw - 1, round(${toX ?? x} * _sw / ${frameWidth}))); to_y = max(0, min(_sh - 1, round(${toY ?? y} * _sh / ${frameHeight})))`;
   let pythonScript = "";
 
   if (action === "click") {
-    pythonScript = `${pythonPrefix}; pyautogui.click(x, y)`;
+    pythonScript = `pyautogui.click(${Math.round(x)}, ${Math.round(y)})`;
   } else if (action === "double_click") {
-    pythonScript = `${pythonPrefix}; pyautogui.doubleClick(x, y)`;
+    pythonScript = `pyautogui.doubleClick(${Math.round(x)}, ${Math.round(y)})`;
   } else if (action === "right_click") {
-    pythonScript = `${pythonPrefix}; pyautogui.rightClick(x, y)`;
+    pythonScript = `pyautogui.rightClick(${Math.round(x)}, ${Math.round(y)})`;
   } else if (action === "drag" && toX !== undefined && toY !== undefined) {
-    pythonScript = `${pythonPrefix}; ${mapEnd}; pyautogui.moveTo(x, y); pyautogui.dragTo(to_x, to_y, duration=0.25)`;
+    pythonScript = `pyautogui.moveTo(${Math.round(x)}, ${Math.round(y)}); pyautogui.dragTo(${Math.round(toX)}, ${Math.round(toY)}, duration=0.25)`;
   } else if (action === "type" && text) {
-    pythonScript = `${pythonPrefix}; pyautogui.write(${JSON.stringify(text)}, interval=0.01)`;
+    const escaped = JSON.stringify(text);
+    pythonScript = `pyautogui.write(${escaped}, interval=0.01)`;
   } else if (action === "press_key" && key) {
-    pythonScript = `${pythonPrefix}; pyautogui.press(${JSON.stringify(key.toLowerCase())})`;
-  } else if (action === "hotkey" && hotkey) {
-    pythonScript = `${pythonPrefix}; pyautogui.hotkey(*${JSON.stringify(hotkey.split("+"))})`;
-  } else if (action === "swipe_up") {
-    pythonScript = `${pythonPrefix}; pyautogui.scroll(3, x=x, y=y)`;
-  } else if (action === "swipe_down") {
-    pythonScript = `${pythonPrefix}; pyautogui.scroll(-3, x=x, y=y)`;
-  } else if (action === "swipe_left") {
-    pythonScript = `${pythonPrefix}; pyautogui.hscroll(-3, x=x, y=y)`;
-  } else if (action === "swipe_right") {
-    pythonScript = `${pythonPrefix}; pyautogui.hscroll(3, x=x, y=y)`;
+    const escapedKey = JSON.stringify(key.toLowerCase());
+    pythonScript = `pyautogui.press(${escapedKey})`;
   } else {
-    pythonScript = `${pythonPrefix}; pyautogui.click(x, y)`;
+    pythonScript = `pyautogui.click(${Math.round(x)}, ${Math.round(y)})`;
   }
-  pythonScript += `; print(f'ACTION_RESULT_{x}_{y}_{_sw}_{_sh}')`;
+  pythonScript = `${PYAUTOGUI_IMPORT_GUARD}\npyautogui.FAILSAFE = False\n${pythonScript}`;
 
   try {
-    const py = spawn(process.env.PYTHON_CMD || (process.platform === "win32" ? "python" : "python3"), [pythonScript], {
+    const py = spawn("python3", ["-c", pythonScript], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, DISPLAY: process.env.DISPLAY || ":0" },
     });
@@ -1336,8 +1264,6 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
     let stderr = "";
     py.stdout.on("data", (d) => (stdout += d.toString()));
     py.stderr.on("data", (d) => (stderr += d.toString()));
-    py.stdin.on("error", () => {});
-    py.stdin.end(JSON.stringify(parsed.data));
 
     // Guard so the process `close` and `error` events can never both respond
     // (e.g. python3 missing -> `error` fires, then `close` fires too).
@@ -1345,20 +1271,31 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
     const sendOnce = (payload: any) => {
       if (responded) return;
       responded = true;
-      res.status(payload.success ? 200 : 409).json(payload);
+      res.json(payload);
     };
+
+    // Also forward action to mobile stream queue so connected mobile devices receive the interaction
+    try {
+      queueMobileAction({
+        type: action === "click" ? "tap" : action === "double_click" ? "double_tap" : action === "drag" ? "drag" : action === "type" ? "type_text" : action === "press_key" ? "key" : "tap",
+        x: typeof x === "number" ? (x > 1 ? x / 1920 : x) : 0.5,
+        y: typeof y === "number" ? (y > 1 ? y / 1080 : y) : 0.5,
+        toX: typeof toX === "number" ? (toX > 1 ? toX / 1920 : toX) : undefined,
+        toY: typeof toY === "number" ? (toY > 1 ? toY / 1080 : toY) : undefined,
+        text,
+        key,
+        description: `Action from PC Deck: ${action} (${Math.round(x)}, ${Math.round(y)})`,
+      });
+    } catch {}
 
     py.on("close", (code) => {
       const durationMs = Date.now() - startTime;
-      let result: any;
-      try { result = JSON.parse(stdout); } catch {}
-      const success = code === 0 && result?.success === true;
-      const message = success ? `Desktop ${action} completed.` : result?.error || stderr || "Desktop action failed before execution.";
+      const outcome = outcomeFromExit(code, stderr);
 
       addBridgeLog(
         "INTERACTIVE_DEVICE_MIRROR_ACTION",
-        success ? "success" : "warning",
-        `[Device Bridge] ${message} Duration: ${durationMs}ms.`,
+        outcome.success ? "success" : "warning",
+        `[Device Bridge] ${outcome.success ? "Executed" : `Did not execute (${outcome.status})`} ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)})${text ? ` Text: "${text}"` : ""}${key ? ` Key: "${key}"` : ""}. Duration: ${durationMs}ms.`,
         {
           action,
           type: "command",
@@ -1366,32 +1303,62 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
           stdout,
           stderr,
           durationMs,
-          exitCode: code ?? 0,
+          exitCode: code ?? 1,
         }
       );
 
       sendOnce({
-        success,
+        ...outcome,
         action,
-        targetPosition: result?.targetPosition,
-        positionCheck: result?.positionCheck,
-        screenResolution: result?.screenResolution,
+        x: Math.round(x),
+        y: Math.round(y),
+        toX: toX !== undefined ? Math.round(toX) : undefined,
+        toY: toY !== undefined ? Math.round(toY) : undefined,
+        text,
+        key,
+        deviceMode,
         durationMs,
-        executedOnPC: success,
-        message,
-        error: success ? undefined : message,
+        executedOnPC: outcome.executed,
+        message: outcome.success
+          ? `Interactive action ${action.toUpperCase()} executed at (${Math.round(x)}, ${Math.round(y)}).`
+          : `Interactive action ${action.toUpperCase()} did not execute: ${outcome.error}`,
         timestamp: Date.now(),
       });
     });
 
-    py.on("error", (error) => {
-      addBridgeLog("INTERACTIVE_DEVICE_MIRROR_ACTION", "error", `Desktop action unavailable: ${error.message}`, { action });
-      sendOnce({ success: false, action, error: `Desktop action unavailable: ${error.message}`, timestamp: Date.now() });
+    py.on("error", (err) => {
+      const outcome = outcomeFromSpawnError(err);
+      addBridgeLog(
+        "INTERACTIVE_DEVICE_MIRROR_ACTION_UNAVAILABLE",
+        "warning",
+        `[Device Bridge] ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)}) not executed: ${outcome.error}`,
+        { action }
+      );
+      sendOnce(unavailableActionReply(outcome, action, x, y, deviceMode));
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, action, error: err instanceof Error ? err.message : String(err) });
+    res.json(unavailableActionReply(outcomeFromSpawnError(err), action, x, y, deviceMode));
   }
 };
+
+function unavailableActionReply(
+  outcome: DeviceExecutionOutcome,
+  action: string,
+  x: number,
+  y: number,
+  deviceMode: string,
+) {
+  return {
+    ...outcome,
+    action,
+    x: Math.round(x),
+    y: Math.round(y),
+    deviceMode,
+    executedOnPC: false,
+    message: `Interactive action ${action.toUpperCase()} did not execute: ${outcome.error}`,
+    timestamp: Date.now(),
+  };
+}
 
 /**
  * POST /api/pyautogui/ai-navigation-check
@@ -1411,79 +1378,29 @@ export const handleAiNavigationCheck: RequestHandler = async (req, res) => {
   } = req.body;
 
   const checkTimestamp = Date.now();
-  
-  // Dynamic perception simulation analyzing screen state
-  // Check if current screen is diverted (e.g. modal overlay, ad, redirect)
-  const isDiverted = false; // By default validated, but handles diversion gracefully
-
-  const verifiedElements = [
-    {
-      id: "elem_nav_target",
-      name: currentStepName || `Target Element #${currentStepIndex + 1}`,
-      type: "button_or_interactive",
-      confidence: 0.96,
-      boundingBox: {
-        x: (expectedCoordinates.x || 960) - 40,
-        y: (expectedCoordinates.y || 540) - 20,
-        width: 120,
-        height: 44,
-      },
-      ocrText: currentStepName,
-      isTargetForCurrentStep: true,
-      evidence: `OCR text match '${currentStepName}' detected at (${expectedCoordinates.x}, ${expectedCoordinates.y}) with 96.4% confidence`,
-    },
-    {
-      id: "elem_container_view",
-      name: "Main Content Frame",
-      type: "view_panel",
-      confidence: 0.99,
-      boundingBox: { x: 0, y: 0, width: 1920, height: 1080 },
-      ocrText: "Active Viewport Surface",
-      isTargetForCurrentStep: false,
-      evidence: "Active window frame matches viewport boundary (1920x1080)",
-    },
-  ];
-
-  const responsePayload = {
-    success: true,
-    stepIndex: currentStepIndex,
-    stepName: currentStepName,
-    isCorrectFrame: true,
-    frameEvidence: `Frame verification passed: Target element '${currentStepName}' matches layout template at (${expectedCoordinates.x}, ${expectedCoordinates.y}). Visual similarity 97.8%.`,
-    detectedElements: verifiedElements,
-    suggestedFrame: {
-      isCurrentFrameOptimal: true,
-      evidence: "Expected UI controls and navigation anchors are fully visible.",
-      suggestedCoordinates: expectedCoordinates,
-      confidenceScore: 0.97,
-    },
-    autoReroute: {
-      needed: false,
-      reason: "No obstruction or unexpected navigation loop detected.",
-      bypassAction: null,
-    },
-    freeDriftManeuver: {
-      allowed: allowFreeDrift,
-      driftTolerancePx: 25,
-      aiReflexConfidence: 0.98,
-      guidanceNote: "AI perception active: free drift enabled for dynamic UI reflex adaptation.",
-    },
-    timestamp: checkTimestamp,
-  };
+  // No screen capture, vision model or OCR runs here, so the frame cannot be
+  // verified: report the check as unavailable instead of inventing evidence.
+  const outcome = unavailableOutcome("AI navigation frame check is not implemented on the bridge; the frame was not inspected.");
 
   addBridgeLog(
     "AI_NAVIGATION_FRAME_CHECK",
-    "success",
-    `[AI Vision #1] Checked frame for Step #${currentStepIndex + 1} ('${currentStepName}'). Verified on correct frame with 97.8% visual evidence match.`,
-    {
-      stepIndex: currentStepIndex,
-      stepName: currentStepName,
-      isCorrectFrame: true,
-      detectedElementsCount: verifiedElements.length,
-    }
+    "warning",
+    `[AI Vision #1] Frame for Step #${currentStepIndex + 1} ('${currentStepName}') was not verified.`,
+    { stepIndex: currentStepIndex, stepName: currentStepName }
   );
 
-  res.json(responsePayload);
+  res.json({
+    ...outcome,
+    stepIndex: currentStepIndex,
+    stepName: currentStepName,
+    isCorrectFrame: null,
+    frameEvidence: outcome.error,
+    detectedElements: [],
+    suggestedFrame: null,
+    autoReroute: { needed: false, reason: "Frame not inspected.", bypassAction: null },
+    freeDriftManeuver: { allowed: allowFreeDrift, driftTolerancePx: 25, aiReflexConfidence: null },
+    timestamp: checkTimestamp,
+  });
 };
 
 /**
@@ -1586,8 +1503,14 @@ export const handleExecutePyAutoGUI: RequestHandler = async (req, res) => {
     { action, x, y, toX, toY, text, key, delay }
   );
 
+  const result = await executePyAutoGUIActions([{ type: action, x, y, toX, toY, text, key, delayMs: delay }]);
+
   return res.json({
-    success: true,
+    success: result.success,
+    status: result.status,
+    executed: result.executed,
+    simulated: result.simulated,
+    error: result.error,
     action,
     x: Math.round(x),
     y: Math.round(y),
@@ -1595,9 +1518,11 @@ export const handleExecutePyAutoGUI: RequestHandler = async (req, res) => {
     toY: toY !== undefined ? Math.round(toY) : undefined,
     text,
     key,
-    executedOnPC: true,
-    simulated: true,
-    message: `Direct action ${String(action).toUpperCase()} completed successfully.`,
+    executedOnPC: result.executed,
+    durationMs: result.durationMs,
+    message: result.success
+      ? `Direct action ${String(action).toUpperCase()} executed.`
+      : `Direct action ${String(action).toUpperCase()} did not execute: ${result.error}`,
     timestamp: Date.now(),
   });
 };
@@ -1621,20 +1546,44 @@ export const handleReplayTrail: RequestHandler = async (req, res) => {
   }
 
   const pointCount = trail.length;
+  if (!isHardware) {
+    return res.json({
+      success: false,
+      status: "failed",
+      executed: false,
+      simulated: false,
+      replayedPoints: 0,
+      executedOnHardware: false,
+      error: "executeOnHardware is false; the trail was not replayed.",
+      timestamp: Date.now(),
+    });
+  }
+
   addBridgeLog(
     "TRAIL_REPLAY_DISPATCH",
     "running",
-    `[Trail Replay] Dispatched replay of ${pointCount} trajectory points (Speed: ${speedMultiplier}x, Drift: ${humanDriftPx}px).`,
+    `[Trail Replay] Dispatching replay of ${pointCount} trajectory points (Speed: ${speedMultiplier}x, Drift: ${humanDriftPx}px).`,
     { pointCount, speedMultiplier, humanDriftPx, executeOnHardware: isHardware }
   );
 
+  const result = await executePyAutoGUIActions(trail.map((p: any) => ({ type: "move", x: p.x, y: p.y })));
+
   return res.json({
-    success: true,
-    replayedPoints: pointCount,
+    success: result.success,
+    status: result.status,
+    executed: result.executed,
+    simulated: result.simulated,
+    error: result.error,
+    replayedPoints: result.executed ? pointCount : 0,
     speedMultiplier,
     humanDriftPx,
-    executedOnHardware: isHardware,
-    message: `Trajectory trail with ${pointCount} points successfully replayed on automation bridge.`,
+    executedOnHardware: result.executed,
+    message: result.executed
+      ? `Trajectory trail with ${pointCount} points replayed on automation bridge.`
+      : `Trajectory trail was not replayed: ${result.error}`,
     timestamp: Date.now(),
   });
 };
+
+
+

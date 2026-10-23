@@ -715,6 +715,7 @@ export function UniversalDeviceBridgeHub({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
       });
+      if (!res.ok) throw new Error(`mobile-stream action returned HTTP ${res.status}`);
 
       // 2. If key action (HOME, BACK, etc.), also send ADB key event if device connected
       if (action.type === "key" && action.key) {
@@ -750,9 +751,9 @@ export function UniversalDeviceBridgeHub({
           .catch(() => {});
       }
     } catch (e) {
-      // Optimistic simulated completion if transient network blip
-      setRecentActionBadge(`Executed (Simulated): ${desc}`);
-      toast.success(`Action queued: ${desc}`);
+      const reason = e instanceof Error ? e.message : String(e);
+      setRecentActionBadge(`Failed: ${desc}`);
+      toast.error(`Action failed to reach ${mobileDeviceName}: ${reason}`);
       setTimeout(() => setRecentActionBadge(null), 2500);
     }
   };
@@ -897,7 +898,11 @@ export function UniversalDeviceBridgeHub({
         if (d.success && d.settings) {
           setWorkspaceSettings(d.settings);
           toast.success("Workspace settings updated!");
+        } else {
+          toast.error(d.error || "Server did not save the settings");
         }
+      } else {
+        toast.error(`Failed to save settings (HTTP ${res.status})`);
       }
     } catch {
       toast.error("Failed to save settings");
@@ -924,7 +929,11 @@ export function UniversalDeviceBridgeHub({
         if (d.success && d.analysis) {
           setAiRouteAnalysis(d.analysis);
           toast.success("AI route optimization analysis complete!");
+        } else {
+          toast.error(d.error || "Route analysis returned no result");
         }
+      } else {
+        toast.error(`Failed to analyze route (HTTP ${res.status})`);
       }
     } catch {
       toast.error("Failed to analyze route");

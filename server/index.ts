@@ -193,7 +193,7 @@ const screenCaptureSources: CaptureSource[] = [
       }
       return {
         imageData: result.imageData,
-        timestamp: result.timestamp ?? Date.now(),
+        timestamp: (result as any).timestamp ?? Date.now(),
         method: result.method,
         metadata: result.metadata,
       };

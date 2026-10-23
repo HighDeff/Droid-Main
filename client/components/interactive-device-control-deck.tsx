@@ -46,6 +46,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { reportDeviceAction } from "@/lib/device-action-report";
+import { useActionGate } from "@/hooks/use-action-gate";
+import { callbackPlan } from "@/lib/gated-plans";
+import { gateFailure } from "@/lib/gated-dispatch";
 
 export interface LogEventItem {
   id: string;
@@ -95,6 +99,7 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
   currentScreenTitle = "Main Screen",
   className = "",
 }) => {
+  const actionGate = useActionGate({ targetDevice: activeDevice });
   // Typing state
   const [textInput, setTextInput] = useState("");
   const [isTypingDispatching, setIsTypingDispatching] = useState(false);
@@ -318,13 +323,21 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
     await new Promise((r) => setTimeout(r, 600));
 
     toast.info(`▶ Running Test Workflow: "${wf.name}"...`);
-    addLog("TEST_MODE", "info", `Started Test Run: ${wf.name}`, `Executing ${wf.steps.length} steps sequentially from clean state.`);
+    addLog("TEST_MODE", "info", `Started Test Run: ${wf.name}`, `Executing ${wf.steps.length} steps sequentially from clean state; each step is verified on the live screen first.`);
 
-    for (let i = 0; i < wf.steps.length; i++) {
-      const step = wf.steps[i];
-      await new Promise((r) => setTimeout(r, step.delayMs || 400));
-      onDispatchAction?.(step.action, step.x, step.y, { text: step.text, key: step.key });
-      addLog("CLICK", "success", `Executed Step ${i + 1}/${wf.steps.length}: ${step.name}`, `@ (${step.x}, ${step.y})`);
+    const steps = wf.steps.map((step) => ({ ...step, delayMs: step.delayMs || 400 }));
+    let executed = 0;
+    const result = await actionGate.run(
+      callbackPlan(steps, (step) => {
+        executed++;
+        onDispatchAction?.(step.action, step.x, step.y, { text: step.text, key: step.key });
+        addLog("CLICK", "success", `Executed Step ${executed}/${wf.steps.length}: ${step.name}`, `@ (${step.x}, ${step.y})`);
+      }),
+    );
+    const failure = gateFailure(result);
+    if (failure) {
+      addLog("ERROR", "error", `Test Run Stopped: ${wf.name}`, `After ${executed}/${wf.steps.length} steps: ${failure}`);
+      return;
     }
 
     toast.success(`✅ Test Workflow "${wf.name}" completed with 100% accuracy!`);
@@ -340,16 +353,12 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
     try {
       const startTime = Date.now();
 
-      // Forward to PyAutoGUI bridge
-      await fetch("/api/pyautogui/interactive-action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "type",
-          text: textToSend,
-          deviceMode: activeDevice === "android" ? "android_adb" : "desktop_mirror",
-        }),
-      });
+      // Forward to PyAutoGUI bridge; the toast reports whether the PC really executed it
+      await reportDeviceAction("/api/pyautogui/interactive-action", {
+        action: "type",
+        text: textToSend,
+        deviceMode: activeDevice === "android" ? "android_adb" : "desktop_mirror",
+      }, "PC text input");
 
       // Forward to Mobile Stream Queue for connected phone
       fetch("/api/mobile-stream/action", {
@@ -375,7 +384,7 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
       const latency = Date.now() - startTime;
       addLog("TYPING", "success", `Injected Text: "${textToSend}"`, `Dispatched ${textToSend.length} keystrokes to connected device & phone stream.`, { latencyMs: latency });
       onDispatchAction?.("type", undefined, undefined, { text: textToSend });
-      toast.success(`⌨️ Sent text to device & phone: "${textToSend}"`);
+      toast.info(`⌨️ Queued text for phone stream: "${textToSend}"`);
       setTextInput("");
     } catch (e: any) {
       addLog("ERROR", "error", "Text Injection Failed", String(e.message || e));
@@ -403,16 +412,12 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
         }
       }
 
-      // Forward to PyAutoGUI bridge
-      await fetch("/api/pyautogui/interactive-action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "press_key",
-          key,
-          deviceMode: activeDevice === "android" ? "android_adb" : "desktop_mirror",
-        }),
-      });
+      // Forward to PyAutoGUI bridge; the toast reports whether the PC really executed it
+      await reportDeviceAction("/api/pyautogui/interactive-action", {
+        action: "press_key",
+        key,
+        deviceMode: activeDevice === "android" ? "android_adb" : "desktop_mirror",
+      }, `PC key [${label}]`);
 
       // Forward to Mobile Stream Queue for connected phone
       fetch("/api/mobile-stream/action", {
@@ -541,8 +546,9 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
         addLog("DEVICE", "success", `Wi-Fi Device Connected: ${devName}`, "Wireless ADB debugging bridge synchronized.");
         toast.success(`📱 Connected to ${devName}`);
       } else {
-        addLog("ERROR", "warning", `Wi-Fi Connect Warning`, data.message || "Connected with simulated fallback");
-        toast.info(`📱 Device Registered: ${wifiPairIp}:${wifiPairPort}`);
+        const reason = data.error || data.message || `HTTP ${res.status}`;
+        addLog("ERROR", "error", "Wi-Fi Connect Failed", reason);
+        toast.error(`📱 Not connected to ${wifiPairIp}:${wifiPairPort}: ${reason}`);
       }
     } catch (e: any) {
       addLog("ERROR", "error", "Wi-Fi Pairing Failed", String(e.message || e));
@@ -822,12 +828,12 @@ export const InteractiveDeviceControlDeck: React.FC<InteractiveDeviceControlDeck
 
                       <Button
                         size="sm"
-                        onClick={() => handleRunWorkflow(wf)}
+                        onClick={() => (actionGate.isGating ? actionGate.stop() : handleRunWorkflow(wf))}
                         aria-label={`Run Test: ${wf.name}`}
                         className="h-6 px-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-[10px] flex items-center gap-1"
                       >
                         <Play className="w-3 h-3 fill-current" />
-                        Run Test
+                        {actionGate.isGating ? "Stop" : "Run Test"}
                       </Button>
                     </div>
                   </div>

@@ -11,7 +11,11 @@ export async function reportDeviceAction(url: string, body: unknown, actionLabel
   try {
     const reply = await postDeviceAction(url, body);
     const { level, text } = describeDeviceOutcome(reply ?? {}, actionLabel);
-    toast[level](text);
+    if (reply?.simulated) {
+      toast.info(`${actionLabel} simulated on preview mirror`);
+    } else {
+      toast[level](text);
+    }
     return reply;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

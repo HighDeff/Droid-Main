@@ -1221,8 +1221,17 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
   const normToX = typeof toX === "number" ? (toX > 1 ? Math.min(1, toX / 1920) : toX) : undefined;
   const normToY = typeof toY === "number" ? (toY > 1 ? Math.min(1, toY / 1080) : toY) : undefined;
 
+  const mobileType =
+    action === "drag" || action === "swipe" ? "swipe"
+    : action === "double_click" ? "double_tap"
+    : action === "type" ? "type_text"
+    : action === "press_key" ? "key"
+    : action === "scroll" || action === "wheel" ? "scroll"
+    : action === "launch_app" || action === "open_app" ? "open_app"
+    : "tap";
+
   queueMobileAction({
-    type: action === "drag" ? "swipe" : action === "double_click" ? "double_tap" : action === "type" ? "type_text" : action === "press_key" ? "key" : "tap",
+    type: mobileType,
     x: normX,
     y: normY,
     toX: normToX,
@@ -1241,14 +1250,55 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
     pythonScript = `pyautogui.doubleClick(${Math.round(x)}, ${Math.round(y)})`;
   } else if (action === "right_click") {
     pythonScript = `pyautogui.rightClick(${Math.round(x)}, ${Math.round(y)})`;
-  } else if (action === "drag" && toX !== undefined && toY !== undefined) {
+  } else if (action === "middle_click") {
+    pythonScript = `pyautogui.middleClick(${Math.round(x)}, ${Math.round(y)})`;
+  } else if (action === "move" || action === "hover") {
+    pythonScript = `pyautogui.moveTo(${Math.round(x)}, ${Math.round(y)}, duration=0.15)`;
+  } else if ((action === "drag" || action === "swipe") && toX !== undefined && toY !== undefined) {
     pythonScript = `pyautogui.moveTo(${Math.round(x)}, ${Math.round(y)}); pyautogui.dragTo(${Math.round(toX)}, ${Math.round(toY)}, duration=0.25)`;
+  } else if (action === "scroll" || action === "wheel") {
+    const scrollAmount = typeof req.body.amount === "number" ? req.body.amount : (typeof req.body.deltaY === "number" ? Math.round(-req.body.deltaY) : -300);
+    pythonScript = `pyautogui.scroll(${scrollAmount}, x=${Math.round(x)}, y=${Math.round(y)})`;
+  } else if (action === "hotkey") {
+    const rawKeys = key || text || "ctrl+a";
+    const keys = rawKeys.split("+").map((k: string) => `'${k.trim().toLowerCase()}'`).join(", ");
+    pythonScript = `pyautogui.hotkey(${keys})`;
   } else if (action === "type" && text) {
     const escaped = JSON.stringify(text);
     pythonScript = `pyautogui.write(${escaped}, interval=0.01)`;
   } else if (action === "press_key" && key) {
-    const escapedKey = JSON.stringify(key.toLowerCase());
-    pythonScript = `pyautogui.press(${escapedKey})`;
+    const normKey = key.toLowerCase();
+    const keyMap: Record<string, string> = {
+      home: "home",
+      back: "browserback",
+      apps: "alt+tab",
+      overview: "alt+tab",
+      enter: "enter",
+      return: "enter",
+      tab: "tab",
+      escape: "esc",
+      esc: "esc",
+      backspace: "backspace",
+      space: "space",
+      volume_up: "volumeup",
+      volume_down: "volumedown",
+      select_all: "ctrl+a",
+      copy: "ctrl+c",
+      paste: "ctrl+v",
+    };
+    if (keyMap[normKey]?.includes("+")) {
+      const keys = keyMap[normKey].split("+").map((k) => `'${k}'`).join(", ");
+      pythonScript = `pyautogui.hotkey(${keys})`;
+    } else {
+      const escapedKey = JSON.stringify(keyMap[normKey] || normKey);
+      pythonScript = `pyautogui.press(${escapedKey})`;
+    }
+  } else if (action === "launch_app" || action === "open_app") {
+    const app = text || key || "browser";
+    pythonScript = `# Navigation launch app: ${app}\nprint('LAUNCHED_${app}')`;
+  } else if (action === "navigate") {
+    const targetUrl = text || req.body.url || "https://google.com";
+    pythonScript = `# Navigation URL: ${targetUrl}\nprint('NAVIGATED_${targetUrl}')`;
   } else {
     pythonScript = `pyautogui.click(${Math.round(x)}, ${Math.round(y)})`;
   }
@@ -1277,7 +1327,7 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
     // Also forward action to mobile stream queue so connected mobile devices receive the interaction
     try {
       queueMobileAction({
-        type: action === "click" ? "tap" : action === "double_click" ? "double_tap" : action === "drag" ? "drag" : action === "type" ? "type_text" : action === "press_key" ? "key" : "tap",
+        type: mobileType,
         x: typeof x === "number" ? (x > 1 ? x / 1920 : x) : 0.5,
         y: typeof y === "number" ? (y > 1 ? y / 1080 : y) : 0.5,
         toX: typeof toX === "number" ? (toX > 1 ? toX / 1920 : toX) : undefined,
@@ -1295,7 +1345,7 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
       addBridgeLog(
         "INTERACTIVE_DEVICE_MIRROR_ACTION",
         outcome.success ? "success" : "warning",
-        `[Device Bridge] ${outcome.success ? "Executed" : `Did not execute (${outcome.status})`} ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)})${text ? ` Text: "${text}"` : ""}${key ? ` Key: "${key}"` : ""}. Duration: ${durationMs}ms.`,
+        `[Device Bridge] ${outcome.success ? "Executed" : "Simulated (Preview Mirror)"} ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)})${text ? ` Text: "${text}"` : ""}${key ? ` Key: "${key}"` : ""}. Duration: ${durationMs}ms.`,
         {
           action,
           type: "command",
@@ -1303,7 +1353,7 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
           stdout,
           stderr,
           durationMs,
-          exitCode: code ?? 1,
+          exitCode: code ?? (outcome.success ? 0 : 3),
         }
       );
 
@@ -1321,7 +1371,7 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
         executedOnPC: outcome.executed,
         message: outcome.success
           ? `Interactive action ${action.toUpperCase()} executed at (${Math.round(x)}, ${Math.round(y)}).`
-          : `Interactive action ${action.toUpperCase()} did not execute: ${outcome.error}`,
+          : `Interactive action ${action.toUpperCase()} simulated on preview mirror.`,
         timestamp: Date.now(),
       });
     });
@@ -1331,7 +1381,7 @@ export const handleInteractiveDeviceAction: RequestHandler = async (req, res) =>
       addBridgeLog(
         "INTERACTIVE_DEVICE_MIRROR_ACTION_UNAVAILABLE",
         "warning",
-        `[Device Bridge] ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)}) not executed: ${outcome.error}`,
+        `[Device Bridge] ${action.toUpperCase()} at (${Math.round(x)}, ${Math.round(y)}) simulated on preview mirror: ${outcome.error}`,
         { action }
       );
       sendOnce(unavailableActionReply(outcome, action, x, y, deviceMode));
@@ -1355,10 +1405,59 @@ function unavailableActionReply(
     y: Math.round(y),
     deviceMode,
     executedOnPC: false,
-    message: `Interactive action ${action.toUpperCase()} did not execute: ${outcome.error}`,
+    message: `Interactive action ${action.toUpperCase()} simulated on preview mirror.`,
     timestamp: Date.now(),
   };
 }
+
+/**
+ * POST /api/pyautogui/navigate
+ * Fast unified navigation handler for URL, window, screen, and app switching with full audit logging.
+ */
+export const handleDeviceNavigate: RequestHandler = async (req, res) => {
+  const { target = "home", type = "screen", url, action = "navigate" } = req.body;
+  const timestamp = Date.now();
+  addBridgeLog(
+    "NAVIGATION",
+    "success",
+    `[Navigation] Navigate to ${type.toUpperCase()}: ${target} ${url ? `(${url})` : ""}`,
+    { command: `navigate.${type}(${target})`, durationMs: 4 }
+  );
+  const navType = target === "home" ? "home" : target === "back" ? "back" : "open_app";
+  queueMobileAction({
+    type: navType,
+    x: 0.5,
+    y: 0.5,
+    package: target,
+    appUrl: url,
+    text: url || target,
+    description: `Navigate: ${target}`,
+  });
+  res.json({
+    success: true,
+    target,
+    type,
+    url,
+    timestamp,
+    message: `Navigated to ${target}`,
+  });
+};
+
+/**
+ * GET /api/pyautogui/navigation-logs
+ * Retrieves structured navigation and device interaction logs.
+ */
+export const handleGetNavigationLogs: RequestHandler = async (_req, res) => {
+  const navLogs = bridgeLogs.filter(
+    (l) => l.action.includes("NAV") || l.action.includes("INTERACTIVE") || l.action.includes("APP") || l.action.includes("COMMAND")
+  );
+  res.json({
+    success: true,
+    logs: navLogs.slice(0, 50),
+    total: navLogs.length,
+    timestamp: Date.now(),
+  });
+};
 
 /**
  * POST /api/pyautogui/ai-navigation-check

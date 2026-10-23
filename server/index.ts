@@ -114,6 +114,8 @@ import {
   handleGetDriftEvents,
   handlePreReplaySnapshotCheck,
   handleInteractiveDeviceAction,
+  handleDeviceNavigate,
+  handleGetNavigationLogs,
   handleAiNavigationCheck,
   handleAiAutoRecordStep,
 } from "./routes/pyautogui-bridge";
@@ -496,6 +498,8 @@ export function createServer() {
   app.get("/api/pyautogui/drift-events", handleGetDriftEvents);
   app.post("/api/pyautogui/pre-replay-snapshot-check", handlePreReplaySnapshotCheck);
   app.post("/api/pyautogui/interactive-action", handleInteractiveDeviceAction);
+  app.post("/api/pyautogui/navigate", handleDeviceNavigate);
+  app.get("/api/pyautogui/navigation-logs", handleGetNavigationLogs);
   app.post("/api/pyautogui/ai-navigation-check", handleAiNavigationCheck);
   app.post("/api/pyautogui/ai-record-step", handleAiAutoRecordStep);
 

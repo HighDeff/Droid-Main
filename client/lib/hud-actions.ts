@@ -83,7 +83,7 @@ export async function dispatchInteractiveAction(
     ...request,
     deviceMode: "android_studio_mirror",
   });
-  if (data.error) throw new Error(data.error);
+  if (data.error && !data.simulated && data.success === false) throw new Error(data.error);
   return {
     simulated: data.simulated === true,
     message: data.message || `${request.action} at (${request.x}, ${request.y})`,

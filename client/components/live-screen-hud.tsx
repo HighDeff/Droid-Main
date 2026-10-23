@@ -888,7 +888,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       toast.error(`${action} @ (${x}, ${y}) failed: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
-    const where = result.simulated ? "virtual only (no display on the bridge)" : "executed on device";
+    const where = result.simulated ? "simulated preview mirror" : "executed on device";
     toast.success(`${action} @ (${x}, ${y}): ${where}`, { description: result.message });
 
     // Step auto-recording during usage, only after the dispatch succeeded

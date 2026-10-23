@@ -242,14 +242,19 @@ export function TenResponseImagesDiffEngine({
   // Cross-reference all 10 slots sequentially
   const handleCrossReferenceAll = async () => {
     setIsAnalyzingAll(true);
-    for (let i = 0; i < Math.min(10, sequence.length); i++) {
+    for (let i = 0; i < Math.min(10, safeSequence.length); i++) {
       await handleAnalyzeSlot(i);
     }
     setIsAnalyzingAll(false);
   };
 
-  const activeStep = sequence[selectedSlotIndex];
+  const safeSequence = Array.isArray(sequence) ? sequence : [];
+  const safeResponseImages = responseImages || {};
+  const activeStep = safeSequence[selectedSlotIndex];
   const activeDiff = diffResults[selectedSlotIndex];
+  const currentBundle = snapshotBundles[selectedSlotIndex];
+  const actionsBefore10s = Array.isArray(currentBundle?.actionsBefore10s) ? currentBundle.actionsBefore10s : [];
+  const actionsAfter10s = Array.isArray(currentBundle?.actionsAfter10s) ? currentBundle.actionsAfter10s : [];
 
   return (
     <Card className={`bg-slate-900 border-cyan-500/40 shadow-2xl overflow-hidden ${className}`}>
@@ -265,8 +270,8 @@ export function TenResponseImagesDiffEngine({
                 10 Screenshots Section & Post-Operation Response Gallery
               </CardTitle>
               <Badge className="bg-cyan-950 text-cyan-300 border-cyan-800 text-[10px] font-mono">
-                {sequence.filter((s) => s.referenceScreenshotUrl).length}/10 KEYFRAMES •{" "}
-                {Object.keys(responseImages).length}/10 RESPONSES
+                {safeSequence.filter((s) => s.referenceScreenshotUrl).length}/10 KEYFRAMES •{" "}
+                {Object.keys(safeResponseImages).length}/10 RESPONSES
               </Badge>
             </div>
             <p className="text-[11px] text-slate-400 font-mono">
@@ -289,7 +294,7 @@ export function TenResponseImagesDiffEngine({
           <Button
             size="sm"
             onClick={handleCrossReferenceAll}
-            disabled={isAnalyzingAll || sequence.length === 0}
+            disabled={isAnalyzingAll || safeSequence.length === 0}
             className="h-8 text-xs font-mono font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white gap-1.5 shadow-md shadow-purple-950"
           >
             <Sparkles className={`w-3.5 h-3.5 text-yellow-300 ${isAnalyzingAll ? "animate-spin" : ""}`} />
@@ -563,7 +568,7 @@ export function TenResponseImagesDiffEngine({
             </div>
 
             {/* Temporal Pre & Post 10-Second Action Ledger for Slot */}
-            {snapshotBundles[selectedSlotIndex] && (
+            {currentBundle && (
               <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-2 text-xs font-mono">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
                   <div className="flex items-center gap-2 text-cyan-300 font-bold">
@@ -571,8 +576,8 @@ export function TenResponseImagesDiffEngine({
                     <span>Attached 10s Pre- & Post-Snapshot Action Buffer:</span>
                   </div>
                   <span className="text-[10px] text-slate-400">
-                    {snapshotBundles[selectedSlotIndex].actionsBefore10s.length} Pre-Actions •{" "}
-                    {snapshotBundles[selectedSlotIndex].actionsAfter10s.length} Post-Actions
+                    {actionsBefore10s.length} Pre-Actions •{" "}
+                    {actionsAfter10s.length} Post-Actions
                   </span>
                 </div>
 
@@ -583,15 +588,15 @@ export function TenResponseImagesDiffEngine({
                       <span>⏪ 10s Prior to Snapshot:</span>
                     </span>
                     <div className="max-h-28 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
-                      {snapshotBundles[selectedSlotIndex].actionsBefore10s.length > 0 ? (
-                        snapshotBundles[selectedSlotIndex].actionsBefore10s.map((act) => (
+                      {actionsBefore10s.length > 0 ? (
+                        actionsBefore10s.map((act: any) => (
                           <div
                             key={act.id}
                             className="p-1.5 rounded bg-slate-950/80 border border-slate-800 text-[10px] flex items-center justify-between"
                           >
                             <div className="flex items-center gap-1.5 truncate">
                               <Badge className={`text-[8px] px-1 py-0 ${act.source === "user" ? "bg-emerald-950 text-emerald-300" : act.source === "ai" ? "bg-cyan-950 text-cyan-300" : "bg-purple-950 text-purple-300"}`}>
-                                {act.source.toUpperCase()}
+                                {act.source?.toUpperCase?.() || "ACTION"}
                               </Badge>
                               <span className="text-slate-300 truncate">{act.description}</span>
                             </div>
@@ -610,15 +615,15 @@ export function TenResponseImagesDiffEngine({
                       <span>⏩ 10s After Snapshot:</span>
                     </span>
                     <div className="max-h-28 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
-                      {snapshotBundles[selectedSlotIndex].actionsAfter10s.length > 0 ? (
-                        snapshotBundles[selectedSlotIndex].actionsAfter10s.map((act) => (
+                      {actionsAfter10s.length > 0 ? (
+                        actionsAfter10s.map((act: any) => (
                           <div
                             key={act.id}
                             className="p-1.5 rounded bg-slate-950/80 border border-slate-800 text-[10px] flex items-center justify-between"
                           >
                             <div className="flex items-center gap-1.5 truncate">
                               <Badge className={`text-[8px] px-1 py-0 ${act.source === "user" ? "bg-emerald-950 text-emerald-300" : act.source === "ai" ? "bg-cyan-950 text-cyan-300" : "bg-purple-950 text-purple-300"}`}>
-                                {act.source.toUpperCase()}
+                                {act.source?.toUpperCase?.() || "ACTION"}
                               </Badge>
                               <span className="text-slate-300 truncate">{act.description}</span>
                             </div>
@@ -663,7 +668,7 @@ export function TenResponseImagesDiffEngine({
                 </div>
 
                 {/* Differences List */}
-                {activeDiff.differences.length > 0 && (
+                {Array.isArray(activeDiff.differences) && activeDiff.differences.length > 0 && (
                   <div className="space-y-1">
                     <span className="text-[10px] uppercase font-mono font-bold text-slate-400">
                       Detected Visual Differences:

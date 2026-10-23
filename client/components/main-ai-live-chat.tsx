@@ -127,7 +127,7 @@ export function MainAiLiveChat({
         }
       }
     } catch (e) {
-      console.error("Failed to load chat session:", e);
+      console.warn("Notice: Chat session not synced yet:", e instanceof Error ? e.message : e);
     }
   };
 
@@ -141,7 +141,7 @@ export function MainAiLiveChat({
         }
       }
     } catch (e) {
-      console.error("Failed to list sessions:", e);
+      console.warn("Notice: Chat sessions list not synced yet:", e instanceof Error ? e.message : e);
     }
   };
 

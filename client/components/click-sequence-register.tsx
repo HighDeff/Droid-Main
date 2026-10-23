@@ -25,6 +25,7 @@ import {
   Copy,
   ArrowUpDown,
   ListOrdered,
+  Bot,
   GripVertical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -46,7 +47,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { SequenceStep } from "./live-screen-hud";
+import { useActionGate } from "@/hooks/use-action-gate";
+import { aiRepeatPlan } from "@/lib/gated-plans";
 
 export interface LiveActivityEvent {
   id: string;
@@ -108,8 +112,10 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
   onClearSequence,
   onSelectStep,
 }) => {
+  const actionGate = useActionGate({ targetDevice: "desktop" });
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isAiRepeatEnabled, setIsAiRepeatEnabled] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<"steps" | "live_stream">("steps");
   const [draggedStepId, setDraggedStepId] = useState<string | null>(null);
 
@@ -141,7 +147,7 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
     } catch {}
   };
 
-  // Live Activity Events Ledger
+  // Live Activity Events Ledger (Logs Navigation, Clicks, and Typing as they happen)
   const [activityEvents, setActivityEvents] = useState<LiveActivityEvent[]>([
     {
       id: "act_1",
@@ -171,18 +177,30 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
 
   // When sequence updates or is recorded, log to activity stream and auto-repeat via AI if enabled
   useEffect(() => {
-    if (!sequence.length) return;
-    const latest = sequence[sequence.length - 1];
-    setActivityEvents((previous) => [{
-      id: `act_${Date.now()}`,
-      type: latest.action.includes("type") ? "typing" : latest.action.includes("click") ? "click" : "navigation",
-      description: `${latest.name}: ${latest.action.toUpperCase()} ${latest.text ? `"${latest.text}"` : ""} at (${latest.x}, ${latest.y})`,
-      coords: { x: latest.x, y: latest.y },
-      payload: latest.text || latest.keyPayload,
-      timestamp: new Date().toLocaleTimeString(),
-      aiMirrored: false,
-    }, ...previous.slice(0, 30)]);
-  }, [sequence.length]);
+    if (sequence.length > 0) {
+      const latest = sequence[sequence.length - 1];
+      const newEvent: LiveActivityEvent = {
+        id: `act_${Date.now()}`,
+        type: latest.action.includes("type")
+          ? "typing"
+          : latest.action.includes("click")
+            ? "click"
+            : "navigation",
+        description: `${latest.name}: ${latest.action.toUpperCase()} ${latest.text ? `"${latest.text}"` : ""} at (${latest.x}, ${latest.y})`,
+        coords: { x: latest.x, y: latest.y },
+        payload: latest.text || latest.keyPayload,
+        timestamp: new Date().toLocaleTimeString(),
+        aiMirrored: isAiRepeatEnabled,
+      };
+
+      setActivityEvents((prev) => [newEvent, ...prev.slice(0, 30)]);
+
+      // If AI Repeat is enabled during recording, mirror the step once the live screen verifies its target
+      if (isAiRepeatEnabled && isRecordMode) {
+        void actionGate.run(aiRepeatPlan(latest));
+      }
+    }
+  }, [sequence.length, isAiRepeatEnabled, isRecordMode]);
 
   const totalDurationMs = sequence.reduce((sum, s) => sum + s.delayMs, 0);
 
@@ -286,6 +304,26 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* AI Repeat Toggle */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-purple-800/60 text-xs">
+              <Bot
+                className={`w-3.5 h-3.5 ${isAiRepeatEnabled ? "text-purple-400 animate-pulse" : "text-slate-400"}`}
+              />
+              <span className="text-[11px] text-slate-300 font-bold">
+                AI Repeat During Record:
+              </span>
+              <button
+                onClick={() => setIsAiRepeatEnabled(!isAiRepeatEnabled)}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                  isAiRepeatEnabled
+                    ? "bg-purple-600 text-white"
+                    : "bg-slate-800 text-slate-300"
+                }`}
+              >
+                {isAiRepeatEnabled ? "ON" : "OFF"}
+              </button>
+            </div>
+
             {/* Record Clicks Button */}
             <Button
               size="sm"
@@ -321,6 +359,8 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
                   <SelectItem value="5">5x Cycles</SelectItem>
                   <SelectItem value="10">10x Cycles</SelectItem>
                   <SelectItem value="25">25x Cycles</SelectItem>
+                  <SelectItem value="50">50x Cycles</SelectItem>
+                  <SelectItem value="999">∞ Infinite</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -351,11 +391,14 @@ export const ClickSequenceRegister: React.FC<ClickSequenceRegisterProps> = ({
             </button>
 
             {/* Run / Stop Sequence */}
-            {isRunning ? (
+            {isRunning || actionGate.isGating ? (
               <Button
                 size="sm"
                 variant="destructive"
-                onClick={onStopSequence}
+                onClick={() => {
+                  actionGate.stop();
+                  onStopSequence();
+                }}
                 className="gap-1.5 text-xs font-semibold"
               >
                 <Pause className="w-3.5 h-3.5" />

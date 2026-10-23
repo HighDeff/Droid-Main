@@ -1,76 +1,46 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import express from "express";
-import type { Server } from "node:http";
+import { describe, expect, it, vi } from "vitest";
 
-const { sendQwenChatRequest } = vi.hoisted(() => ({ sendQwenChatRequest: vi.fn() }));
-vi.mock("../ai-endpoint", () => ({
+const sendQwenChatRequest = vi.hoisted(() => vi.fn());
+
+vi.mock("../ai-endpoint", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ai-endpoint")>()),
   sendQwenChatRequest,
-  getConfiguredAiModel: () => "test-vision-model",
 }));
-import { handleAiReviewSteps } from "./ai-workflow-review";
+vi.mock("../ai-monitor-store", () => ({ aiMonitorStore: { record: vi.fn() } }));
 
-describe("AI workflow review endpoint", () => {
-  let server: Server;
-  let base: string;
-  beforeEach(async () => {
-    sendQwenChatRequest.mockReset();
-    const app = express();
-    app.use(express.json());
-    app.post("/review", handleAiReviewSteps);
-    server = app.listen(0, "127.0.0.1");
-    await new Promise<void>((resolve) => server.once("listening", resolve));
-    base = `http://127.0.0.1:${(server.address() as any).port}/review`;
-  });
-  afterEach(async () => {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  });
-  const step = { id: "step-1", name: "Open settings", action: "click", x: 500, y: 300, delayMs: 500 };
-  const screenshotUrl = "data:image/png;base64,aGVsbG8=";
-  const review = {
-    overallScore: 92,
-    overallStatus: "ready",
-    summary: "The target is visible.",
-    consciousGuidance: "Click the visible settings control.",
-    reviewedSteps: [{ stepId: "step-1", recommendedCoords: { x: 520, y: 310 }, confidence: 0.92, status: "recalibrated", notes: "Centered on the visible control." }],
-  };
-  const post = (body: unknown) => fetch(base, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+import { handleAiReviewSteps, handleApplySuggestionsWithQwen } from "./ai-workflow-review";
+
+async function review(steps: unknown[]) {
+  const res: any = { json: vi.fn() };
+  await handleAiReviewSteps({ body: { steps } } as any, res, () => {});
+  return res.json.mock.calls[0][0];
+}
+
+describe("handleAiReviewSteps", () => {
+  it("labels the heuristic fallback as simulated with no score or confidence", async () => {
+    sendQwenChatRequest.mockResolvedValue({ success: false, error: "unreachable" });
+    const body = await review([{ id: "a", delayMs: 100 }]);
+    expect(body).toMatchObject({ simulated: true, source: "heuristic", score: null });
+    expect(body.suggestions[0].confidence).toBeNull();
+    expect(body.suggestions[0].suggestion).toMatch(/Increase delayMs/);
   });
 
-  it("reviews the supplied workflow against current and reference screenshots", async () => {
-    sendQwenChatRequest.mockResolvedValue({ success: true, content: JSON.stringify(review) });
-    const response = await post({ steps: [{ ...step, referenceScreenshotUrl: "data:image/jpeg;base64,aGVsbG8=" }], screenshotUrl, frameSize: { width: 1920, height: 1080 }, userObjective: "Open settings" });
-    const data = await response.json();
-    expect(response.status).toBe(200);
-    expect(data.reviewedSteps[0]).toMatchObject({ stepNumber: 1, name: step.name, action: step.action, originalCoords: { x: 500, y: 300 }, recommendedCoords: { x: 520, y: 310 } });
-    expect(data.aiModelUsed).toBe("test-vision-model");
-    expect(sendQwenChatRequest).toHaveBeenCalledOnce();
-    expect(sendQwenChatRequest.mock.calls[0][0][1].images).toHaveLength(2);
+  it("passes a model review through as not simulated", async () => {
+    sendQwenChatRequest.mockResolvedValue({
+      success: true,
+      content: JSON.stringify({ score: 70, suggestions: [{ stepIndex: 0, confidence: 0.4, suggestion: "ok", driftTolerancePx: 8 }] }),
+    });
+    const body = await review([{ id: "b", delayMs: 500 }]);
+    expect(body).toMatchObject({ simulated: false, source: "model", score: 70 });
+    expect(body.suggestions[0]).toMatchObject({ stepId: "b", confidence: 0.4 });
   });
 
-  it("rejects non-raster current screenshots without calling the model", async () => {
-    const response = await post({ steps: [step], screenshotUrl: "data:image/svg+xml;base64,PHN2Zz4=", frameSize: { width: 1920, height: 1080 } });
-    expect(response.status).toBe(400);
-    expect(sendQwenChatRequest).not.toHaveBeenCalled();
-  });
-
-  it("does not report success when the model returns an incomplete review", async () => {
-    sendQwenChatRequest.mockResolvedValue({ success: true, content: JSON.stringify({ ...review, reviewedSteps: [] }) });
-    const response = await post({ steps: [step], screenshotUrl, frameSize: { width: 1920, height: 1080 } });
-    expect(response.status).toBe(502);
-    expect((await response.json()).success).toBe(false);
-  });
-
-  it("rejects AI coordinates outside the current screenshot bounds", async () => {
-    sendQwenChatRequest.mockResolvedValue({ success: true, content: JSON.stringify({
-      ...review,
-      reviewedSteps: [{ ...review.reviewedSteps[0], recommendedCoords: { x: 1920, y: 1080 } }],
-    }) });
-    const response = await post({ steps: [step], screenshotUrl, frameSize: { width: 1920, height: 1080 } });
-    expect(response.status).toBe(502);
-    expect((await response.json()).success).toBe(false);
+  it("apply-suggestions is labelled as a heuristic, not a Qwen result", () => {
+    const res: any = { json: vi.fn() };
+    handleApplySuggestionsWithQwen({ body: { steps: [{ delayMs: 50 }] } } as any, res, () => {});
+    const body = res.json.mock.calls[0][0];
+    expect(body).toMatchObject({ simulated: true, source: "heuristic" });
+    expect(body.optimizedSteps[0].delayMs).toBe(300);
+    expect(body.message).not.toMatch(/Qwen/);
   });
 });

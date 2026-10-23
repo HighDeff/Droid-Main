@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   clientPointFromFrame,
+  frameBoxAsPercent,
+  frameBoxContains,
   framePointAsPercent,
   framePointFromClient,
+  framePointToPercent,
   getContainedFrameViewport,
-  getFrameViewport,
+  percentBoxToFrame,
 } from "./frame-viewport";
 
 describe("frame viewport mapping", () => {
@@ -23,23 +26,6 @@ describe("frame viewport mapping", () => {
       height: 450,
       scale: 800 / 1920,
     });
-  });
-
-  it("maps pointer coordinates through a cropped cover frame", () => {
-    const viewport = getFrameViewport(
-      { left: 0, top: 0, width: 800, height: 800 },
-      frame,
-      "cover",
-    );
-
-    expect(viewport).toEqual({
-      left: -311.1111111111111,
-      top: 0,
-      width: 1422.2222222222222,
-      height: 800,
-      scale: 800 / 1080,
-    });
-    expect(framePointFromClient(400, 400, viewport, frame)).toEqual({ x: 960, y: 540 });
   });
 
   it("maps pointer coordinates through letterboxing", () => {
@@ -72,5 +58,22 @@ describe("frame viewport mapping", () => {
       left: "100%",
       top: "100%",
     });
+  });
+
+  it("converts percent element boxes to native pixels for hit-testing", () => {
+    const box = percentBoxToFrame({ x: 50, y: 50, width: 10, height: 10 }, frame);
+    expect(box).toEqual({ x: 960, y: 540, width: 192, height: 108 });
+    expect(frameBoxContains(box, 1000, 580)).toBe(true);
+    expect(frameBoxContains(box, 500, 500)).toBe(false);
+    expect(frameBoxAsPercent(box, frame)).toEqual({
+      left: "50%",
+      top: "50%",
+      width: "10%",
+      height: "10%",
+    });
+  });
+
+  it("expresses native pixels as numeric percentages", () => {
+    expect(framePointToPercent(480, 270, frame)).toEqual({ pctX: 25, pctY: 25 });
   });
 });

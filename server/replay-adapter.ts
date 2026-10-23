@@ -9,13 +9,6 @@ export interface ReplayAdapter {
   capture(): Promise<PhoneFrame>;
   execute(step: ReplayStep, frame: PhoneFrame): Promise<void>;
 }
-export class PointerAlignmentError extends Error {
-  readonly code = "POINTER_ALIGNMENT_FAILED";
-  constructor(message: string, readonly positionCheck: unknown) {
-    super(message);
-    this.name = "PointerAlignmentError";
-  }
-}
 export function desktopOperation(payload: unknown): Promise<any> {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -52,8 +45,6 @@ export function desktopOperation(payload: unknown): Promise<any> {
     child.once("close", (code) => {
       try {
         const result = JSON.parse(output);
-        if (result.positionCheck?.aligned === false)
-          throw new PointerAlignmentError(result.error || "Desktop pointer could not align with the target", result.positionCheck);
         if (code !== 0 || result.success !== true || result.simulated)
           throw new Error(result.error || error || "Desktop execution failed");
         finish(undefined, result);
@@ -77,6 +68,15 @@ export function phoneReplayAction(
     return { type: "text", text: step.text || "" };
   if (step.action === "press_key")
     return { type: "key", key: (step.keyPayload || "").toUpperCase() as any };
+  if (step.action === "scroll" && step.toX !== undefined && step.toY !== undefined)
+    return {
+      type: "swipe",
+      x,
+      y,
+      endX: step.toX / (frame.width - 1),
+      endY: step.toY / (frame.height - 1),
+      duration: 350,
+    };
   if (
     step.action === "scroll" &&
     ["up", "down"].includes(step.keyPayload || "")
@@ -144,3 +144,11 @@ export function createReplayAdapter(
     },
   };
 }
+
+export class PointerAlignmentError extends Error {
+  constructor(message: string, public details?: { aligned: boolean; driftPx: number }) {
+    super(message);
+    this.name = "PointerAlignmentError";
+  }
+}
+

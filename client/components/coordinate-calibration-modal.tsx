@@ -41,8 +41,6 @@ import {
 interface CoordinateCalibrationModalProps {
   isOpen: boolean;
   onClose: () => void;
-  screenshotUrl: string;
-  targetDevice: "desktop" | "android";
 }
 
 interface CalibrationTarget {
@@ -58,14 +56,11 @@ interface CalibrationTarget {
 export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProps> = ({
   isOpen,
   onClose,
-  screenshotUrl,
-  targetDevice,
 }) => {
   const [profile, setProfile] = useState<CoordinateCalibrationProfile>(getStoredCalibration);
   const [activeStepIndex, setActiveStepIndex] = useState<number>(0);
   const [isGuidedMode, setIsGuidedMode] = useState<boolean>(true);
-  const [hardwareTestActive, setHardwareTestActive] = useState<boolean>(false);
-  const [frameSize, setFrameSize] = useState({ width: 1920, height: 1080 });
+  const [hardwareTestActive, setHardwareTestActive] = useState<boolean>(true);
 
   // Calibration test targets (5 Points: TL, TR, Center, BL, BR)
   const [targets, setTargets] = useState<CalibrationTarget[]>([
@@ -83,25 +78,12 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
   const arenaRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!isOpen) return;
-    const stored = getStoredCalibration();
-    setProfile(stored.targetDevice === targetDevice ? stored : { ...DEFAULT_CALIBRATION_PROFILE, targetDevice });
-    setActiveStepIndex(0);
-    setTargets((current) => current.map((target) => ({ ...target, clickedNormX: undefined, clickedNormY: undefined, driftPx: undefined })));
-    setTestClicks([]);
-    setHardwareTestActive(false);
-  }, [isOpen, targetDevice]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const image = new Image();
-    image.onload = () => {
-      if (image.naturalWidth && image.naturalHeight) {
-        setFrameSize({ width: image.naturalWidth, height: image.naturalHeight });
-      }
-    };
-    image.src = screenshotUrl;
-  }, [isOpen, screenshotUrl]);
+    if (isOpen) {
+      setProfile(getStoredCalibration());
+      setActiveStepIndex(0);
+      setTestClicks([]);
+    }
+  }, [isOpen]);
 
   // Handle click on calibration arena
   const handleArenaClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -113,19 +95,19 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
     const normX = Math.max(0, Math.min(1, clickX / rect.width));
     const normY = Math.max(0, Math.min(1, clickY / rect.height));
 
-    const rawX = Math.round(normX * frameSize.width);
-    const rawY = Math.round(normY * frameSize.height);
+    const raw1080X = Math.round(normX * 1920);
+    const raw1080Y = Math.round(normY * 1080);
 
-    const cal = calibrateCoordinates(rawX, rawY, profile);
+    const cal = calibrateCoordinates(raw1080X, raw1080Y, profile);
 
     // If in guided 5-point calibration mode
     if (isGuidedMode && activeStepIndex < targets.length) {
       const currentTarget = targets[activeStepIndex];
-      const targetScreenX = currentTarget.expectedNormX * frameSize.width;
-      const targetScreenY = currentTarget.expectedNormY * frameSize.height;
+      const targetScreenX = currentTarget.expectedNormX * 1920;
+      const targetScreenY = currentTarget.expectedNormY * 1080;
 
-      const deltaX = rawX - targetScreenX;
-      const deltaY = rawY - targetScreenY;
+      const deltaX = raw1080X - targetScreenX;
+      const deltaY = raw1080Y - targetScreenY;
       const drift = Math.round(Math.sqrt(deltaX * deltaX + deltaY * deltaY) * 10) / 10;
 
       const updatedTargets = [...targets];
@@ -141,19 +123,13 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
       if (activeStepIndex === targets.length - 1) {
         // Final point clicked: compute average offsets
         const completed = updatedTargets.filter((t) => t.clickedNormX !== undefined);
-        const avgDeltaX = completed.reduce((acc, t) => acc + ((t.clickedNormX! - t.expectedNormX) * frameSize.width), 0) / completed.length;
-        const avgDeltaY = completed.reduce((acc, t) => acc + ((t.clickedNormY! - t.expectedNormY) * frameSize.height), 0) / completed.length;
+        const avgDeltaX = completed.reduce((acc, t) => acc + ((t.clickedNormX! - t.expectedNormX) * 1920), 0) / completed.length;
+        const avgDeltaY = completed.reduce((acc, t) => acc + ((t.clickedNormY! - t.expectedNormY) * 1080), 0) / completed.length;
 
         const newProfile = {
           ...profile,
           offsetX: -Math.round(avgDeltaX),
           offsetY: -Math.round(avgDeltaY),
-          screenWidth: frameSize.width,
-          screenHeight: frameSize.height,
-          resolutionWidth: frameSize.width,
-          resolutionHeight: frameSize.height,
-          targetDevice,
-          lastCalibratedAt: Date.now(),
         };
         setProfile(newProfile);
         saveStoredCalibration(newProfile);
@@ -168,8 +144,8 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
     // Record test click
     const clickItem = {
       id: `clk_${Date.now()}`,
-      rawX,
-      rawY,
+      rawX: raw1080X,
+      rawY: raw1080Y,
       calX: cal.x,
       calY: cal.y,
       drift: cal.driftPx,
@@ -178,18 +154,16 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
 
     // Optional PyAutoGUI hardware test ping
     if (hardwareTestActive) {
-      const request = targetDevice === "desktop"
-        ? fetch("/api/pyautogui/interactive-action", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "click", x: cal.x, y: cal.y, frameWidth: frameSize.width, frameHeight: frameSize.height, deviceMode: "desktop" }),
-          })
-        : fetch("/api/mobile-stream/action", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: { type: "tap", x: cal.x / frameSize.width, y: cal.y / frameSize.height, description: "HUD calibration test" } }),
-          });
-      request.catch(() => {});
+      fetch("/api/pyautogui/interactive-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "click",
+          x: cal.x,
+          y: cal.y,
+          deviceMode: "calibration_test",
+        }),
+      }).catch(() => {});
     }
   };
 
@@ -204,34 +178,28 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
       dpiScale: dpi,
       jitterDamping: 1.2,
       aspectRatioMode: "16:9",
-      targetDevice,
-      screenWidth: frameSize.width,
-      screenHeight: frameSize.height,
-      resolutionWidth: frameSize.width,
-      resolutionHeight: frameSize.height,
+      screenWidth: window.screen.width || 1920,
+      screenHeight: window.screen.height || 1080,
       lastCalibratedAt: Date.now(),
     };
     setProfile(autoProfile);
     saveStoredCalibration(autoProfile);
-    toast.success(`Saved a zero-offset baseline for ${autoProfile.screenWidth}×${autoProfile.screenHeight}. Use guided calibration to measure drift.`);
+    toast.success(`⚡ Auto-Calibrated to display resolution ${autoProfile.screenWidth}×${autoProfile.screenHeight} @ ${dpi}x DPI!`);
   };
 
   // Save changes
   const handleSaveProfile = () => {
-    const scopedProfile = { ...profile, targetDevice, screenWidth: frameSize.width, screenHeight: frameSize.height, resolutionWidth: frameSize.width, resolutionHeight: frameSize.height };
-    setProfile(scopedProfile);
-    saveStoredCalibration(scopedProfile);
-    toast.success("Mouse & coordinate calibration profile saved for this frame and device.");
+    saveStoredCalibration(profile);
+    toast.success("✅ Mouse & Coordinate Calibration Profile Saved!");
     onClose();
   };
 
   // Reset to default
   const handleResetProfile = () => {
-    const defaultProfile = { ...DEFAULT_CALIBRATION_PROFILE, targetDevice, screenWidth: frameSize.width, screenHeight: frameSize.height, resolutionWidth: frameSize.width, resolutionHeight: frameSize.height };
-    setProfile(defaultProfile);
-    saveStoredCalibration(defaultProfile);
+    setProfile(DEFAULT_CALIBRATION_PROFILE);
+    saveStoredCalibration(DEFAULT_CALIBRATION_PROFILE);
     setActiveStepIndex(0);
-    setTargets((current) => current.map((target) => ({ ...target, clickedNormX: undefined, clickedNormY: undefined, driftPx: undefined })));
+    setTargets(targets.map((t) => ({ ...t, clickedNormX: undefined, clickedNormY: undefined, driftPx: undefined })));
     toast.info("Calibration reset to factory default (1920×1080 1:1)");
   };
 
@@ -256,7 +224,7 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
               onClick={handleAutoCalibrate}
               className="h-8 text-xs font-mono font-bold bg-cyan-600 hover:bg-cyan-500 text-white gap-1.5 shadow-md shadow-cyan-950"
             >
-              <Sparkles className="w-3.5 h-3.5" /> Use Current Frame
+              <Sparkles className="w-3.5 h-3.5" /> 1-Click Auto Calibrate
             </Button>
             <Button
               size="sm"
@@ -293,7 +261,6 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
               ref={arenaRef}
               onClick={handleArenaClick}
               className="relative w-full h-80 bg-slate-900/90 rounded-xl border-2 border-slate-700 overflow-hidden cursor-crosshair select-none shadow-inner group"
-              style={{ backgroundImage: `url(${screenshotUrl})`, backgroundSize: "100% 100%" }}
             >
               {/* Background Cross Grid */}
               <div className="absolute inset-0 opacity-20 bg-[linear-gradient(to_right,#38bdf8_1px,transparent_1px),linear-gradient(to_bottom,#38bdf8_1px,transparent_1px)] [background-size:40px_40px] pointer-events-none" />
@@ -335,8 +302,8 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
 
               {/* Recent Test Click Ripples */}
               {testClicks.map((clk) => {
-                const normX = clk.rawX / frameSize.width;
-                const normY = clk.rawY / frameSize.height;
+                const normX = clk.rawX / 1920;
+                const normY = clk.rawY / 1080;
                 return (
                   <div
                     key={clk.id}
@@ -350,7 +317,7 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
 
               {/* Arena Info Overlay */}
               <div className="absolute bottom-2 left-2 px-2 py-1 rounded bg-black/80 text-[10px] text-slate-300 border border-slate-800 pointer-events-none">
-                {targetDevice === "android" ? "Android" : "Desktop"} · {frameSize.width}×{frameSize.height} | Offset: ({profile.offsetX}px, {profile.offsetY}px) | Scale: ({profile.scaleX}x, {profile.scaleY}x)
+                Resolution: 1920×1080 | Offset: ({profile.offsetX}px, {profile.offsetY}px) | Scale: ({profile.scaleX}x, {profile.scaleY}x)
               </div>
             </div>
 
@@ -370,7 +337,7 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
 
               {testClicks.length === 0 ? (
                 <p className="text-[10px] text-slate-500 py-1">
-                  Click the highlighted targets on the displayed screen to measure and compensate HUD-to-screen alignment. Hardware test clicks are off until you enable them below.
+                  Click on the 5 calibration targets or anywhere on the arena to measure and compensate for mouse drift.
                 </p>
               ) : (
                 <div className="grid grid-cols-2 gap-2 text-[10px]">
@@ -503,8 +470,8 @@ export const CoordinateCalibrationModal: React.FC<CoordinateCalibrationModalProp
               {/* Hardware Test dispatch toggle */}
               <div className="flex items-center justify-between p-2 bg-slate-950 rounded-lg border border-slate-800 text-[11px]">
                 <div>
-                  <span className="text-slate-200 font-bold block">Hardware Test Clicks</span>
-                  <span className="text-[9px] text-slate-400">Off by default; explicitly sends clicks to the selected target</span>
+                  <span className="text-slate-200 font-bold block">PyAutoGUI Test Click</span>
+                  <span className="text-[9px] text-slate-400">Ping hardware on calibration click</span>
                 </div>
                 <Switch checked={hardwareTestActive} onCheckedChange={setHardwareTestActive} />
               </div>

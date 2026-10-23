@@ -687,7 +687,7 @@ export function DescriptionRefiner({
             }`}
           >
             <History className="w-3.5 h-3.5 text-purple-400" />
-            Briefs History & Revisit
+            Briefs History &amp; Revisit
             <Badge className="bg-purple-950 text-purple-300 border-purple-600 text-[10px] px-1.5 py-0">
               {historyStats.totalCount}
             </Badge>

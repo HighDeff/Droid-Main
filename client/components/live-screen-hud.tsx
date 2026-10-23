@@ -1,6 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { InteractivePhoneVirtualOS } from "@/components/interactive-phone-virtual-os";
-import { InteractiveDesktopVirtualOS } from "@/components/interactive-desktop-virtual-os";
 import {
   Activity,
   Monitor,
@@ -54,6 +52,7 @@ import {
 } from "lucide-react";
 import { AIWorkflowReviewModal, AIReviewResult } from "./ai-workflow-review-modal";
 import { AutoCorrectionLog, AutoCorrectionEntry, DEFAULT_DRIFT_LOGS } from "./AutoCorrectionLog";
+import { buildSyntheticDriftEntry, describeSyntheticDriftToast } from "@/lib/synthetic-drift";
 import { OverseerAIPanel } from "./OverseerAIPanel";
 import { WorkflowFlowchartView } from "./WorkflowFlowchartView";
 import { DriftHeatmapOverlay } from "./drift-heatmap-overlay";
@@ -76,11 +75,10 @@ import { ActionExecutionLog, ActionLogEntry } from "./action-execution-log";
 import { StepCorrectionModal, StepCorrectionData } from "./step-correction-modal";
 import { ReplayOverlayLayer } from "./replay-overlay-layer";
 import { InteractiveContextMenu, ContextMenuTarget } from "./interactive-context-menu";
-import { calibrateCoordinates, getStoredCalibration, type CoordinateCalibrationProfile } from "@/lib/coordinate-calibration";
+import { calibrateCoordinates } from "@/lib/coordinate-calibration";
 import { DetectGoalModal } from "./detect-goal-modal";
 import { ThreeAiAgentsSquad } from "./three-ai-agents-squad";
 import { recordTemporalAction, captureSnapshotWith10sBuffer } from "@/lib/temporal-action-buffer";
-import { prepareAiReviewFrame } from "@/lib/ai-review-frame";
 import {
   calculateEuclideanDistance,
   getAlignmentStatus,
@@ -104,11 +102,65 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
+import { readJsonResponse } from "@/lib/api-helper";
 import {
+  frameBoxAsPercent,
+  frameBoxContains,
   framePointAsPercent,
   framePointFromClient,
-  getFrameViewport,
+  framePointToPercent,
+  getContainedFrameViewport,
+  percentBoxToFrame,
 } from "@/lib/frame-viewport";
+import {
+  HUD_CONTROL_STRIP_PX,
+  HUD_LAYERS,
+  HUD_SIZE_MAX_VIEWPORT,
+  SECOND_HUD_SPACE,
+  anchoredLabelClass,
+  clampBoxToArea,
+  clampedPointStyle,
+  fitFrameRect,
+  polylinePointsPx,
+  trajectoryPointToPercent,
+  viewportHeightForWidth,
+} from "@/lib/hud-layout";
+import {
+  MAX_REPEAT_COUNT,
+  MIN_REPEAT_COUNT,
+  clampRepeatCount,
+  findRetryableStep,
+  replayProgressLabel,
+} from "@/lib/step-replay";
+import { useElementSize } from "@/hooks/use-element-size";
+import { useBufferedFrame } from "@/hooks/use-buffered-frame";
+import { cn } from "@/lib/utils";
+import type { ReplayRun } from "@shared/replay";
+import { AiIntentionsPanel, type AiIntentionsPanelProps } from "./ai-intentions-panel";
+import { MasterAiPanel, type MasterAiPanelProps } from "./master-ai-panel";
+import { useOverseerSnapshot } from "@/hooks/use-overseer";
+import { latestCheckups } from "@/lib/overseer-client";
+import {
+  askQwen,
+  completionStep,
+  dispatchInteractiveAction,
+  fetchQwenGuide,
+  inspectOcrAtPoint,
+  stopBridge,
+  postHudJson,
+  tagEntityAtPoint,
+  verifyIntegrityAtPoint,
+  type HudStepLike,
+} from "@/lib/hud-actions";
+import { HudAgentPanel } from "./hud-agent-panel";
+import type { GoalDevice, GoalLoopEvent } from "@/lib/qwen-turn-loop";
+import type { HudSuggestedAction } from "@shared/api";
+
+/** How often the Qwen guide re-reads the live frame while enabled. */
+const QWEN_GUIDE_POLL_MS = 8000;
+
+/** Footprint of the record popover, used to keep it inside the viewport. */
+const RECORD_POPOVER_SIZE = { width: 288, height: 420 };
 
 export interface SequenceStep {
   id: string;
@@ -147,13 +199,16 @@ export interface SequenceStep {
   breakpoint?: boolean;
   lastCalibratedAt?: number;
   confidence?: number;
+  /** How many times the replay engine performs this action in a row (default 1). */
+  repeatCount?: number;
 }
 
 export interface AIThinkingState {
   x: number;
   y: number;
   action: string;
-  confidence: number;
+  /** From the screen analysis that verified the target; omitted when no analysis ran. */
+  confidence?: number;
   isThinking: boolean;
   targetLabel?: string;
 }
@@ -193,7 +248,6 @@ export interface RecalibrationNotice {
 
 interface LiveScreenHUDProps {
   screenshotUrl: string;
-  targetDevice?: "desktop" | "android";
   isCapturing: boolean;
   aiThinking: AIThinkingState | null;
   entities: DetectedEntity[];
@@ -241,12 +295,31 @@ interface LiveScreenHUDProps {
   onRunSequence?: () => void;
   onReplaySteps?: (steps: SequenceStep[]) => void;
   onExecuteTask?: (url: string, options: RequestInit) => Promise<Response>;
-  onPointerAlignmentFailure?: (positionCheck: unknown) => void;
+  onReviewStepsWithAI?: () => void;
+  /** Latest verified replay run; drives the progress readout and pause/resume/cancel. */
+  replayRun?: ReplayRun | null;
+  /** Manual replay control (ungated): pause, resume or cancel the live run. */
+  onReplayControl?: (command: "pause" | "resume" | "cancel") => void;
+  /** Re-dispatch one step through the action gate. */
+  onRetryStep?: (step: SequenceStep) => void;
+  /** Manual capture start/stop (ungated). */
+  onToggleCapture?: () => void;
+  /** Live AI intention, goals and learning data; the collapsible panel renders only when provided. */
+  intentionsPanel?: AiIntentionsPanelProps;
+  /** Master AI orchestrator; the control section renders only when provided. */
+  masterPanel?: MasterAiPanelProps;
+  /** Target device selected on Dashboard ("desktop" | "android"). */
+  targetDevice?: "desktop" | "android";
+  /** Device the Qwen turn loop (Ask Qwen, Auto Actions, Create Plan, Test/Simulate) captures from and dispatches to. */
+  turnDevice?: GoalDevice;
+  /** Qwen turn phases (thinking indicator / verification badge). */
+  onTurnEvent?: (event: GoalLoopEvent) => void;
+  /** Qwen turn operation chain text for the intentions panel. */
+  onTurnChain?: (text: string) => void;
 }
 
 export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   screenshotUrl,
-  targetDevice = "desktop",
   isCapturing,
   aiThinking,
   entities,
@@ -280,22 +353,51 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   onRunSequence,
   onReplaySteps,
   onExecuteTask,
-  onPointerAlignmentFailure,
+  onReviewStepsWithAI,
+  replayRun = null,
+  onReplayControl,
+  onRetryStep,
+  onToggleCapture,
+  intentionsPanel,
+  masterPanel,
+  targetDevice = "desktop",
+  turnDevice = { targetDevice: "desktop" },
+  onTurnEvent,
+  onTurnChain,
 }) => {
   const isMobileMode =
     targetDevice === "android" ||
     selectedCanvasTitle?.toLowerCase().includes("mobile") ||
     selectedCanvasTitle?.toLowerCase().includes("phone") ||
     selectedTabName === "mobile";
-
+  const overseer = useOverseerSnapshot(!!intentionsPanel);
   const executeVerifiedTask = (url: string, options: RequestInit) => {
     if (!onExecuteTask) return Promise.reject(new Error("Open Screen Hub to use verified device execution"));
     return onExecuteTask(url, options);
   };
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const frameLayerRef = useRef<HTMLDivElement>(null);
+  const stepListRef = useRef<HTMLDivElement>(null);
   const streamSyncIntervalRef = useRef<number | null>(null);
-  const simulatedAnimFrameRef = useRef<number | null>(null);
+  // Frame sync failures are reported once per failure streak (AI capture would otherwise read a stale frame).
+  const frameSyncFailedRef = useRef(false);
+  const syncFrameToServer = (body: Record<string, unknown>) =>
+    fetch("/api/sync-real-frame", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        frameSyncFailedRef.current = false;
+      })
+      .catch((error) => {
+        if (!frameSyncFailedRef.current) {
+          toast.error(`Frame sync to the server failed (${error instanceof Error ? error.message : error}); AI capture may read an older frame`);
+        }
+        frameSyncFailedRef.current = true;
+      });
   const [selectedStepIds, setSelectedStepIds] = useState<Set<string>>(new Set());
 
   // Step Selection & Order Management Handlers
@@ -569,11 +671,13 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     text: string;
   } | null>(null);
 
-  const [qwenGuideEnabled, setQwenGuideEnabled] = useState<boolean>(true);
-  const [qwenLiveThought, setQwenLiveThought] = useState<string | null>(
-    "Workflow guard active: checking step order, travel distance, and delays locally."
-  );
+  // Qwen AI Agent Guide State: off until the user enables it; thought/intention come only from the model.
+  const [qwenGuideEnabled, setQwenGuideEnabled] = useState<boolean>(false);
+  const [qwenLiveThought, setQwenLiveThought] = useState<string | null>(null);
+  const [qwenGuideIntention, setQwenGuideIntention] = useState<string | null>(null);
+  const [qwenSuggestedActions, setQwenSuggestedActions] = useState<HudSuggestedAction[]>([]);
   const [qwenIncompleteTypingAlert, setQwenIncompleteTypingAlert] = useState<string | null>(null);
+  const qwenGuideBusyRef = useRef<boolean>(false);
 
   // Repeating Drawing with Auto-Tool & AI Thinking Between Steps
   const [isRepeatingDrawing, setIsRepeatingDrawing] = useState<boolean>(false);
@@ -670,8 +774,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     });
 
     try {
-      await fetch("/api/pyautogui/stop", { method: "POST" });
-    } catch {}
+      toast.info(await stopBridge());
+    } catch (err) {
+      toast.error(`Bridge stop failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     onStopSequence?.();
     if (isRecordMode) {
@@ -691,23 +797,24 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     setAiReviewResult(null);
 
     try {
-      const frame = await prepareAiReviewFrame(handleCaptureFreshFrame() || screenshotUrl || frozenSnapshotUrl);
+      const snap = handleCaptureFreshFrame() || screenshotUrl || frozenSnapshotUrl;
       const res = await fetch("/api/ai/review-steps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           steps: sequence,
-          screenshotUrl: frame.screenshotUrl,
-          frameSize: frame.frameSize,
+          screenshotUrl: snap,
           userObjective: "Automate task with conscious operator reasoning and visual coordinate verification",
         }),
       });
 
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "AI workflow review failed.");
-      if (!Array.isArray(data.reviewedSteps)) throw new Error("AI review returned an incomplete response. Please retry.");
-      setAiReviewResult(data);
+      if (data.success) {
+        setAiReviewResult(data);
         toast.success(`🧠 AI Review: ${data.overallScore}% Viability Score (${data.overallStatus.toUpperCase()})`);
+      } else {
+        toast.error(`Review failed: ${data.error || "Unknown error"}`);
+      }
     } catch (err: any) {
       toast.error(`AI Review error: ${err.message}`);
     } finally {
@@ -753,96 +860,79 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     setActionExecutionLogs((prev) => [...prev.slice(-150), newEntry]);
   };
 
-  // Dispatch real-time action directly to device/PC hardware (Android Studio-style direct bridge)
+  // Manual (user-initiated, ungated) action: await the bridge and report its real result.
+  // The server's interactive-action handler also queues the action for the mobile stream.
   const dispatchInteractiveHardwareAction = async (
     action: "click" | "double_click" | "right_click" | "drag" | "type" | "press_key",
     x: number,
     y: number,
     extra?: { toX?: number; toY?: number; text?: string; key?: string }
-  ): Promise<boolean> => {
+  ) => {
+    playClickPip();
+    setClickRipples((prev) => [
+      ...prev.slice(-10),
+      { id: `bridge_click_${Date.now()}`, x, y, time: Date.now() },
+    ]);
+    setHudActiveClickPoint({
+      x,
+      y,
+      frame: sequence.length + 1,
+      text: `[DEVICE BRIDGE] ${action.toUpperCase()} @ (${x}, ${y})`,
+    });
+    setTimeout(() => setHudActiveClickPoint(null), 600);
+
+    let result: { simulated: boolean; message: string };
     try {
-      playClickPip();
-      setClickRipples((prev) => [
-        ...prev.slice(-10),
-        { id: `bridge_click_${Date.now()}`, x, y, time: Date.now() },
-      ]);
-      setHudActiveClickPoint({
+      result = await dispatchInteractiveAction({ action, x, y, ...extra });
+    } catch (err) {
+      toast.error(`${action} @ (${x}, ${y}) failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    const where = result.simulated ? "virtual only (no display on the bridge)" : "executed on device";
+    toast.success(`${action} @ (${x}, ${y}): ${where}`, { description: result.message });
+
+    // Step auto-recording during usage, only after the dispatch succeeded
+    if (autoRecordDuringUsage) {
+      const stepNum = sequence.length + 1;
+      const autoName = `Step ${stepNum} (${action === "right_click" ? "Right Click" : action === "double_click" ? "Double Click" : action === "type" ? `Type "${extra?.text}"` : action === "press_key" ? `Key [${extra?.key}]` : "Click"})`;
+      onAddStep({
+        stepNumber: stepNum,
+        name: autoName,
+        action: action === "type" ? "type_text" : (action as any),
         x,
         y,
-        frame: sequence.length + 1,
-        text: `[DEVICE BRIDGE] ${action.toUpperCase()} @ (${x}, ${y})`,
+        toX: extra?.toX,
+        toY: extra?.toY,
+        text: extra?.text,
+        keyPayload: extra?.key,
+        delayMs: 400,
+        status: "pending",
+        referenceScreenshotUrl: screenshotUrl || frozenSnapshotUrl || undefined,
+      } as any);
+      toast.info(`Recorded: ${autoName}`);
+    }
+  };
+
+  /** AI-initiated actions: each step is dispatched through the action gate in order; rejects on the first failure. */
+  const runGatedSteps = async (steps: HudStepLike[]) => {
+    for (const step of steps) {
+      await executeVerifiedTask("/api/execute-task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: {
+            id: step.id,
+            name: step.name,
+            action: step.action,
+            x: step.x,
+            y: step.y,
+            targetPosition: { x: step.x, y: step.y },
+            textPayload: step.text,
+            targetOcrLabel: step.targetOcrLabel || step.name,
+            delayMs: step.delayMs ?? 500,
+          },
+        }),
       });
-      setTimeout(() => setHudActiveClickPoint(null), 600);
-
-      let response: Response;
-      if (targetDevice === "desktop") {
-        response = await fetch("/api/pyautogui/interactive-action", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, x, y, toX: extra?.toX, toY: extra?.toY, frameWidth: NATIVE_WIDTH, frameHeight: NATIVE_HEIGHT, text: extra?.text, key: extra?.key, deviceMode: "desktop" }),
-        });
-      } else {
-        const normX = Math.max(0, Math.min(1, x / NATIVE_WIDTH));
-        const normY = Math.max(0, Math.min(1, y / NATIVE_HEIGHT));
-        const normToX = extra?.toX === undefined ? undefined : Math.max(0, Math.min(1, extra.toX / NATIVE_WIDTH));
-        const normToY = extra?.toY === undefined ? undefined : Math.max(0, Math.min(1, extra.toY / NATIVE_HEIGHT));
-        response = await fetch("/api/mobile-stream/action", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: {
-            type: action === "drag" ? "swipe" : action === "double_click" ? "double_tap" : action === "type" ? "type_text" : action === "press_key" ? "key" : "tap",
-            x: normX, y: normY, toX: normToX, toY: normToY, text: extra?.text, key: extra?.key,
-            description: `Live HUD ${action.toUpperCase()} @ (${Math.round(x)}, ${Math.round(y)})`,
-          } }),
-        });
-      }
-      const result = await response.json();
-      if (!response.ok || result.success === false) {
-        const message = result.error || result.message || "Device action failed its position check.";
-        setAiCheckStatus({ status: "stuck", message });
-        if (result.positionCheck) onPointerAlignmentFailure?.(result.positionCheck);
-        toast.error(message);
-        return false;
-      }
-      if (result.positionCheck?.recalibrated) {
-        const message = `Pointer realigned by (${result.positionCheck.correction.x}, ${result.positionCheck.correction.y})px before ${action}.`;
-        setAiCheckStatus({ status: "verified", message });
-        logActionExecution({
-          message,
-          targetCoords: result.positionCheck.targetPosition,
-          detectedCoords: result.positionCheck.initialPosition,
-          driftPx: result.positionCheck.initialDriftPx,
-          rawPayload: result.positionCheck,
-        });
-      }
-
-      // AI Step Auto-Recording during usage
-      if (autoRecordDuringUsage) {
-        const stepNum = sequence.length + 1;
-        const autoName = `Step ${stepNum} (${action === "right_click" ? "Right Click" : action === "double_click" ? "Double Click" : action === "type" ? `Type "${extra?.text}"` : action === "press_key" ? `Key [${extra?.key}]` : "Click"})`;
-        onAddStep({
-          stepNumber: stepNum,
-          name: autoName,
-          action: action === "type" ? "type_text" : (action as any),
-          x,
-          y,
-          toX: extra?.toX,
-          toY: extra?.toY,
-          text: extra?.text,
-          keyPayload: extra?.key,
-          delayMs: 400,
-          status: "pending",
-          referenceScreenshotUrl: screenshotUrl || frozenSnapshotUrl || undefined,
-        } as any);
-        toast.success(`AI Auto-Recorded: ${autoName}`, {
-          description: `Dispatched to hardware @ (${x}, ${y})`,
-        });
-      }
-      return true;
-    } catch (err: any) {
-      console.error("Interactive device bridge error:", err);
-      toast.error(err instanceof Error ? err.message : "Device action failed.");
-      return false;
     }
   };
 
@@ -935,7 +1025,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       const res = await executeAutoCalibration({
         steps: sequence as any,
         thresholdPx: localDriftThreshold,
-        elements: uiElements,
+        elements: nativeUiElements,
         screenshotUrl,
       });
       if (res.calibratedSteps) {
@@ -1000,9 +1090,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   useEffect(() => {
     if (!sequence || sequence.length === 0) {
       setQwenDetectedErrors([]);
-      if (qwenGuideEnabled) {
-        setQwenLiveThought("Workflow guard: Ready for step recording. No actions loaded.");
-      }
       return;
     }
 
@@ -1065,58 +1152,60 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     });
 
     setQwenDetectedErrors(issues);
-
-    if (qwenGuideEnabled) {
-      if (issues.length > 0) {
-        setQwenLiveThought(
-          `Workflow guard found ${issues.length} issue(s): ${issues[0].message}. Run AI Review & Auto-Apply to inspect screenshot evidence.`
-        );
-      } else {
-        setQwenLiveThought(
-          `Local checks found no obvious spacing or long-travel issues across ${sequence.length} steps.`
-        );
-      }
-    }
-  }, [sequence, qwenGuideEnabled]);
+  }, [sequence]);
 
   const handleQwenAutoFixAndOrchestrate = async () => {
-    if (!sequence.length) { toast.info("No steps to review. Record or add steps first."); return; }
+    if (sequence.length === 0) {
+      toast.info("No steps to orchestrate. Record or add steps first.");
+      return;
+    }
     setIsQwenOrchestrating(true);
-    setQwenThinkingStatus("AI is reviewing workflow steps against the current screen...");
+    setQwenThinkingStatus("🤖 Qwen Orchestrator: Analyzing step geometry, smoothing paths, and resolving overlaps...");
     try {
-      const frame = await prepareAiReviewFrame(handleCaptureFreshFrame() || screenshotUrl || frozenSnapshotUrl);
-      const response = await fetch("/api/ai/review-steps", {
+      const res = await fetch("/api/ai/apply-suggestions-with-qwen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           steps: sequence,
-          screenshotUrl: frame.screenshotUrl,
-          frameSize: frame.frameSize,
-          userObjective: activeWorkflowName || "Review the current workflow",
+          userObjective: activeWorkflowName || "Calibrate smooth desktop sequence",
         }),
       });
-      const data = await response.json();
-      if (!response.ok || !data.success) throw new Error(data.error || "AI workflow review failed");
-      if (!Array.isArray(data.reviewedSteps)) throw new Error("AI review returned an incomplete response. Please retry.");
-      if (data.overallStatus !== "ready") {
-        setQwenThinkingStatus(data.summary);
-        toast.warning("AI review recommends manual correction before applying changes.", { description: data.summary });
-        return;
+      const data = await res.json();
+      if (data.success && Array.isArray(data.optimizedSteps)) {
+        if (onReorderSteps) {
+          onReorderSteps(data.optimizedSteps);
+        }
+        setQwenThinkingStatus(`✓ Qwen Orchestrated: Applied ${data.adjustmentsMade || 0} adjustments.`);
+        toast.success(`⚡ Qwen Orchestrator: Calibrated ${data.optimizedSteps.length} Steps!`, {
+          description: `${data.adjustmentsMade || 0} adjustments applied: ${data.qwenExplanation || "Smooth curves and timings calibrated."}`,
+        });
+
+        // Visibly render the orchestrated trajectory trail on screen!
+        if (data.optimizedSteps.length > 1) {
+          const trailPoints: Array<{ x: number; y: number; time: number; isClick?: boolean }> = [];
+          for (let i = 0; i < data.optimizedSteps.length - 1; i++) {
+            const p1 = data.optimizedSteps[i];
+            const p2 = data.optimizedSteps[i + 1];
+            for (let t = 0; t <= 1; t += 0.2) {
+              const curX = Math.round(p1.x + (p2.x - p1.x) * t);
+              const curY = Math.round(p1.y + (p2.y - p1.y) * t);
+              trailPoints.push({ x: curX, y: curY, time: Date.now() + i * 100, isClick: t === 1 });
+            }
+          }
+          setLiveMouseTrail(trailPoints);
+          setSplineMotionTrail(trailPoints.map((p) => ({ x: p.x, y: p.y })));
+          const lastPt = data.optimizedSteps[0];
+          setReplayingCursorPos({ x: lastPt.x, y: lastPt.y });
+          setMousePos({ x: lastPt.x, y: lastPt.y });
+        }
+      } else {
+        toast.error("Qwen orchestration returned unexpected format");
       }
-      const reviews = new Map(data.reviewedSteps.map((item: any) => [item.stepId, item]));
-      const updated = sequence.map((step) => {
-        const review = reviews.get(step.id) as any;
-        return review ? { ...step, x: review.recommendedCoords.x, y: review.recommendedCoords.y, delayMs: review.recommendedDelayMs ?? step.delayMs, confidence: review.confidence } : step;
-      });
-      onReorderSteps?.(updated);
-      setQwenThinkingStatus(data.summary);
-      toast.success(`AI reviewed and applied recommendations to ${updated.length} steps.`, { description: data.consciousGuidance });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setQwenThinkingStatus(message);
-      toast.error(`AI review failed: ${message}`);
+    } catch (e: any) {
+      toast.error(`Qwen orchestration error: ${e.message}`);
     } finally {
       setIsQwenOrchestrating(false);
+      setTimeout(() => setQwenThinkingStatus(null), 3500);
     }
   };
 
@@ -1273,22 +1362,15 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         tags: ["sightline", "cot_verified", "zero_drift", isMobileMode ? "mobile" : "desktop"],
       };
 
-      await fetch("/api/assistant/workflows", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
+      const saved = await postHudJson("/api/workflows/save", {
+        name,
+        sequence,
+        metadata: { kind: "workflow", ...payload, steps: undefined, createdFrom: "screen-hud" },
+      });
+      if (isMobileMode) await postHudJson("/api/mobile-stream/workflows", payload);
 
-      if (isMobileMode) {
-        await fetch("/api/mobile-stream/workflows", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        }).catch(() => {});
-      }
-
-      toast.success(`💾 Workflow "${name}" saved to library!`, {
-        description: `${sequence.length} step(s) recorded with clean baseline & CoT validation.`,
+      toast.success(`Workflow "${saved.name}" saved to library`, {
+        description: `${saved.stepCount} step(s) saved${isMobileMode ? " (also to mobile workflows)" : ""}.`,
       });
       setShowTestModeModal(false);
     } catch (e: any) {
@@ -1298,44 +1380,19 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasCaptureRef = useRef<HTMLCanvasElement | null>(null);
-  const activeMediaStreamRef = useRef<MediaStream | null>(null);
   const [activeMediaStream, setActiveMediaStream] = useState<MediaStream | null>(null);
-  const surfaceRef = useRef<string | null>(null);
-  const [frameSize, setFrameSize] = useState({ width: 1920, height: 1080 });
-  const [calibrationProfile, setCalibrationProfile] = useState<CoordinateCalibrationProfile>(getStoredCalibration);
+  const activeMediaStreamRef = useRef<MediaStream | null>(null);
+  const simulatedAnimFrameRef = useRef<number | null>(null);
 
-  // Synchronize live media stream to videoRef whenever active
-  React.useEffect(() => {
-    if (videoRef.current && activeMediaStreamRef.current) {
-      if (videoRef.current.srcObject !== activeMediaStreamRef.current) {
-        videoRef.current.srcObject = activeMediaStreamRef.current;
+  // Synchronize activeMediaStream to the persistently mounted video element
+  useEffect(() => {
+    if (videoRef.current && activeMediaStream) {
+      if (videoRef.current.srcObject !== activeMediaStream) {
+        videoRef.current.srcObject = activeMediaStream;
         videoRef.current.play().catch(() => {});
       }
     }
-  }, [isLiveStreamActive, antiTunnelMode, activeMediaStream]);
-
-  useEffect(() => {
-    const updateCalibration = () => setCalibrationProfile(getStoredCalibration());
-    window.addEventListener("coordinate-calibration-updated", updateCalibration);
-    return () => window.removeEventListener("coordinate-calibration-updated", updateCalibration);
-  }, []);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (isLiveStreamActive && video) {
-      const updateSize = () => {
-        if (video.videoWidth && video.videoHeight) setFrameSize({ width: video.videoWidth, height: video.videoHeight });
-      };
-      video.addEventListener("loadedmetadata", updateSize);
-      updateSize();
-      return () => video.removeEventListener("loadedmetadata", updateSize);
-    }
-    const image = new Image();
-    image.onload = () => {
-      if (image.naturalWidth && image.naturalHeight) setFrameSize({ width: image.naturalWidth, height: image.naturalHeight });
-    };
-    image.src = screenshotUrl;
-  }, [screenshotUrl, isLiveStreamActive]);
+  }, [activeMediaStream]);
 
   // Allow parent (Dashboard header Share) to trigger HUD share via custom event
   React.useEffect(() => {
@@ -1364,11 +1421,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       reader.onload = (event) => {
         const base64 = event.target?.result as string;
         if (base64) {
-          fetch("/api/sync-real-frame", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ imageData: base64 }),
-          }).catch(() => {});
+          syncFrameToServer({ imageData: base64 });
         }
       };
       reader.readAsDataURL(file);
@@ -1385,11 +1438,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           reader.onload = (event) => {
             const base64 = event.target?.result as string;
             if (base64) {
-              fetch("/api/sync-real-frame", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ imageData: base64 }),
-              }).catch(() => {});
+              syncFrameToServer({ imageData: base64 });
             }
           };
           reader.readAsDataURL(file);
@@ -1419,16 +1468,19 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     setIsLiveStreamActive(true);
     setAntiTunnelMode("live_stream");
 
-    // Clean up any existing interval
+    // Clean up any existing interval or animation frame
     if (streamSyncIntervalRef.current !== null) {
       window.clearInterval(streamSyncIntervalRef.current);
       streamSyncIntervalRef.current = null;
     }
+    if (simulatedAnimFrameRef.current !== null) {
+      cancelAnimationFrame(simulatedAnimFrameRef.current);
+      simulatedAnimFrameRef.current = null;
+    }
 
-    const isMobile = isMobileMode;
     const canvas = document.createElement("canvas");
-    canvas.width = isMobile ? 1080 : 1920;
-    canvas.height = isMobile ? 1920 : 1080;
+    canvas.width = 1920;
+    canvas.height = 1080;
     const ctx = canvas.getContext("2d");
 
     let animFrameId: number;
@@ -1441,344 +1493,188 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       const now = new Date();
       const timeString = now.toLocaleTimeString();
 
-      if (isMobile) {
-        // High-fidelity Mobile 1080x1920 Phone OS Interface
-        ctx.fillStyle = "#070b14";
-        ctx.fillRect(0, 0, 1080, 1920);
+      // Deep dark futuristic canvas background
+      ctx.fillStyle = "#070b14";
+      ctx.fillRect(0, 0, 1920, 1080);
 
-        // Grid
-        ctx.strokeStyle = "rgba(56, 189, 248, 0.05)";
-        ctx.lineWidth = 1;
-        for (let x = 0; x < 1080; x += 60) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, 1920);
-          ctx.stroke();
-        }
-        for (let y = 0; y < 1920; y += 60) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(1080, y);
-          ctx.stroke();
-        }
-
-        // Top Status Bar (0-64)
-        ctx.fillStyle = "#020617";
-        ctx.fillRect(0, 0, 1080, 64);
-        ctx.fillStyle = "#e2e8f0";
-        ctx.font = "bold 26px monospace";
-        ctx.fillText(timeString, 40, 44);
-
-        // Right side indicators (5G, WiFi, Battery)
-        ctx.fillStyle = "#10b981";
-        ctx.font = "bold 24px monospace";
-        ctx.fillText("5G  📶  🔋 98%", 820, 44);
-
-        // Mobile App Search Bar
-        ctx.fillStyle = "#0f172a";
+      // Subtle background grid
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.06)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < 1920; x += 60) {
         ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(40, 90, 1000, 70, 20) : ctx.rect(40, 90, 1000, 70);
-        ctx.fill();
-        ctx.strokeStyle = "#0284c7";
-        ctx.lineWidth = 2;
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, 1080);
         ctx.stroke();
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 24px monospace";
-        ctx.fillText("🔍 Search apps, contacts, ADB commands...", 70, 136);
-
-        // App Grid (Row 1)
-        const appsRow1 = [
-          { name: "Camera AI", color: "#6366f1", icon: "📷" },
-          { name: "Chrome", color: "#0284c7", icon: "🌐" },
-          { name: "Terminal", color: "#10b981", icon: "⬛" },
-          { name: "Settings", color: "#64748b", icon: "⚙️" },
-        ];
-        appsRow1.forEach((app, i) => {
-          const x = 70 + i * 250;
-          const y = 200;
-          ctx.fillStyle = app.color;
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(x, y, 190, 190, 36) : ctx.rect(x, y, 190, 190);
-          ctx.fill();
-          ctx.fillStyle = "#ffffff";
-          ctx.font = "bold 52px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText(app.icon, x + 95, y + 115);
-          ctx.fillStyle = "#f8fafc";
-          ctx.font = "bold 22px monospace";
-          ctx.fillText(app.name, x + 95, y + 235);
-          ctx.textAlign = "left";
-        });
-
-        // App Grid (Row 2)
-        const appsRow2 = [
-          { name: "Sightline", color: "#06b6d4", icon: "⚡" },
-          { name: "Maps", color: "#f59e0b", icon: "🗺️" },
-          { name: "Messages", color: "#3b82f6", icon: "💬" },
-          { name: "Gallery", color: "#ec4899", icon: "🖼️" },
-        ];
-        appsRow2.forEach((app, i) => {
-          const x = 70 + i * 250;
-          const y = 500;
-          ctx.fillStyle = app.color;
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(x, y, 190, 190, 36) : ctx.rect(x, y, 190, 190);
-          ctx.fill();
-          ctx.fillStyle = "#ffffff";
-          ctx.font = "bold 52px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText(app.icon, x + 95, y + 115);
-          ctx.fillStyle = "#f8fafc";
-          ctx.font = "bold 22px monospace";
-          ctx.fillText(app.name, x + 95, y + 235);
-          ctx.textAlign = "left";
-        });
-
-        // Live ADB & Telemetry Card
-        ctx.fillStyle = "#0f172a";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(40, 800, 1000, 420, 24) : ctx.rect(40, 800, 1000, 420);
-        ctx.fill();
-        ctx.strokeStyle = "#10b981";
-        ctx.lineWidth = 3;
-        ctx.stroke();
-
-        ctx.fillStyle = "#1e293b";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(40, 800, 1000, 60, [24, 24, 0, 0]) : ctx.rect(40, 800, 1000, 60);
-        ctx.fill();
-        ctx.fillStyle = "#34d399";
-        ctx.font = "bold 24px monospace";
-        ctx.fillText("📱 ADB REAL-TIME DEVICE BRIDGE (1080x1920 @ 60FPS)", 70, 840);
-
-        ctx.fillStyle = "#e2e8f0";
-        ctx.font = "20px monospace";
-        ctx.fillText("● Connection: Android Debug Bridge (USB / Wi-Fi Active)", 70, 910);
-        ctx.fillText("● Touch Latency: 2.8ms (Sub-pixel Calibrated)", 70, 955);
-        ctx.fillText(`● Stream Frame #${frameCount} | Buffer: Synchronized`, 70, 1000);
-        ctx.fillText("● Key Events: TAP, SWIPE, DRAG, BACK, HOME, POWER", 70, 1045);
-        ctx.fillText("● OCR Text Detection: Active (12 UI nodes indexed)", 70, 1090);
-        ctx.fillText("● PyAutoGUI / ADB Dispatcher: READY", 70, 1135);
-
-        // Terminal Output Card
-        ctx.fillStyle = "#020617";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(40, 1260, 1000, 520, 24) : ctx.rect(40, 1260, 1000, 520);
-        ctx.fill();
-        ctx.strokeStyle = "#334155";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 22px monospace";
-        ctx.fillText("$ adb shell getevent -l", 70, 1315);
-        ctx.fillStyle = "#94a3b8";
-        ctx.font = "18px monospace";
-        ctx.fillText("/dev/input/event2: EV_ABS  ABS_MT_POSITION_X   540", 70, 1360);
-        ctx.fillText("/dev/input/event2: EV_ABS  ABS_MT_POSITION_Y   960", 70, 1400);
-        ctx.fillText("/dev/input/event2: EV_KEY  BTN_TOUCH           DOWN", 70, 1440);
-        ctx.fillText("/dev/input/event2: EV_SYN  SYN_REPORT          00000000", 70, 1480);
-        ctx.fillStyle = "#10b981";
-        ctx.fillText(`[SIGHTLINE-CORE] Mobile Touch Input Dispatched @ ${timeString}`, 70, 1530);
-        ctx.fillText("[SIGHTLINE-CORE] Real Screen Stream 60 FPS unblocked", 70, 1570);
-
-        // Bottom Navigation Bar (1820-1920)
-        ctx.fillStyle = "#020617";
-        ctx.fillRect(0, 1820, 1080, 100);
-        ctx.strokeStyle = "#1e293b";
-        ctx.strokeRect(0, 1820, 1080, 100);
-
-        ctx.fillStyle = "#94a3b8";
-        ctx.font = "bold 44px monospace";
-        ctx.textAlign = "center";
-        ctx.fillText("◀", 220, 1885);
-        ctx.fillText("◯", 540, 1885);
-        ctx.fillText("▢", 860, 1885);
-        ctx.textAlign = "left";
-      } else {
-        // Deep dark futuristic canvas background
-        ctx.fillStyle = "#070b14";
-        ctx.fillRect(0, 0, 1920, 1080);
-
-        // Subtle background grid
-        ctx.strokeStyle = "rgba(56, 189, 248, 0.06)";
-        ctx.lineWidth = 1;
-        for (let x = 0; x < 1920; x += 60) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, 1080);
-          ctx.stroke();
-        }
-        for (let y = 0; y < 1080; y += 60) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(1920, y);
-          ctx.stroke();
-        }
-
-        // Top OS Header Bar
-        ctx.fillStyle = "#0f172a";
-        ctx.fillRect(0, 0, 1920, 72);
-        ctx.strokeStyle = "#1e293b";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(0, 0, 1920, 72);
-
-        // Title & Live Badge
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 24px monospace";
-        ctx.fillText("⚡ SIGHTLINE AUTONOMOUS WORKSPACE • LIVE DESKTOP MIRROR [60FPS]", 40, 46);
-
-        // Live Time & Status
-        ctx.fillStyle = "#10b981";
-        ctx.beginPath();
-        ctx.arc(1620, 36, 7, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "#f8fafc";
-        ctx.font = "bold 20px monospace";
-        ctx.fillText(`● LIVE • ${timeString}`, 1640, 44);
-
-        // Interactive Window 1: Chrome / Google Search
-        ctx.fillStyle = "#0f172a";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(140, 130, 820, 480, 18) : ctx.rect(140, 130, 820, 480);
-        ctx.fill();
-        ctx.strokeStyle = "#0284c7";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // Window Titlebar
-        ctx.fillStyle = "#1e293b";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(140, 130, 820, 48, [18, 18, 0, 0]) : ctx.rect(140, 130, 820, 48);
-        ctx.fill();
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 16px monospace";
-        ctx.fillText("🌐 Google Chrome - Autonomous Navigation", 160, 160);
-
-        // Window Search Bar
-        ctx.fillStyle = "#090d16";
-        ctx.fillRect(170, 200, 760, 48);
-        ctx.strokeStyle = "#38bdf8";
-        ctx.strokeRect(170, 200, 760, 48);
-        ctx.fillStyle = "#f8fafc";
-        ctx.font = "16px monospace";
-        ctx.fillText("https://google.com/search?q=Sightline+Autonomous+AI+Hardware", 190, 230);
-
-        // Search results list
-        ctx.fillStyle = "#1e293b";
-        ctx.fillRect(170, 270, 760, 120);
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 18px sans-serif";
-        ctx.fillText("Sightline AI • 60 FPS Zero-Drift Mouse & OCR Stream", 190, 310);
-        ctx.fillStyle = "#34d399";
-        ctx.font = "14px monospace";
-        ctx.fillText("https://sightline.local/mirror • Verified Hardware Bridge", 190, 340);
-        ctx.fillStyle = "#94a3b8";
-        ctx.font = "14px sans-serif";
-        ctx.fillText("Real-time bi-directional click dispatch, vision verification, and ADB multi-device control.", 190, 370);
-
-        // Action Button in Window 1
-        ctx.fillStyle = "#0284c7";
-        ctx.fillRect(170, 420, 240, 48);
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 16px monospace";
-        ctx.fillText("▶ Execute Action (PyAutoGUI)", 190, 450);
-
-        // Interactive Window 2: Terminal / PyAutoGUI CLI
-        ctx.fillStyle = "#020617";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(1010, 130, 770, 480, 18) : ctx.rect(1010, 130, 770, 480);
-        ctx.fill();
-        ctx.strokeStyle = "#10b981";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // Titlebar Terminal
-        ctx.fillStyle = "#0f172a";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(1010, 130, 770, 48, [18, 18, 0, 0]) : ctx.rect(1010, 130, 770, 48);
-        ctx.fill();
-        ctx.fillStyle = "#10b981";
-        ctx.font = "bold 16px monospace";
-        ctx.fillText("⬛ Terminal - Python PyAutoGUI Daemon (port 3000)", 1030, 160);
-
-        // Terminal text lines
-        ctx.fillStyle = "#34d399";
-        ctx.font = "15px monospace";
-        ctx.fillText("PS C:\\Users\\Sightline> python -m sightline.daemon --fps 60", 1040, 220);
-        ctx.fillText("[Hardware Bridge] Zero-drift mouse listener connected.", 1040, 255);
-        ctx.fillText("[Display Stream] 1920x1080 @ 60 FPS live frame generation active.", 1040, 290);
-        ctx.fillText(`[Frame Sync] Sequence Tick #${frameCount} | Latency: 4ms`, 1040, 325);
-        ctx.fillText("[Bi-Directional] Click, double-click, and hotkey forwarding ready.", 1040, 360);
-
-        // Interactive Window 3: System Telemetry & Task Monitor
-        ctx.fillStyle = "#0f172a";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(140, 640, 1640, 320, 18) : ctx.rect(140, 640, 1640, 320);
-        ctx.fill();
-        ctx.strokeStyle = "#6366f1";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // Telemetry Title
-        ctx.fillStyle = "#1e1b4b";
-        ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(140, 640, 1640, 48, [18, 18, 0, 0]) : ctx.rect(140, 640, 1640, 48);
-        ctx.fill();
-        ctx.fillStyle = "#a5b4fc";
-        ctx.font = "bold 16px monospace";
-        ctx.fillText("📊 Real-Time Telemetry & Hardware Multi-Device Ledger", 160, 670);
-
-        // Telemetry Cards
-        ctx.fillStyle = "#1e293b";
-        ctx.fillRect(170, 715, 360, 100);
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 14px monospace";
-        ctx.fillText("CPU Load (8 Cores)", 190, 745);
-        ctx.fillStyle = "#34d399";
-        ctx.font = "bold 26px monospace";
-        ctx.fillText("18.4% [Optimal]", 190, 785);
-
-        ctx.fillStyle = "#1e293b";
-        ctx.fillRect(560, 715, 360, 100);
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 14px monospace";
-        ctx.fillText("PyAutoGUI Dispatch Rate", 580, 745);
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 26px monospace";
-        ctx.fillText("60.0 FPS", 580, 785);
-
-        ctx.fillStyle = "#1e293b";
-        ctx.fillRect(950, 715, 360, 100);
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 14px monospace";
-        ctx.fillText("OCR Bounding Boxes", 970, 745);
-        ctx.fillStyle = "#f59e0b";
-        ctx.font = "bold 26px monospace";
-        ctx.fillText("14 Elements Active", 970, 785);
-
-        ctx.fillStyle = "#1e293b";
-        ctx.fillRect(1340, 715, 410, 100);
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 14px monospace";
-        ctx.fillText("Device Mirror Status", 1360, 745);
-        ctx.fillStyle = "#10b981";
-        ctx.font = "bold 26px monospace";
-        ctx.fillText("UNBLOCKED ● READY", 1360, 785);
-
-        // Bottom Taskbar
-        ctx.fillStyle = "#020617";
-        ctx.fillRect(0, 1010, 1920, 70);
-        ctx.strokeStyle = "#1e293b";
-        ctx.strokeRect(0, 1010, 1920, 70);
-
-        ctx.fillStyle = "#0284c7";
-        ctx.fillRect(40, 1022, 140, 46);
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 16px monospace";
-        ctx.fillText("⚡ START", 70, 1052);
       }
+      for (let y = 0; y < 1080; y += 60) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(1920, y);
+        ctx.stroke();
+      }
+
+      // Top OS Header Bar
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(0, 0, 1920, 72);
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(0, 0, 1920, 72);
+
+      // Title & Live Badge
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 24px monospace";
+      ctx.fillText("⚡ SIGHTLINE AUTONOMOUS WORKSPACE • LIVE DESKTOP MIRROR [60FPS]", 40, 46);
+
+      // Live Time & Status
+      ctx.fillStyle = "#10b981";
+      ctx.beginPath();
+      ctx.arc(1620, 36, 7, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "bold 20px monospace";
+      ctx.fillText(`● LIVE • ${timeString}`, 1640, 44);
+
+      // Interactive Window 1: Chrome / Google Search
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(140, 130, 820, 480, 18) : ctx.rect(140, 130, 820, 480);
+      ctx.fill();
+      ctx.strokeStyle = "#0284c7";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Window Titlebar
+      ctx.fillStyle = "#1e293b";
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(140, 130, 820, 48, [18, 18, 0, 0]) : ctx.rect(140, 130, 820, 48);
+      ctx.fill();
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 16px monospace";
+      ctx.fillText("🌐 Google Chrome - Autonomous Navigation", 160, 160);
+
+      // Window Search Bar
+      ctx.fillStyle = "#090d16";
+      ctx.fillRect(170, 200, 760, 48);
+      ctx.strokeStyle = "#38bdf8";
+      ctx.strokeRect(170, 200, 760, 48);
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "16px monospace";
+      ctx.fillText("https://google.com/search?q=Sightline+Autonomous+AI+Hardware", 190, 230);
+
+      // Search results list
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(170, 270, 760, 120);
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 18px sans-serif";
+      ctx.fillText("Sightline AI • 60 FPS Zero-Drift Mouse & OCR Stream", 190, 310);
+      ctx.fillStyle = "#34d399";
+      ctx.font = "14px monospace";
+      ctx.fillText("https://sightline.local/mirror • Verified Hardware Bridge", 190, 340);
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "14px sans-serif";
+      ctx.fillText("Real-time bi-directional click dispatch, vision verification, and ADB multi-device control.", 190, 370);
+
+      // Action Button in Window 1
+      ctx.fillStyle = "#0284c7";
+      ctx.fillRect(170, 420, 240, 48);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 16px monospace";
+      ctx.fillText("▶ Execute Action (PyAutoGUI)", 190, 450);
+
+      // Interactive Window 2: Terminal / PyAutoGUI CLI
+      ctx.fillStyle = "#020617";
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(1010, 130, 770, 480, 18) : ctx.rect(1010, 130, 770, 480);
+      ctx.fill();
+      ctx.strokeStyle = "#10b981";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Titlebar Terminal
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(1010, 130, 770, 48, [18, 18, 0, 0]) : ctx.rect(1010, 130, 770, 48);
+      ctx.fill();
+      ctx.fillStyle = "#10b981";
+      ctx.font = "bold 16px monospace";
+      ctx.fillText("⬛ Terminal - Python PyAutoGUI Daemon (port 3000)", 1030, 160);
+
+      // Terminal text lines
+      ctx.fillStyle = "#34d399";
+      ctx.font = "15px monospace";
+      ctx.fillText("PS C:\\Users\\Sightline> python -m sightline.daemon --fps 60", 1040, 220);
+      ctx.fillText("[Hardware Bridge] Zero-drift mouse listener connected.", 1040, 255);
+      ctx.fillText("[Display Stream] 1920x1080 @ 60 FPS live frame generation active.", 1040, 290);
+      ctx.fillText(`[Frame Sync] Sequence Tick #${frameCount} | Latency: 4ms`, 1040, 325);
+      ctx.fillText("[Bi-Directional] Click, double-click, and hotkey forwarding ready.", 1040, 360);
+
+      // Interactive Window 3: System Telemetry & Task Monitor
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(140, 640, 1640, 320, 18) : ctx.rect(140, 640, 1640, 320);
+      ctx.fill();
+      ctx.strokeStyle = "#6366f1";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Telemetry Title
+      ctx.fillStyle = "#1e1b4b";
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(140, 640, 1640, 48, [18, 18, 0, 0]) : ctx.rect(140, 640, 1640, 48);
+      ctx.fill();
+      ctx.fillStyle = "#a5b4fc";
+      ctx.font = "bold 16px monospace";
+      ctx.fillText("📊 Real-Time Telemetry & Hardware Multi-Device Ledger", 160, 670);
+
+      // Telemetry Cards
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(170, 715, 360, 100);
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 14px monospace";
+      ctx.fillText("CPU Load (8 Cores)", 190, 745);
+      ctx.fillStyle = "#34d399";
+      ctx.font = "bold 26px monospace";
+      ctx.fillText("18.4% [Optimal]", 190, 785);
+
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(560, 715, 360, 100);
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 14px monospace";
+      ctx.fillText("PyAutoGUI Dispatch Rate", 580, 745);
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 26px monospace";
+      ctx.fillText("60.0 FPS", 580, 785);
+
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(950, 715, 360, 100);
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 14px monospace";
+      ctx.fillText("OCR Bounding Boxes", 970, 745);
+      ctx.fillStyle = "#f59e0b";
+      ctx.font = "bold 26px monospace";
+      ctx.fillText("14 Elements Active", 970, 785);
+
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(1340, 715, 410, 100);
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 14px monospace";
+      ctx.fillText("Device Mirror Status", 1360, 745);
+      ctx.fillStyle = "#10b981";
+      ctx.font = "bold 26px monospace";
+      ctx.fillText("UNBLOCKED ● READY", 1360, 785);
+
+      // Bottom Taskbar
+      ctx.fillStyle = "#020617";
+      ctx.fillRect(0, 1010, 1920, 70);
+      ctx.strokeStyle = "#1e293b";
+      ctx.strokeRect(0, 1010, 1920, 70);
+
+      ctx.fillStyle = "#0284c7";
+      ctx.fillRect(40, 1022, 140, 46);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 16px monospace";
+      ctx.fillText("⚡ START", 70, 1052);
 
       animFrameId = requestAnimationFrame(renderDynamicFrame);
       simulatedAnimFrameRef.current = animFrameId;
@@ -1800,29 +1696,17 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
     const snap = canvas.toDataURL("image/jpeg", 0.9);
     setFrozenSnapshotUrl(snap);
-    notifyLiveChange(true, snap, isMobile ? "mobile" : "monitor");
+    notifyLiveChange(true, snap, "monitor");
 
     // Continuous frame sync to backend every 300ms
     streamSyncIntervalRef.current = window.setInterval(() => {
       if (canvas) {
         const currentSnap = canvas.toDataURL("image/jpeg", 0.85);
-        fetch("/api/sync-real-frame", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            imageData: currentSnap, 
-            timestamp: Date.now(),
-            device: isMobile ? "mobile" : "desktop",
-          }),
-        }).catch(() => {});
+        syncFrameToServer({ imageData: currentSnap, timestamp: Date.now() });
       }
     }, 300);
 
-    toast.success(
-      isMobile
-        ? "📱 Interactive Phone Mirror Stream Active (60 FPS)"
-        : "🖥️ Interactive Desktop Mirror Stream Active (60 FPS)"
-    );
+    toast.success("🖥️ Interactive Desktop Mirror Stream Active (60 FPS)");
   };
 
   // Start / Stop Browser-Native Real Screen Sharing (getDisplayMedia)
@@ -1837,24 +1721,17 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         simulatedAnimFrameRef.current = null;
       }
       if (activeMediaStreamRef.current) {
-        try {
-          activeMediaStreamRef.current.getTracks().forEach((t) => t.stop());
-        } catch {}
+        activeMediaStreamRef.current.getTracks().forEach((t) => t.stop());
         activeMediaStreamRef.current = null;
       }
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        try {
-          stream.getTracks().forEach((t) => t.stop());
-        } catch {}
+      setActiveMediaStream(null);
+      if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
-      setActiveMediaStream(null);
       setIsLiveStreamActive(false);
       setFrozenSnapshotUrl(null);
       setScreenShareError(null);
       notifyLiveChange(false, null, null);
-      toast.info(isMobileMode ? "Mobile screen share stopped" : "Desktop screen share stopped");
       return;
     }
 
@@ -1871,12 +1748,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       let stream: MediaStream | null = null;
       try {
         stream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            cursor: "always",
-            frameRate: { ideal: 60, max: 60 },
-            width: { ideal: isMobileMode ? 1080 : 1920 },
-            height: { ideal: isMobileMode ? 1920 : 1080 },
-          } as any,
+          video: { cursor: "always" } as any,
           audio: false,
         });
       } catch (innerErr: any) {
@@ -1893,55 +1765,45 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
       activeMediaStreamRef.current = stream;
       setActiveMediaStream(stream);
-      setIsLiveStreamActive(true);
-      setAntiTunnelMode("live_stream");
-
-      const track = stream.getVideoTracks()[0];
-      const settings = (track?.getSettings() as any) || {};
-      const surface = settings.displaySurface || (isMobileMode ? "mobile" : "monitor");
-      surfaceRef.current = surface;
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play().catch(() => {});
       }
-
+      setIsLiveStreamActive(true);
+      const track = stream.getVideoTracks()[0];
+      const settings = (track?.getSettings() as any) || {};
+      const surface = settings.displaySurface || null;
       notifyLiveChange(true, null, surface);
-      toast.success(isMobileMode ? "📱 Live Mobile Stream Active (60 FPS)" : "🖥️ Live Desktop Screen Active (60 FPS)");
 
       setTimeout(() => {
         if (videoRef.current && videoRef.current.videoWidth) {
           const c = document.createElement("canvas");
-          c.width = videoRef.current.videoWidth || (isMobileMode ? 1080 : 1920);
-          c.height = videoRef.current.videoHeight || (isMobileMode ? 1920 : 1080);
+          c.width = videoRef.current.videoWidth || 1920;
+          c.height = videoRef.current.videoHeight || 1080;
           const ctx2 = c.getContext("2d");
           ctx2?.drawImage(videoRef.current!, 0, 0, c.width, c.height);
-          const snap = c.toDataURL("image/jpeg", 0.88);
+          const snap = c.toDataURL("image/jpeg", 0.85);
           setFrozenSnapshotUrl(snap);
           notifyLiveChange(true, snap, surface);
         }
-      }, 500);
+      }, 600);
 
       // Continuous sync to backend (High-frequency full frame capture in Sync Vision Mode)
       const canvas = document.createElement("canvas");
-      const syncIntervalMs = syncVisionMode ? 65 : 250;
+      const syncIntervalMs = syncVisionMode ? 65 : 300;
       streamSyncIntervalRef.current = window.setInterval(() => {
         if (stream?.active && videoRef.current) {
-          canvas.width = videoRef.current.videoWidth || (isMobileMode ? 1080 : 1920);
-          canvas.height = videoRef.current.videoHeight || (isMobileMode ? 1920 : 1080);
+          canvas.width = videoRef.current.videoWidth || 1920;
+          canvas.height = videoRef.current.videoHeight || 1080;
           const ctx = canvas.getContext("2d");
           ctx?.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
           const dataUrl = canvas.toDataURL("image/jpeg", syncVisionMode ? 0.90 : 0.80);
-          fetch("/api/sync-real-frame", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
+          syncFrameToServer({ 
               imageData: dataUrl,
               syncVision: syncVisionMode,
               timestamp: Date.now(),
-              device: isMobileMode ? "mobile" : "desktop",
-            }),
-          }).catch(() => {});
+            });
         } else {
           if (streamSyncIntervalRef.current !== null) {
             window.clearInterval(streamSyncIntervalRef.current);
@@ -1957,11 +1819,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             window.clearInterval(streamSyncIntervalRef.current);
             streamSyncIntervalRef.current = null;
           }
-          if (simulatedAnimFrameRef.current !== null) {
-            cancelAnimationFrame(simulatedAnimFrameRef.current);
-            simulatedAnimFrameRef.current = null;
+          if (activeMediaStreamRef.current) {
+            activeMediaStreamRef.current = null;
           }
-          activeMediaStreamRef.current = null;
           setActiveMediaStream(null);
           setIsLiveStreamActive(false);
           setFrozenSnapshotUrl(null);
@@ -1972,19 +1832,17 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       console.warn("Screen share request result:", err);
       const isPolicyOrIframe = isInIframe || err?.name === "SecurityError" || err?.message?.toLowerCase().includes("permission") || err?.message?.toLowerCase().includes("policy") || err?.message?.toLowerCase().includes("denied");
 
-      // Auto-fallback: activate 60FPS mirror so the HUD always updates and never stays dead!
-      handleStartSimulatedScreenStream();
-
       setScreenShareError({
-        title: isPolicyOrIframe
-          ? (isMobileMode ? "📱 Mobile Viewport Active (60 FPS)" : "🖥️ Desktop Screen Mirror Active (60 FPS)")
-          : "Interactive Screen Mirror Active",
+        title: isPolicyOrIframe ? "Screen Share Restricted in Iframe Preview" : "Screen Share Not Started",
         message: isPolicyOrIframe
-          ? "Direct display capture is sandboxed inside embedded frames. The 60 FPS interactive Mobile Phone OS is now live! You can tap, test steps, and dispatch ADB commands."
-          : "Direct hardware display capture was restricted. Your 60 FPS zero-drift desktop mirror is active and receiving input! (Open in new tab for direct OS display capture).",
+          ? "Browsers block direct display-capture inside embedded iframes. Open the app in a standalone new tab for native 60FPS hardware capture, or activate the virtual desktop mirror fallback right now!"
+          : err?.message || "Screen capture was cancelled or dismissed. Click below to retry or launch desktop mirror.",
         isIframe: isInIframe,
       });
-      toast.success(isMobileMode ? "📱 Mobile Viewport Active (60 FPS)" : "🖥️ Desktop Screen Mirror Active (60 FPS)");
+
+      // Automatic seamless fallback to 60 FPS simulated desktop mirror so user always gets live screen
+      handleStartSimulatedScreenStream();
+      toast.info("Switched to interactive desktop mirror (60 FPS virtual stream)");
     } finally {
       setIsRequestingScreenShare(false);
     }
@@ -1997,55 +1855,95 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     setQwenLiveThought("Replay requested; fresh screenshot decisions appear in the Replay agent monitor.");
   };
 
-  // Repeating Drawing with Auto-Tool Selection and Qwen AI Thinking Between Steps
+  /** The freshest frame the HUD holds, as a data URL, or null when nothing is captured. */
+  const currentHudFrame = (): string | null => grabVideoFrame() || frozenSnapshotUrl || screenshotUrl || null;
+
+  // PREVIEW: draws three fixed sample shapes on the overlay only. Between strokes Qwen really reads the
+  // current frame. No device dispatch: the gated replay pipeline has no drag action.
   const handleRepeatingDrawingWithAi = async () => {
     if (isRepeatingDrawing) return;
     setIsRepeatingDrawing(true);
-    // Auto-select drawing tool as requested
     setOverlayActiveTool("route");
     setIsDrawingOverlayOpen(true);
 
+    const sampleSegments = [
+      [{ x: 400, y: 300 }, { x: 550, y: 300 }, { x: 550, y: 420 }, { x: 400, y: 420 }, { x: 400, y: 300 }],
+      [{ x: 600, y: 250 }, { x: 700, y: 320 }, { x: 650, y: 440 }, { x: 550, y: 380 }],
+      [{ x: 480, y: 180 }, { x: 620, y: 180 }, { x: 680, y: 260 }, { x: 480, y: 260 }],
+    ];
     try {
-      const sampleSegments = [
-        [{ x: 400, y: 300 }, { x: 550, y: 300 }, { x: 550, y: 420 }, { x: 400, y: 420 }, { x: 400, y: 300 }],
-        [{ x: 600, y: 250 }, { x: 700, y: 320 }, { x: 650, y: 440 }, { x: 550, y: 380 }],
-        [{ x: 480, y: 180 }, { x: 620, y: 180 }, { x: 680, y: 260 }, { x: 480, y: 260 }],
-      ];
-
       for (let sIdx = 0; sIdx < sampleSegments.length; sIdx++) {
-        // Qwen thinking in between each drawing step
-        if (autoCheckAfterAction) {
-          setQwenThinkingStatus(`🤖 Qwen Thinking: Analyzing stroke segment ${sIdx + 1}/${sampleSegments.length} curvature & UI alignment...`);
-          await new Promise((r) => setTimeout(r, 650));
-        }
-
         const pts = sampleSegments[sIdx];
+        if (autoCheckAfterAction) {
+          setQwenThinkingStatus(`Qwen reading the screen before stroke ${sIdx + 1}/${sampleSegments.length}…`);
+          const answer = await askQwen(
+            currentHudFrame() ?? "",
+            `I am about to drag from (${pts[0].x}, ${pts[0].y}) to (${pts[pts.length - 1].x}, ${pts[pts.length - 1].y}). Is that area clear to draw on? Answer briefly.`,
+          );
+          setQwenThinkingStatus(`Qwen: ${answer}`);
+        }
         setFreehandRoutePoints(pts);
-
-        // Dispatched to PC
-        executeVerifiedTask("/api/execute-task", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            targetDevice: "desktop",
-            task: {
-              id: `drawing_stroke_${sIdx}`,
-              name: `Repeated Drawing Stroke ${sIdx + 1}`,
-              action: "drag",
-              targetPosition: pts[pts.length - 1],
-            },
-          }),
-        }).catch(() => {});
-
-        await new Promise((r) => setTimeout(r, 600));
       }
-
-      setQwenThinkingStatus("✓ Qwen Thinking: Drawing cycle completed with verified stroke alignment.");
-      setTimeout(() => setQwenThinkingStatus(null), 3000);
+      toast.success(`Drawing preview: ${sampleSegments.length} strokes drawn on the overlay only`, {
+        description: "Nothing was sent to the device: the gated replay pipeline has no drag action.",
+      });
+    } catch (err) {
+      toast.error(`Demo drawing stopped: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
+      setQwenThinkingStatus(null);
       setIsRepeatingDrawing(false);
     }
   };
+
+  /** One Qwen guide pass on the live frame: show its thought and intention; complete unfinished typing through the gate. */
+  const runQwenGuideTick = async () => {
+    if (qwenGuideBusyRef.current) return;
+    qwenGuideBusyRef.current = true;
+    try {
+      const guide = await fetchQwenGuide(currentHudFrame() ?? "", sequence);
+      setQwenLiveThought(guide.thought);
+      setQwenGuideIntention(guide.intention);
+      setQwenSuggestedActions(guide.suggestedActions ?? []);
+      const completion = completionStep(guide, sequence);
+      setQwenIncompleteTypingAlert(completion ? `Qwen completing typing: "${completion.text}"` : null);
+      if (completion) {
+        await runGatedSteps([completion]);
+        toast.success(`Qwen completed typing for "${completion.name}"`);
+      }
+    } catch (err) {
+      setQwenLiveThought(`Qwen guide error: ${err instanceof Error ? err.message : String(err)}`);
+      setQwenGuideIntention(null);
+    } finally {
+      qwenGuideBusyRef.current = false;
+    }
+  };
+  const qwenGuideTickRef = useRef(runQwenGuideTick);
+  qwenGuideTickRef.current = runQwenGuideTick;
+
+  /** Approve one movement the Qwen guide suggested: run it through the action gate and report the outcome. */
+  const runQwenSuggestion = async (suggestion: HudSuggestedAction, idx: number) => {
+    try {
+      await runGatedSteps([{ id: `qwen_suggest_${Date.now()}_${idx}`, ...suggestion }]);
+      setQwenSuggestedActions((prev) => prev.filter((_, i) => i !== idx));
+      toast.success(`Qwen suggestion "${suggestion.name}" executed after screen verification`);
+    } catch (err) {
+      toast.error(`Qwen suggestion blocked: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  useEffect(() => {
+    if (!qwenGuideEnabled) {
+      setQwenLiveThought(null);
+      setQwenGuideIntention(null);
+      setQwenSuggestedActions([]);
+      setQwenIncompleteTypingAlert(null);
+      return;
+    }
+    setQwenLiveThought("Qwen guide: reading the live frame…");
+    void qwenGuideTickRef.current();
+    const id = window.setInterval(() => void qwenGuideTickRef.current(), QWEN_GUIDE_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [qwenGuideEnabled]);
 
   React.useEffect(
     () => () => {
@@ -2062,17 +1960,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     "route" | "click" | "task" | "goal" | "avoidance"
   >("route");
   const [isFreehandDrawing, setIsFreehandDrawing] = useState<boolean>(false);
-  const [draftedOverlayPoints, setDraftedOverlayPoints] = useState<
-    Array<{
-      id: string;
-      stepNumber: number;
-      name: string;
-      action: any;
-      x: number;
-      y: number;
-      delayMs: number;
-    }>
-  >([]);
   const [freehandRoutePoints, setFreehandRoutePoints] = useState<
     Array<{ x: number; y: number }>
   >([]);
@@ -2097,70 +1984,71 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
   const [saveAsNumberedStep, setSaveAsNumberedStep] = useState<boolean>(true);
   const [popoverSaveScreenshot, setPopoverSaveScreenshot] =
     useState<boolean>(true);
+  const [popoverRepeatCount, setPopoverRepeatCount] = useState<number>(MIN_REPEAT_COUNT);
   const [dynamicFixupMode, setDynamicFixupMode] = useState<
     "auto_fixup" | "perform_anyways" | "link_workflow"
   >("auto_fixup");
   const [fixupExplanation, setFixupExplanation] = useState<string>("");
 
-  const NATIVE_WIDTH = frameSize.width;
-  const NATIVE_HEIGHT = frameSize.height;
+  // The frame on screen defines the coordinate space: its natural size once loaded, 1920x1080 before.
+  const bufferedFrame = useBufferedFrame(screenshotUrl || frozenSnapshotUrl, isCapturing);
+  const NATIVE_WIDTH = bufferedFrame.size.width;
+  const NATIVE_HEIGHT = bufferedFrame.size.height;
+  const NATIVE_FRAME = bufferedFrame.size;
+
+  // Measured layout: the viewport's size drives the frame layer rect (no reads of clientWidth during render).
+  const viewportSize = useElementSize(viewportRef);
+  const frameLayerRect = fitFrameRect(
+    viewportSize,
+    NATIVE_FRAME,
+    HUD_CONTROL_STRIP_PX,
+    hudFitMode === "fill" ? "cover" : "contain",
+  );
+  const frameLayerSize = { width: frameLayerRect.width, height: frameLayerRect.height };
+  const viewportHeight =
+    hudSizeMode === "fullscreen"
+      ? undefined
+      : Math.min(
+          viewportHeightForWidth(viewportSize.width, NATIVE_FRAME, HUD_CONTROL_STRIP_PX),
+          customHudHeight || Number.POSITIVE_INFINITY,
+          Math.round(window.innerHeight * HUD_SIZE_MAX_VIEWPORT[hudSizeMode]),
+        );
+  const retryableStep = findRetryableStep(sequence, replayRun, activeStepId);
+  const isReplayLive = replayRun?.status === "running" || replayRun?.status === "paused";
+
+  // Single conversion point: native frame pixels -> CSS percentages of the frame.
+  const toPercent = (nativeX: number, nativeY: number) =>
+    framePointAsPercent(nativeX, nativeY, NATIVE_FRAME);
+  const toPercentPair = (nativeX: number, nativeY: number) =>
+    framePointToPercent(nativeX, nativeY, NATIVE_FRAME);
+
+  // Vision elements arrive as percentages (0–100) of the frame; convert them once
+  // so every consumer below works in the same native-pixel space as recorded steps.
+  const nativeUiElements = useMemo<UIElementBox[]>(
+    () =>
+      uiElements
+        .filter((el) => el.boundingBox)
+        .map((el) => {
+          const boundingBox = percentBoxToFrame(el.boundingBox, NATIVE_FRAME);
+          const center = el.center
+            ? percentBoxToFrame({ ...el.center, width: 0, height: 0 }, NATIVE_FRAME)
+            : {
+                x: boundingBox.x + boundingBox.width / 2,
+                y: boundingBox.y + boundingBox.height / 2,
+              };
+          return { ...el, boundingBox, center: { x: center.x, y: center.y } };
+        }),
+    [uiElements]
+  );
 
   const getNativeCoordinates = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = viewportRef.current?.getBoundingClientRect();
+    // The frame layer has exactly the frame's aspect ratio, so its rect is the displayed frame.
+    const rect = frameLayerRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0, pctX: 50, pctY: 50 };
-    const viewport = getFrameViewport(rect, {
-      width: NATIVE_WIDTH,
-      height: NATIVE_HEIGHT,
-    }, hudFitMode === "fill" ? "cover" : "contain");
-    const rawPoint = framePointFromClient(e.clientX, e.clientY, viewport, {
-      width: NATIVE_WIDTH,
-      height: NATIVE_HEIGHT,
-    });
-    const hasMatchingCalibration = calibrationProfile.targetDevice === targetDevice && calibrationProfile.screenWidth === NATIVE_WIDTH && calibrationProfile.screenHeight === NATIVE_HEIGHT;
-    const mappedPoint = hasMatchingCalibration ? calibrateCoordinates(rawPoint, calibrationProfile) : rawPoint;
-    const point = {
-      x: Math.max(0, Math.min(NATIVE_WIDTH - 1, mappedPoint.x)),
-      y: Math.max(0, Math.min(NATIVE_HEIGHT - 1, mappedPoint.y)),
-    };
+    const viewport = getContainedFrameViewport(rect, NATIVE_FRAME);
+    const point = framePointFromClient(e.clientX, e.clientY, viewport, NATIVE_FRAME);
 
-    return {
-      ...point,
-      pctX: (point.x / NATIVE_WIDTH) * 100,
-      pctY: (point.y / NATIVE_HEIGHT) * 100,
-    };
-  };
-
-  const toPercent = (nativeX: number, nativeY: number) => {
-    const rawX = typeof nativeX === "number" ? nativeX : 0;
-    const rawY = typeof nativeY === "number" ? nativeY : 0;
-    const baseW = isMobileMode ? 1080 : NATIVE_WIDTH;
-    const baseH = isMobileMode ? 1920 : NATIVE_HEIGHT;
-    const normX = rawX <= 1 && rawX > 0 ? rawX * 100 : (rawX / baseW) * 100;
-    const normY = rawY <= 1 && rawY > 0 ? rawY * 100 : (rawY / baseH) * 100;
-    return {
-      left: `${Math.max(0, Math.min(100, normX))}%`,
-      top: `${Math.max(0, Math.min(100, normY))}%`,
-    };
-  };
-
-  const toBoxPercent = (box: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  }) => {
-    const baseW = isMobileMode ? 1080 : NATIVE_WIDTH;
-    const baseH = isMobileMode ? 1920 : NATIVE_HEIGHT;
-    const rawX = box.x <= 1 && box.x > 0 ? box.x * 100 : (box.x / baseW) * 100;
-    const rawY = box.y <= 1 && box.y > 0 ? box.y * 100 : (box.y / baseH) * 100;
-    const rawW = box.width <= 1 && box.width > 0 ? box.width * 100 : (box.width / baseW) * 100;
-    const rawH = box.height <= 1 && box.height > 0 ? box.height * 100 : (box.height / baseH) * 100;
-    return {
-      left: `${Math.max(0, Math.min(100, rawX))}%`,
-      top: `${Math.max(0, Math.min(100, rawY))}%`,
-      width: `${Math.max(1, Math.min(100, rawW))}%`,
-      height: `${Math.max(1, Math.min(100, rawH))}%`,
-    };
+    return { ...point, ...toPercentPair(point.x, point.y) };
   };
 
   // Record continuous trajectory as user moves
@@ -2178,23 +2066,27 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     }
   };
 
+  /** The live video frame as a JPEG data URL, or null when no stream is playing. No side effects. */
+  const grabVideoFrame = (): string | null => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth <= 0) return null;
+    try {
+      const c = document.createElement("canvas");
+      c.width = video.videoWidth || 1920;
+      c.height = video.videoHeight || 1080;
+      const ctx = c.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(video, 0, 0, c.width, c.height);
+      return c.toDataURL("image/jpeg", 0.90);
+    } catch (err) {
+      console.error("Frame capture error:", err);
+      return null;
+    }
+  };
+
   // Instant High-Resolution Frame Capture with 10-Second Action Ledger & 10 Screenshots Tab Sync
   const handleCaptureFreshFrame = (slotIndex: number = 0): string | null => {
-    let snap: string | null = null;
-    if (videoRef.current && videoRef.current.videoWidth > 0) {
-      try {
-        const c = document.createElement("canvas");
-        c.width = videoRef.current.videoWidth || 1920;
-        c.height = videoRef.current.videoHeight || 1080;
-        const ctx = c.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(videoRef.current, 0, 0, c.width, c.height);
-          snap = c.toDataURL("image/jpeg", 0.90);
-        }
-      } catch (err) {
-        console.error("Frame capture error:", err);
-      }
-    }
+    let snap: string | null = grabVideoFrame();
 
     if (!snap) {
       snap = frozenSnapshotUrl || screenshotUrl || null;
@@ -2242,7 +2134,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
     setIsContinuousScreenRecording(true);
     setScreenRecordDurationSec(0);
-    toast.success("🔴 Screen Recording Active: Capturing 1 FPS stream & sending to AI across all apps!");
+    toast.info("Local screen recording started: 1 frame/s kept in the HUD action ledger (not sent to any AI).");
 
     screenRecordIntervalRef.current = window.setInterval(() => {
       setScreenRecordDurationSec((prev) => prev + 1);
@@ -2418,25 +2310,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     setDraggingStepId(null);
   };
 
-  // Integrate drafted overlay points into the main workflow sequence
-  const handleIntegrateOverlayToSequence = () => {
-    if (draftedOverlayPoints.length === 0) return;
-    draftedOverlayPoints.forEach((pt) => {
-      onAddStep({
-        stepNumber: sequence.length + 1,
-        name: pt.name,
-        action: pt.action,
-        x: pt.x,
-        y: pt.y,
-        delayMs: pt.delayMs || 400,
-        status: "pending",
-      });
-    });
-    setDraftedOverlayPoints([]);
-    setIsDrawingOverlayOpen(false);
-  };
-
-  const handleContainerClick = async (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (draggingStepId) return;
     const coords = getNativeCoordinates(e);
 
@@ -2458,8 +2332,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       setLiveMouseTrail((prev) => [...prev, { x: coords.x, y: coords.y, time: Date.now(), isClick: true }]);
     }
 
-    const dispatched = await dispatchInteractiveHardwareAction("click", coords.x, coords.y);
-    if (!dispatched) return;
+    // Always dispatch hardware click to active device / PC
+    dispatchInteractiveHardwareAction("click", coords.x, coords.y);
 
     if (isRecordMode) {
       const stepNumber = sequence.length + 1;
@@ -2505,7 +2379,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     }
   };
 
-  const handleContainerDoubleClick = async (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleContainerDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (draggingStepId) return;
     const coords = getNativeCoordinates(e);
 
@@ -2522,8 +2396,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     });
     setTimeout(() => setHudActiveClickPoint(null), 600);
 
-    const dispatched = await dispatchInteractiveHardwareAction("double_click", coords.x, coords.y);
-    if (!dispatched) return;
+    dispatchInteractiveHardwareAction("double_click", coords.x, coords.y);
 
     if (isRecordMode) {
       const stepNumber = sequence.length + 1;
@@ -2577,7 +2450,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     if (!recordingClickPos) return;
     const stepNumber = sequence.length + 1;
     // Capture screenshot for save if enabled - use current screenshotUrl prop
-    const refUrl = popoverSaveScreenshot ? screenshotUrl : undefined;
+    const refUrl = popoverSaveScreenshot
+      ? bufferedFrame.url || screenshotUrl || frozenSnapshotUrl || undefined
+      : undefined;
     onAddStep({
       stepNumber,
       name: popoverName || `Step ${stepNumber}`,
@@ -2589,40 +2464,46 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       delayMs: popoverDelay,
       status: "pending",
       referenceScreenshotUrl: refUrl,
+      repeatCount: clampRepeatCount(popoverRepeatCount),
     } as any);
     setRecordingClickPos(null);
+    setPopoverRepeatCount(MIN_REPEAT_COUNT);
   };
 
-  const polylinePoints = sequence
-    .map((step) => {
-      const xPct = (step.x / NATIVE_WIDTH) * 100;
-      const yPct = (step.y / NATIVE_HEIGHT) * 100;
-      return `${xPct},${yPct}`;
-    })
-    .join(" ");
+  // Leaving record mode drops a half-filled popover so it cannot reappear later at a stale point.
+  useEffect(() => {
+    if (!isRecordMode) setRecordingClickPos(null);
+  }, [isRecordMode]);
+
+  // Follow the replay: keep the active step visible in the step list as it advances.
+  useEffect(() => {
+    if (!activeStepId) return;
+    stepListRef.current
+      ?.querySelector<HTMLElement>(`[data-step-id="${CSS.escape(activeStepId)}"]`)
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeStepId]);
+
+  // SVG points must be numbers: draw in the measured frame layer's pixel space.
+  const polylinePoints = polylinePointsPx(sequence, NATIVE_FRAME, frameLayerSize);
+  const secondHudTrajectory = secondHudActivePath?.remappedTrajectory || [
+    { x: 192, y: 180 },
+    { x: 537, y: 414 },
+    { x: 806, y: 648 },
+  ];
 
   return (
     <div
       ref={containerRef}
       tabIndex={0}
-      style={{
-        height: hudSizeMode !== "fullscreen" && customHudHeight ? `${customHudHeight}px` : undefined,
-      }}
-      className={`relative w-full bg-slate-950 rounded-xl overflow-hidden select-none border-2 transition-all duration-300 outline-none flex flex-col ${
-        hudSizeMode === "fullscreen"
-          ? "fixed inset-0 z-50 w-screen h-screen bg-black rounded-none border-0"
-          : hudSizeMode === "theater"
-          ? "w-full min-h-[840px] md:min-h-[920px] lg:min-h-[980px]"
-          : hudSizeMode === "large"
-          ? "w-full min-h-[700px] md:min-h-[780px] lg:min-h-[860px]"
-          : "w-full min-h-[560px] md:min-h-[640px] lg:min-h-[720px]"
-      } ${
+      className={cn(
+        "relative w-full bg-slate-950 rounded-xl overflow-hidden select-none border-2 transition-all duration-300 outline-none flex flex-col",
+        hudSizeMode === "fullscreen" && "fixed inset-0 z-50 w-screen h-screen bg-black rounded-none border-0",
         deviceBridgeMode
           ? "border-cyan-400 shadow-[0_0_25px_rgba(6,182,212,0.4)]"
           : isRecordMode
           ? "border-amber-500 shadow-[0_0_25px_rgba(245,158,11,0.3)]"
-          : "border-slate-800 shadow-xl"
-      }`}
+          : "border-slate-800 shadow-xl",
+      )}
       onKeyDown={(e) => {
         if (e.key === "Escape" && hudSizeMode === "fullscreen") {
           setHudSizeMode("large");
@@ -2632,7 +2513,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
     >
       {/* Fullscreen Floating Controls */}
       {hudSizeMode === "fullscreen" && (
-        <div onClick={(e) => e.stopPropagation()} className="absolute top-4 right-4 z-50 flex items-center gap-2 bg-slate-950/90 border border-slate-700 px-3 py-1.5 rounded-xl shadow-2xl backdrop-blur-md">
+        <div onClick={(e) => e.stopPropagation()} className={cn("absolute top-14 right-4 flex items-center gap-2 bg-slate-950/90 border border-slate-700 px-3 py-1.5 rounded-xl shadow-2xl backdrop-blur-md", HUD_LAYERS.floating)}>
           <span className="text-xs font-mono text-cyan-300 font-bold">FULLSCREEN HUD</span>
           <button
             onClick={() => setHudSizeMode("large")}
@@ -3240,7 +3121,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 ? "bg-red-600 hover:bg-red-500 text-white border-red-400 shadow-lg shadow-red-950 animate-pulse ring-2 ring-red-400"
                 : "bg-slate-900 border-slate-700 text-rose-300 hover:text-white hover:bg-rose-950/70"
             }`}
-            title="Record screen at 1 FPS, stream frames to AI across all apps, and run 3 cooperative agents"
+            title="Record the screen locally at 1 frame/s into the HUD action ledger (nothing is sent to AI)"
           >
             <Camera className={`w-3.5 h-3.5 ${isContinuousScreenRecording ? "text-white" : "text-rose-400"}`} />
             <span>
@@ -3769,10 +3650,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 ? "bg-pink-600 text-white animate-pulse ring-2 ring-pink-400 shadow-lg"
                 : "bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white shadow-md border border-pink-400/40"
             }`}
-            title="Auto-selects drawing tool and draws repeating segments with Qwen thinking in between each step"
+            title="PREVIEW: draws three fixed sample shapes on the overlay only (no device dispatch); Qwen reads the live frame between strokes"
           >
             <Sparkles className="w-3.5 h-3.5 mr-1.5 text-pink-300" />
-            {isRepeatingDrawing ? "DRAWING + QWEN THINKING..." : "AUTO DRAWING (AI TOOL)"}
+            {isRepeatingDrawing ? "PREVIEW DRAWING + QWEN..." : "AUTO DRAWING (PREVIEW)"}
           </Button>
 
           {/* Qwen AI Agent Guide (Adjusting, Assisting Movement & Completing Forgotten Typing) */}
@@ -3784,10 +3665,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 ? "bg-cyan-700 hover:bg-cyan-600 text-white ring-2 ring-cyan-400 shadow-md shadow-cyan-950"
                 : "bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700"
             }`}
-            title="Show local step-spacing and travel-distance checks; no model call is made"
+            title="Qwen (qwen3.5:2b) reads the live frame every 8s, shows its thought and intention, and completes unfinished typing through the action gate"
           >
             <Brain className={`w-3.5 h-3.5 mr-1.5 ${qwenGuideEnabled ? "text-cyan-300 animate-pulse" : "text-slate-500"}`} />
-            WORKFLOW CHECKS ({qwenGuideEnabled ? "ON" : "OFF"})
+            QWEN AGENT GUIDE ({qwenGuideEnabled ? "ON" : "OFF"})
           </Button>
 
           {/* High-Visibility Emergency STOP Button */}
@@ -3897,10 +3778,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         </div>
       </div>
 
-      {/* Dedicated Unobscured Screen & Automation Viewport */}
+      {/* Dedicated Unobscured Screen & Automation Viewport: height follows the frame's aspect ratio */}
       <div
         ref={viewportRef}
-        className="relative flex-1 w-full min-h-[440px] bg-slate-950 flex items-center justify-center overflow-hidden cursor-crosshair select-none"
+        style={{ height: viewportHeight }}
+        className={cn(
+          "relative w-full bg-black overflow-hidden cursor-crosshair select-none",
+          hudSizeMode === "fullscreen" ? "flex-1" : "shrink-0",
+        )}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={() => {
@@ -3911,33 +3796,24 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         onDoubleClick={handleContainerDoubleClick}
         onContextMenu={handleContainerContextMenu}
       >
-        {/* Native WebRTC Live Real Screen Video Stream */}
+      {/* Frame layer: exactly the displayed frame rect, so every %-positioned overlay lines up with the screenshot */}
+      <div
+        ref={frameLayerRef}
+        style={frameLayerRect}
+        className={cn("absolute", HUD_LAYERS.frame)}
+      >
+        {/* Native WebRTC Live Real Screen Video Stream (persistently mounted) */}
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          onLoadedMetadata={() => {
-            if (videoRef.current) {
-              videoRef.current.play().catch(() => {});
-            }
-          }}
-          className={`w-full h-full pointer-events-none absolute inset-0 z-0 ${
+          className={cn(
+            "w-full h-full pointer-events-none absolute inset-0 z-0",
+            hudFitMode === "fill" ? "object-cover" : "object-contain",
             isLiveStreamActive && antiTunnelMode === "live_stream" ? "block" : "hidden"
-          } ${hudFitMode === "fill" ? "object-cover" : "object-contain"}`}
+          )}
         />
-
-        {/* Live Stream Active Indicator Overlay */}
-        {isLiveStreamActive && (
-          <div className="absolute top-3 left-3 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md bg-slate-950/90 border border-emerald-500/70 text-emerald-300 text-xs font-mono font-bold shadow-2xl backdrop-blur-md pointer-events-none">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
-            <span className="text-red-400">● LIVE</span>
-            <span>{isMobileMode ? "📱 MOBILE HUD STREAM" : "🖥️ DESKTOP HUD STREAM"}</span>
-            <span className="text-slate-400 text-[10px]">
-              {videoRef.current?.videoWidth ? `${videoRef.current.videoWidth}x${videoRef.current.videoHeight}` : "60 FPS"}
-            </span>
-          </div>
-        )}
 
         {/* Anti-Tunnel Freeze Frame Snapshot (Prevents Infinite Visual Loop) */}
         {isLiveStreamActive && antiTunnelMode === "anti_tunnel_snapshot" && (
@@ -3960,60 +3836,28 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           </div>
         )}
 
-        {/* Primary Screen / Phone Stream Frame */}
-        {(screenshotUrl || frozenSnapshotUrl) &&
-        (!isLiveStreamActive || (isLiveStreamActive && !videoRef.current?.srcObject)) ? (
-          <div className="w-full h-full flex items-center justify-center relative z-0 bg-slate-950">
-            {isMobileMode ? (
-              <div className="relative h-full max-h-full aspect-[9/16] max-w-full mx-auto flex items-center justify-center bg-black rounded-2xl overflow-hidden border-2 border-slate-700 shadow-2xl">
-                <div className="w-full h-full relative flex-1 flex flex-col overflow-hidden">
-                  <InteractivePhoneVirtualOS
-                    onContextMenu={handleContainerContextMenu}
-                    currentStepAction={activeStep ? {
-                      id: activeStep.id,
-                      action: activeStep.action,
-                      x: activeStep.x,
-                      y: activeStep.y,
-                      text: activeStep.text,
-                      name: activeStep.name,
-                    } : null}
-                    forwardTrigger={forwardStepTriggerCount}
-                    onActionLogged={(action, details) => {
-                      // Virtual OS user action logged
-                    }}
-                  />
-                </div>
-                <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[9px] font-mono font-bold flex items-center gap-1 shadow-lg pointer-events-none z-10 backdrop-blur-sm">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  <span>📱 INTERACTIVE PHONE OS • 1080x1920</span>
-                </div>
-              </div>
-            ) : (
-              <div className="w-full h-full relative flex-1 flex flex-col overflow-hidden">
-                <InteractiveDesktopVirtualOS
-                  onContextMenu={handleContainerContextMenu}
-                  currentStepAction={activeStep ? {
-                    id: activeStep.id,
-                    action: activeStep.action,
-                    x: activeStep.x,
-                    y: activeStep.y,
-                    text: activeStep.text,
-                    name: activeStep.name,
-                  } : null}
-                  forwardTrigger={forwardStepTriggerCount}
-                  onActionLogged={(action, details) => {
-                    // Virtual OS user action logged
-                  }}
-                />
+        {/* Primary Screen Frame: last decoded frame, so polls never flash blank and a stalled stream keeps its last image */}
+        {bufferedFrame.url &&
+        (!isLiveStreamActive || (isLiveStreamActive && !activeMediaStream)) ? (
+          <div className="absolute inset-0 bg-black">
+            <img
+              src={bufferedFrame.url}
+              alt="Live screen"
+              draggable={false}
+              className={cn(
+                "w-full h-full pointer-events-none select-none",
+                hudFitMode === "fill" ? "object-cover" : "object-contain",
+              )}
+            />
+            {bufferedFrame.stalled && (
+              <div className={cn("absolute top-2 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-md bg-amber-950/90 border border-amber-500/60 text-amber-300 text-[10px] font-mono font-bold pointer-events-none", HUD_LAYERS.decoration)}>
+                Stream stalled: showing last frame
               </div>
             )}
-            {/* Phone Stream Badge when viewing Mobile outside frame */}
-            {!isMobileMode && (selectedCanvasTitle?.toLowerCase().includes("mobile") ||
-              selectedCanvasTitle?.toLowerCase().includes("phone") ||
-              selectedTabName === "mobile") && (
-              <div className="absolute top-3 left-3 px-2 py-1 rounded-lg bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[10px] font-mono font-bold flex items-center gap-1.5 shadow-lg pointer-events-none z-10 backdrop-blur-sm">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>📱 LIVE PHONE STREAM • 1080x1920 NATIVE</span>
+            {isMobileMode && (
+              <div className={cn("absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[9px] font-mono font-bold flex items-center gap-1 shadow-lg pointer-events-none backdrop-blur-sm", HUD_LAYERS.decoration)}>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                <span>LIVE PHONE STREAM • {NATIVE_WIDTH}x{NATIVE_HEIGHT}</span>
               </div>
             )}
           </div>
@@ -4142,14 +3986,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
       {/* High-Fidelity Recorded User Mouse Trail (Glowing Cyan Polyline & Waypoints) */}
       {liveMouseTrail.length > 1 && (
-        <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
+        <svg className={cn("absolute inset-0 w-full h-full pointer-events-none", HUD_LAYERS.decoration)}>
           <polyline
-            points={liveMouseTrail
-              .map(
-                (pt) =>
-                  `${(pt.x / NATIVE_WIDTH) * 100}%,${(pt.y / NATIVE_HEIGHT) * 100}%`
-              )
-              .join(" ")}
+            points={polylinePointsPx(liveMouseTrail, NATIVE_FRAME, frameLayerSize)}
             fill="none"
             stroke="#22d3ee"
             strokeWidth="2.5"
@@ -4160,8 +3999,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             pt.isClick ? (
               <circle
                 key={idx}
-                cx={`${(pt.x / NATIVE_WIDTH) * 100}%`}
-                cy={`${(pt.y / NATIVE_HEIGHT) * 100}%`}
+                cx={toPercent(pt.x, pt.y).left}
+                cy={toPercent(pt.x, pt.y).top}
                 r="6"
                 fill="#f59e0b"
                 stroke="#ffffff"
@@ -4170,8 +4009,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             ) : idx % 6 === 0 ? (
               <circle
                 key={idx}
-                cx={`${(pt.x / NATIVE_WIDTH) * 100}%`}
-                cy={`${(pt.y / NATIVE_HEIGHT) * 100}%`}
+                cx={toPercent(pt.x, pt.y).left}
+                cy={toPercent(pt.x, pt.y).top}
                 r="2.5"
                 fill="#06b6d4"
                 opacity="0.8"
@@ -4204,9 +4043,23 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             <Brain className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
             <span className="text-cyan-400 font-bold">Qwen Guide:</span>
             <span className="text-slate-200">{qwenLiveThought}</span>
+            {qwenGuideIntention && (
+              <span className="text-cyan-300">Intention: {qwenGuideIntention}</span>
+            )}
+            {qwenSuggestedActions.map((suggestion, idx) => (
+              <button
+                key={`${suggestion.name}-${idx}`}
+                type="button"
+                className="rounded border border-cyan-600/50 px-1.5 text-[10px] text-cyan-200 hover:bg-cyan-900/60"
+                title="Run this Qwen-suggested movement through the action gate"
+                onClick={() => void runQwenSuggestion(suggestion, idx)}
+              >
+                Run (gated): {suggestion.action} "{suggestion.name}" @ ({suggestion.x}, {suggestion.y})
+              </button>
+            ))}
           </div>
           <Badge className="bg-cyan-900/60 text-cyan-300 border-cyan-600/50 text-[9px]">
-            AI ASSIST ACTIVE
+            QWEN LIVE (every {QWEN_GUIDE_POLL_MS / 1000}s)
           </Badge>
         </div>
       )}
@@ -4223,6 +4076,22 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           </Badge>
         </div>
       )}
+
+      {/* Qwen / agent fast-path: Ask, Auto Actions, Test/Simulate, Plan, Pack, Presentation */}
+      <div className="relative z-30 px-3 py-1.5 border-b border-slate-800 bg-slate-950/90">
+        <HudAgentPanel
+          steps={sequence}
+          replayRun={replayRun}
+          device={turnDevice}
+          onEvent={onTurnEvent}
+          onChain={onTurnChain}
+          onLoadSteps={(steps) =>
+            steps.forEach((step, idx) =>
+              onAddStep({ ...step, stepNumber: sequence.length + idx + 1, status: "pending" } as any),
+            )
+          }
+        />
+      </div>
 
       {/* Granular Step-by-Step PC Execution Progress Banner */}
       {isExecutingStepByStep && executingStepProgress && (
@@ -4296,8 +4165,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       {/* Focus Attention Spotlight Visual Overlay Layer */}
       <FocusAttentionOverlay
         config={focusAttentionConfig}
-        containerWidth={containerRef.current?.clientWidth || NATIVE_WIDTH}
-        containerHeight={containerRef.current?.clientHeight || NATIVE_HEIGHT}
+        containerWidth={frameLayerSize.width || NATIVE_WIDTH}
+        containerHeight={frameLayerSize.height || NATIVE_HEIGHT}
         onClose={() => setFocusAttentionConfig((prev) => ({ ...prev, enabled: false }))}
         onFocusPointClick={(x, y) => {
           toast.info(`Target element locked at (${x}, ${y})`);
@@ -4310,7 +4179,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           driftPoints={computePixelDriftHeatmap(
             sequence as any,
             localDriftThreshold,
-            uiElements
+            nativeUiElements
           )}
           thresholdPx={localDriftThreshold}
           opacity={0.85}
@@ -4389,8 +4258,8 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             action: "click",
           });
         }}
-        containerWidth={containerRef.current?.clientWidth || NATIVE_WIDTH}
-        containerHeight={containerRef.current?.clientHeight || NATIVE_HEIGHT}
+        containerWidth={frameLayerSize.width || NATIVE_WIDTH}
+        containerHeight={frameLayerSize.height || NATIVE_HEIGHT}
       />
 
       {/* 1. Realistic Human Mouse Cursor & Glowing Spline Trail Overlay */}
@@ -4413,15 +4282,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           </defs>
           {splineMotionTrail.length > 1 && (
             <polyline
-              points={splineMotionTrail
-                .map((pt) => {
-                  const pct = framePointAsPercent(pt.x, pt.y, {
-                    width: NATIVE_WIDTH,
-                    height: NATIVE_HEIGHT,
-                  });
-                  return `${parseFloat(pct.left)}%,${parseFloat(pct.top)}%`;
-                })
-                .join(" ")}
+              points={polylinePointsPx(splineMotionTrail, NATIVE_FRAME, frameLayerSize)}
               fill="none"
               stroke="url(#cursorSplineGrad)"
               strokeWidth="3.5"
@@ -4559,7 +4420,11 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
       {/* 2nd HUD Navigation Path Projection Overlay on Live View */}
       {(showSecondHudOverlay ?? localShow2ndHudOverlay) && (
-        <svg className="absolute inset-0 w-full h-full pointer-events-none z-20">
+        <svg
+          className={cn("absolute inset-0 w-full h-full pointer-events-none", HUD_LAYERS.vision)}
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+        >
           <defs>
             <linearGradient id="hud2Grad" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="#a855f7" stopOpacity="0.9" />
@@ -4573,68 +4438,60 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
           {/* Render 2nd HUD Path Spline */}
           <polyline
-            points={(secondHudActivePath?.remappedTrajectory || [
-              { x: 192, y: 180 },
-              { x: 537, y: 414 },
-              { x: 806, y: 648 },
-            ])
+            points={secondHudTrajectory
               .map((p) => {
-                const px = (p.x / 1000) * (containerRef.current?.clientWidth || 1000);
-                const py = (p.y / 600) * (containerRef.current?.clientHeight || 600);
-                return `${px},${py}`;
+                const { pctX, pctY } = trajectoryPointToPercent(p);
+                return `${pctX},${pctY}`;
               })
               .join(" ")}
             fill="none"
             stroke="url(#hud2Grad)"
             strokeWidth="4.5"
             strokeDasharray="8 4"
+            vectorEffect="non-scaling-stroke"
             filter="url(#glowPurple)"
             className="animate-[dash_12s_linear_infinite]"
           />
 
-          {/* Render 2nd HUD Waypoints */}
-          {(secondHudActivePath?.remappedTrajectory || [
-            { x: 192, y: 180 },
-            { x: 537, y: 414 },
-            { x: 806, y: 648 },
-          ]).map((wp, idx) => {
-            const px = (wp.x / 1000) * (containerRef.current?.clientWidth || 1000);
-            const py = (wp.y / 600) * (containerRef.current?.clientHeight || 600);
-            return (
-              <g key={idx}>
-                <circle
-                  cx={px}
-                  cy={py}
-                  r={idx === 2 ? 10 : 7}
-                  fill={idx === 2 ? "#22c55e" : "#a855f7"}
-                  stroke="#ffffff"
-                  strokeWidth="2"
-                />
-                <text
-                  x={px + 12}
-                  y={py + 4}
-                  fill="#d8b4fe"
-                  fontSize="11"
-                  fontWeight="bold"
-                  fontFamily="monospace"
-                  className="drop-shadow-[0_0_8px_rgba(0,0,0,0.9)]"
-                >
-                  2nd HUD #{idx + 1}
-                </text>
-              </g>
-            );
-          })}
         </svg>
       )}
 
+      {(showSecondHudOverlay ?? localShow2ndHudOverlay) &&
+        secondHudTrajectory.map((wp, idx) => {
+          const { pctX, pctY } = trajectoryPointToPercent(wp);
+          const isLast = idx === secondHudTrajectory.length - 1;
+          return (
+            <div
+              key={`hud2_wp_${idx}`}
+              style={{ left: `${pctX}%`, top: `${pctY}%` }}
+              className={cn("absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none", HUD_LAYERS.vision)}
+            >
+              <div
+                className={cn(
+                  "rounded-full border-2 border-white",
+                  isLast ? "w-5 h-5 bg-green-500" : "w-3.5 h-3.5 bg-purple-500",
+                )}
+              />
+              <span
+                className={cn(
+                  "absolute whitespace-nowrap text-[11px] font-bold font-mono text-purple-300 drop-shadow-[0_0_8px_rgba(0,0,0,0.9)]",
+                  anchoredLabelClass(pctX, pctY),
+                )}
+              >
+                2nd HUD #{idx + 1}
+              </span>
+            </div>
+          );
+        })}
+
       {/* AI #1 Qwen Vision Detected UI Element Bounding Boxes */}
-      {uiElements.map((el, elIdx) => {
-        const boxStyle = toBoxPercent(el.boundingBox);
+      {nativeUiElements.map((el, elIdx) => {
+        const boxStyle = frameBoxAsPercent(el.boundingBox, NATIVE_FRAME);
         return (
           <div
             key={`hud_el_${el.id || "el"}_${elIdx}`}
             style={boxStyle}
-            className="absolute border border-cyan-400/60 bg-cyan-500/5 hover:bg-cyan-500/20 hover:border-cyan-300 transition-all rounded pointer-events-none z-10 group"
+            className={cn("absolute border border-cyan-400/60 bg-cyan-500/5 rounded pointer-events-none", HUD_LAYERS.vision)}
           >
             <div className="absolute -top-4 left-0 bg-slate-950/90 border border-cyan-500/40 text-[9px] font-mono text-cyan-300 px-1 py-0.2 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
               {el.name} ({el.type}) • {(el.confidence * 100).toFixed(0)}%
@@ -4665,7 +4522,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       {aiThinking && aiThinking.isThinking && (
         <div
           style={toPercent(aiThinking.x, aiThinking.y)}
-          className="absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-30"
+          className={cn("absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none", HUD_LAYERS.cursor)}
         >
           <div className="absolute -inset-10 border-2 border-purple-500/60 rounded-full animate-ping" />
           <div className="absolute -inset-6 border border-cyan-400/80 rounded-full animate-pulse" />
@@ -4683,8 +4540,9 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
               {aiThinking.action || "Formulating Next Step"}
             </div>
             <div className="text-[9px] text-purple-400 font-mono mt-0.5">
-              Conf: {(aiThinking.confidence * 100).toFixed(0)}% • (
-              {aiThinking.x}, {aiThinking.y})
+              {aiThinking.confidence !== undefined &&
+                `Conf: ${(aiThinking.confidence * 100).toFixed(0)}% • `}
+              ({aiThinking.x}, {aiThinking.y})
             </div>
           </div>
         </div>
@@ -4692,8 +4550,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
       {/* Click Sequence Step Nodes (Interactive & Draggable) */}
       {sequence.map((step, idx) => {
-        const pos = toPercent(step.x, step.y);
+        const pos = clampedPointStyle(step.x, step.y, NATIVE_FRAME, 1.5);
+        const { pctX, pctY } = toPercentPair(step.x, step.y);
         const isActive = activeStepId === step.id;
+        const repeats = clampRepeatCount(step.repeatCount);
         const isDragging = draggingStepId === step.id;
 
         return (
@@ -4731,9 +4591,11 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
               });
               setIsContextMenuOpen(true);
             }}
-            className={`absolute transform -translate-x-1/2 -translate-y-1/2 z-20 cursor-grab active:cursor-grabbing group transition-transform ${
-              isDragging ? "scale-125 z-40" : "hover:scale-110"
-            }`}
+            className={cn(
+              "absolute transform -translate-x-1/2 -translate-y-1/2 cursor-grab active:cursor-grabbing group transition-transform",
+              isDragging || isActive ? HUD_LAYERS.cursor : HUD_LAYERS.steps,
+              isDragging ? "scale-125" : "hover:scale-110",
+            )}
           >
             {isActive && (
               <div className="absolute -inset-3 bg-amber-500/40 rounded-full animate-ping pointer-events-none" />
@@ -4759,7 +4621,18 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
             <div className="absolute -inset-2 border border-dashed border-cyan-400/60 rounded-full opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none animate-[spin_8s_linear_infinite]" />
 
-            <div className="absolute top-9 left-1/2 transform -translate-x-1/2 bg-slate-950/95 border border-slate-700 px-2 py-1 rounded text-[10px] font-mono text-slate-200 shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-30">
+            {repeats > 1 && (
+              <span className="absolute -top-2 -right-3 px-1 rounded bg-fuchsia-600 border border-white text-[9px] font-mono font-bold text-white pointer-events-none">
+                ×{repeats}
+              </span>
+            )}
+
+            <div
+              className={cn(
+                "absolute bg-slate-950/95 border border-slate-700 px-2 py-1 rounded text-[10px] font-mono text-slate-200 shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none",
+                anchoredLabelClass(pctX, pctY),
+              )}
+            >
               <div className="font-bold text-cyan-300">{step.name}</div>
               <div className="text-slate-300">
                 {step.action} {step.text ? `"${step.text}"` : ""} •{" "}
@@ -4772,7 +4645,11 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
       {/* Real-Time Motion Particle Ribbon Trail */}
       {splineMotionTrail.length > 1 && (
-        <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
+        <svg
+          className={cn("absolute inset-0 w-full h-full pointer-events-none", HUD_LAYERS.decoration)}
+          viewBox="0 0 1000 562.5"
+          preserveAspectRatio="none"
+        >
           <defs>
             <linearGradient
               id="spline-ribbon-grad"
@@ -4813,10 +4690,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       {/* Realistic Glowing Arrowhead Cursor (↖️) & Touch Pointer */}
       {replayingCursorPos && (
         <div
-          style={{
-            left: `${(replayingCursorPos.x / NATIVE_WIDTH) * 100}%`,
-            top: `${(replayingCursorPos.y / NATIVE_HEIGHT) * 100}%`,
-          }}
+          style={toPercent(replayingCursorPos.x, replayingCursorPos.y)}
           className="absolute -translate-x-1 -translate-y-1 pointer-events-none z-50 flex flex-col items-start transition-transform duration-75"
         >
           {/* Radial Aura */}
@@ -4841,10 +4715,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       {/* Visual Clickpoint Contact Marker ("..") during Frames 1-10 Replay */}
       {hudActiveClickPoint && (
         <div
-          style={{
-            left: `${(hudActiveClickPoint.x / NATIVE_WIDTH) * 100}%`,
-            top: `${(hudActiveClickPoint.y / NATIVE_HEIGHT) * 100}%`,
-          }}
+          style={toPercent(hudActiveClickPoint.x, hudActiveClickPoint.y)}
           className="absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-50 flex flex-col items-center animate-in zoom-in-50 duration-150"
         >
           {/* Dual concentric expanding shockwave rings ("..") with visual blink effect */}
@@ -5023,20 +4894,55 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         </div>
       )}
 
+      {/* Drift Diagnostic Overlay - Highlights UI Elements in Red & Provides Re-calibrate CTA */}
+      <DriftDiagnosticOverlay
+        isVisible={showDriftDiagnostic}
+        onToggleVisibility={() => setShowDriftDiagnostic(!showDriftDiagnostic)}
+        thresholdPx={localDriftThreshold}
+        elements={sequence.map((s, idx) => ({
+          id: s.id,
+          name: s.name || `Step #${idx + 1}`,
+          templateX: (s as any).originalX ?? s.x,
+          templateY: (s as any).originalY ?? s.y,
+          liveX: s.x,
+          liveY: s.y,
+          confidence: (s as any).confidence ?? 0.92,
+          actionType: s.action as any,
+          isDrifted: ((s as any).driftDistancePx ?? 0) > localDriftThreshold,
+          driftDistancePx: (s as any).driftDistancePx ?? 0,
+          deltaX: s.offsetX ?? 0,
+          deltaY: s.offsetY ?? 0,
+          recalibrated: s.recalibrated,
+        }))}
+        onRecalibrateElement={(stepId, correctedX, correctedY) => {
+          onRepositionStep(stepId, correctedX, correctedY);
+        }}
+        onRecalibrateAll={handleTriggerHudAutoCalibration}
+      />
+
+      </div>
+
       {/* Interactive Quick Action Recording Popover */}
-      {recordingClickPos && (
+      {recordingClickPos && isRecordMode && (
         <div
-          style={{
-            left: `${Math.min(75, Math.max(25, recordingClickPos.pctX))}%`,
-            top: `${Math.min(70, Math.max(30, recordingClickPos.pctY))}%`,
-          }}
+          style={clampBoxToArea(
+            {
+              x: frameLayerRect.left + (recordingClickPos.pctX / 100) * frameLayerRect.width,
+              y: frameLayerRect.top + (recordingClickPos.pctY / 100) * frameLayerRect.height,
+            },
+            RECORD_POPOVER_SIZE,
+            viewportSize,
+          )}
           onClick={(e) => e.stopPropagation()}
-          className="absolute transform -translate-x-1/2 -translate-y-1/2 bg-slate-950/95 border-2 border-amber-500/80 rounded-xl p-3.5 shadow-2xl backdrop-blur-md z-50 w-72 space-y-2.5 text-xs text-slate-100"
+          className={cn(
+            "absolute bg-slate-950/95 border-2 border-amber-500/80 rounded-xl p-3.5 shadow-2xl backdrop-blur-md w-72 max-h-[calc(100%-16px)] overflow-y-auto space-y-2.5 text-xs text-slate-100",
+            HUD_LAYERS.popover,
+          )}
         >
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <div className="flex items-center gap-1.5 text-amber-400 font-bold font-mono text-xs">
               <Plus className="w-3.5 h-3.5" />
-              <span>AI Action at Screen Target</span>
+              <span>Record Action Step</span>
             </div>
             <button
               onClick={() => setRecordingClickPos(null)}
@@ -5047,7 +4953,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           </div>
 
           <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
-            <span>Target coordinates:</span>
+            <span>Coordinates:</span>
             <span className="text-cyan-300 font-bold">
               ({recordingClickPos.x}, {recordingClickPos.y})
             </span>
@@ -5055,7 +4961,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
 
           <div>
             <label className="text-[10px] font-mono text-slate-300 mb-1 block">
-              Action for this target:
+              Action Type:{" "}
+              <span className="text-amber-400">
+                (Left click = click • Right-click canvas = right_click)
+              </span>
             </label>
             <Select
               value={popoverAction}
@@ -5092,18 +5001,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 respects Exact/Variation mode
               </p>
             )}
-          </div>
-
-          <div>
-            <label className="text-[10px] font-mono text-slate-300 mb-1 block">
-              AI instruction or target section:
-            </label>
-            <Input
-              value={popoverName}
-              onChange={(e) => setPopoverName(e.target.value)}
-              placeholder="e.g. Open Settings, type username, go to checkout"
-              className="h-7 text-xs bg-slate-900 border-slate-700 text-slate-200"
-            />
           </div>
 
           {/* Dynamic Payload Inputs for Type / Key */}
@@ -5181,6 +5078,23 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             />
           </div>
 
+          <label className="flex items-center justify-between gap-2 text-[10px] font-mono text-slate-300">
+            <span>Repeat this action:</span>
+            <span className="flex items-center gap-1">
+              <Input
+                type="number"
+                aria-label="Repeat count"
+                min={MIN_REPEAT_COUNT}
+                max={MAX_REPEAT_COUNT}
+                step={1}
+                value={popoverRepeatCount}
+                onChange={(e) => setPopoverRepeatCount(clampRepeatCount(Number(e.target.value)))}
+                className="h-6 w-14 px-1 text-xs bg-slate-900 border-slate-700 text-fuchsia-300"
+              />
+              <span className="text-fuchsia-300 font-bold">times</span>
+            </span>
+          </label>
+
           <label className="flex items-center gap-1.5 text-[11px] font-mono cursor-pointer select-none">
             <input
               type="checkbox"
@@ -5212,7 +5126,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
               onClick={handleCommitRecordStep}
               className="w-full h-7 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black shadow-md"
             >
-              Add AI Action #{sequence.length + 1}{" "}
+              Add Step #{sequence.length + 1}{" "}
               {popoverAction === "right_click"
                 ? "• Right Click"
                 : popoverAction === "clear_and_type"
@@ -5222,32 +5136,6 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           </div>
         </div>
       )}
-
-      {/* Drift Diagnostic Overlay - Highlights UI Elements in Red & Provides Re-calibrate CTA */}
-      <DriftDiagnosticOverlay
-        isVisible={showDriftDiagnostic}
-        onToggleVisibility={() => setShowDriftDiagnostic(!showDriftDiagnostic)}
-        thresholdPx={localDriftThreshold}
-        elements={sequence.map((s, idx) => ({
-          id: s.id,
-          name: s.name || `Step #${idx + 1}`,
-          templateX: (s as any).originalX ?? s.x,
-          templateY: (s as any).originalY ?? s.y,
-          liveX: s.x,
-          liveY: s.y,
-          confidence: (s as any).confidence ?? 0.92,
-          actionType: s.action as any,
-          isDrifted: ((s as any).driftDistancePx ?? 0) > localDriftThreshold,
-          driftDistancePx: (s as any).driftDistancePx ?? 0,
-          deltaX: s.offsetX ?? 0,
-          deltaY: s.offsetY ?? 0,
-          recalibrated: s.recalibrated,
-        }))}
-        onRecalibrateElement={(stepId, correctedX, correctedY) => {
-          onRepositionStep(stepId, correctedX, correctedY);
-        }}
-        onRecalibrateAll={handleTriggerHudAutoCalibration}
-      />
 
       {/* Autonomous Analyze & Act Modal */}
       <AnalyzeAndActModal
@@ -5281,7 +5169,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
       />
 
         {/* Floating Live Step Forwarding, Progression & Template Mutation HUD Bar */}
-        <div onClick={(e) => e.stopPropagation()} className="absolute bottom-3 inset-x-4 mx-auto max-w-2xl bg-slate-950/90 backdrop-blur-md border border-cyan-500/60 rounded-xl p-2 shadow-2xl z-30 flex items-center justify-between gap-2 text-xs font-mono">
+        <div onClick={(e) => e.stopPropagation()} className={cn("absolute bottom-2 inset-x-4 mx-auto max-w-3xl bg-slate-950/90 backdrop-blur-md border border-cyan-500/60 rounded-xl p-2 shadow-2xl flex items-center justify-between gap-2 text-xs font-mono", HUD_LAYERS.controls)}>
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-6 h-6 rounded-lg bg-cyan-600/30 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shrink-0 font-bold text-[11px]">
               {sequence.length === 0 ? "0" : (sequence.findIndex((s) => s.id === activeStepId) >= 0 ? sequence.findIndex((s) => s.id === activeStepId) + 1 : 1)}
@@ -5301,11 +5189,69 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 <span className={sequence.length > 0 ? "text-emerald-400 font-bold" : "text-slate-500"}>
                   {sequence.length > 0 ? "Template Linked" : "Awaiting Actions"}
                 </span>
+                {replayRun && (
+                  <>
+                    <span>•</span>
+                    <span className="text-fuchsia-300 font-bold" data-testid="hud-replay-progress">
+                      {replayProgressLabel(replayRun)}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-1 shrink-0 flex-wrap">
+            {onToggleCapture && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onToggleCapture}
+                className={cn(
+                  "h-6 px-1.5 text-[10px] gap-0.5 border",
+                  isCapturing
+                    ? "bg-emerald-950 border-emerald-600 text-emerald-300"
+                    : "bg-slate-900 border-slate-700 text-slate-300",
+                )}
+                title={isCapturing ? "Stop screen capture" : "Start screen capture"}
+              >
+                <Camera className="w-3 h-3" />
+                {isCapturing ? "Capture On" : "Capture Off"}
+              </Button>
+            )}
+            {isReplayLive && onReplayControl && (
+              <>
+                <Button
+                  size="sm"
+                  onClick={() => onReplayControl(replayRun?.status === "paused" ? "resume" : "pause")}
+                  className="h-6 px-1.5 text-[10px] font-bold bg-amber-700 hover:bg-amber-600 text-white gap-0.5"
+                  title="Pause or resume the live replay"
+                >
+                  {replayRun?.status === "paused" ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+                  {replayRun?.status === "paused" ? "Resume" : "Pause"}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => onReplayControl("cancel")}
+                  className="h-6 px-1.5 text-[10px] font-bold bg-rose-800 hover:bg-rose-700 text-white gap-0.5"
+                  title="Cancel the live replay"
+                >
+                  <StopCircle className="w-3 h-3" />
+                  Cancel
+                </Button>
+              </>
+            )}
+            {retryableStep && onRetryStep && !isReplayLive && (
+              <Button
+                size="sm"
+                onClick={() => onRetryStep(retryableStep)}
+                className="h-6 px-1.5 text-[10px] font-bold bg-fuchsia-800 hover:bg-fuchsia-700 text-white gap-0.5"
+                title="Re-run just this step through the action gate"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Retry step {retryableStep.stepNumber}
+              </Button>
+            )}
             <Button
               size="sm"
               onClick={handleStepBack}
@@ -5418,14 +5364,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                   ? "bg-amber-600 hover:bg-amber-500 text-white border-amber-400 animate-pulse"
                   : "bg-indigo-700 hover:bg-indigo-600 text-white border-indigo-400/60"
               }`}
-              title="Review the current workflow against its screenshot; apply AI coordinates only when the review is ready"
+              title="Qwen AI: Checks sequence for errors, overlaps, and orchestrates smooth movements & delays"
             >
               <Sparkles className="w-2.5 h-2.5 text-yellow-300" />
               {isQwenOrchestrating
-                ? "Reviewing..."
+                ? "Orchestrating..."
                 : qwenDetectedErrors.length > 0
-                ? `AI Review & Apply (${qwenDetectedErrors.length})`
-                : "AI Review & Apply"}
+                ? `⚡ Qwen Fix (${qwenDetectedErrors.length})`
+                : "⚡ Qwen Orchestrate"}
             </Button>
 
             {/* Emergency STOP Button */}
@@ -5457,6 +5403,18 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
               {isRecordMode ? "Rec ON" : "Record"}
             </Button>
 
+            {/* AI Review Steps */}
+            <Button
+              size="sm"
+              onClick={handleTriggerAiReviewSteps}
+              disabled={isAiReviewLoading}
+              className="h-6 px-2 text-[10px] font-bold bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-500 text-white border border-purple-400/50 gap-0.5 shadow-sm"
+              title="AI Review: Audits workflow steps and coordinates using Qwen / AI logic"
+            >
+              <Brain className="w-2.5 h-2.5 text-purple-200" />
+              AI Review
+            </Button>
+
             {/* Manual Pack Creator */}
             <Button
               size="sm"
@@ -5472,6 +5430,24 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Master AI orchestrator */}
+      {masterPanel ? (
+        <div className="px-2 py-1 bg-slate-950 border-t border-slate-800 z-30">
+          <MasterAiPanel {...masterPanel} />
+        </div>
+      ) : null}
+
+      {/* AI Intentions, Goals and Learning */}
+      {intentionsPanel ? (
+        <div className="px-2 py-1 bg-slate-950 border-t border-slate-800 z-30">
+          <AiIntentionsPanel
+            {...intentionsPanel}
+            overseerCheckups={overseer.snapshot ? latestCheckups(overseer.snapshot.operations) : null}
+            overseerError={overseer.error}
+          />
+        </div>
+      ) : null}
 
       {/* Bottom Docked Status & Coordinate Bar */}
       <div className="h-7 px-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-[11px] font-mono z-30 select-none">
@@ -5718,14 +5694,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
               },
             }),
           })
-            .then(async (r) => {
-              try {
-                const text = await r.text();
-                return JSON.parse(text);
-              } catch {
-                return { success: r.ok, simulated: true };
-              }
-            })
+            .then((r) => readJsonResponse(r))
             .then((d) => {
               if (d.success) {
                 toast.success(`Executed "${step.name}" on PC!`);
@@ -5795,14 +5764,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                 },
               }),
             })
-              .then(async (r) => {
-                try {
-                  const text = await r.text();
-                  return JSON.parse(text);
-                } catch {
-                  return { success: r.ok, simulated: true };
-                }
-              })
+              .then((r) => readJsonResponse(r))
               .then((d) => {
                 setIsExecutingTrailOnPC(false);
                 if (d.success) {
@@ -5989,8 +5951,7 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
         onEditStep={(stepId) => {
           const targetStep = sequence.find((s) => s.id === stepId);
           if (!targetStep) return;
-          const pctX = (targetStep.x / NATIVE_WIDTH) * 100;
-          const pctY = (targetStep.y / NATIVE_HEIGHT) * 100;
+          const { pctX, pctY } = toPercentPair(targetStep.x, targetStep.y);
           setPopoverName(targetStep.name);
           setPopoverAction(targetStep.action);
           setPopoverText(targetStep.text || "");
@@ -6023,38 +5984,71 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
             toast.success("Updated reference screenshot for step!");
           }
         }}
-        onInspectOCR={(x, y) => {
-          const nearElem = (uiElements || []).find((e) => {
-            if (!e.boundingBox) return false;
-            const bx = (e.boundingBox.x / 100) * NATIVE_WIDTH;
-            const by = (e.boundingBox.y / 100) * NATIVE_HEIGHT;
-            const bw = (e.boundingBox.width / 100) * NATIVE_WIDTH;
-            const bh = (e.boundingBox.height / 100) * NATIVE_HEIGHT;
-            return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
-          });
-          if (nearElem) {
-            toast.info(`Element Found: "${nearElem.name}" (${nearElem.type})`);
-          } else {
-            toast.info(`OCR Inspection @ (${x}, ${y})`, {
-              description: "Target location locked in native screen space.",
-            });
+        onInspectOCR={async (x, y) => {
+          try {
+            const ocr = await inspectOcrAtPoint(currentHudFrame() ?? "", { x, y }, NATIVE_FRAME);
+            const nearElem = nativeUiElements.find((e) => frameBoxContains(e.boundingBox, x, y));
+            const elementNote = nearElem ? ` Element: "${nearElem.name}" (${nearElem.type}).` : "";
+            if (ocr.text) {
+              const conf = ocr.confidence !== null ? ` (${Math.round(ocr.confidence * 100)}% via ${ocr.provider})` : ` (via ${ocr.provider})`;
+              toast.success(`OCR @ (${x}, ${y}): "${ocr.text}"${conf}`, { description: elementNote || undefined });
+            } else {
+              toast.info(`OCR @ (${x}, ${y}): no text at this point`, {
+                description: `${ocr.provider} read ${ocr.blockCount} text block(s) elsewhere on the frame.${elementNote}`,
+              });
+            }
+          } catch (err) {
+            toast.error(`OCR inspect failed: ${err instanceof Error ? err.message : String(err)}`);
           }
         }}
-        onVerifyIntegrity={(x, y) => {
-          toast.info(`Integrity Validator Active @ (${x}, ${y})`, {
-            description: "No significant drift detected against reference frame (Confidence: 98.4%).",
-          });
+        onVerifyIntegrity={async (x, y) => {
+          try {
+            const result = await verifyIntegrityAtPoint(currentHudFrame() ?? "", { x, y }, sequence, localDriftThreshold);
+            if (result.kind === "step") {
+              const report = result.withinThreshold ? toast.success : toast.warning;
+              report(`"${result.stepName}": ${result.driftPx}px drift (threshold ${result.thresholdPx}px)`, {
+                description: result.summary,
+              });
+            } else if (result.element) {
+              const conf = result.confidence !== undefined ? ` (${Math.round(result.confidence * 100)}% confidence)` : "";
+              toast.success(`Point (${x}, ${y}) is on "${result.element.name || result.element.type}"${conf}`, {
+                description: "No recorded step here to measure drift against.",
+              });
+            } else {
+              toast.warning(`No analyzed element at (${x}, ${y}) in the current frame`);
+            }
+          } catch (err) {
+            toast.error(`Integrity check failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }}
-        onTellMainAiToMove={(x, y) => {
-          toast.info(`AI Navigation Cue dispatched to (${x}, ${y})`);
-          dispatchInteractiveHardwareAction("click", x, y);
+        onTellMainAiToMove={async (x, y) => {
+          try {
+            await runGatedSteps([{ id: `ai_move_${Date.now()}`, name: `AI move to (${x}, ${y})`, action: "click", x, y }]);
+            toast.success(`AI moved to (${x}, ${y}) after screen verification`);
+          } catch (err) {
+            toast.error(`AI move blocked: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }}
-        onTag3WayEntity={(type, x, y) => {
-          toast.success(`Tagged (${x}, ${y}) as ${type.toUpperCase()} entity`);
+        onTag3WayEntity={async (type, x, y) => {
+          const nearElem = nativeUiElements.find((e) => frameBoxContains(e.boundingBox, x, y));
+          try {
+            const entity = await tagEntityAtPoint({
+              type,
+              x,
+              y,
+              elementLabel: nearElem?.name,
+              frameWidth: NATIVE_FRAME.width,
+              frameHeight: NATIVE_FRAME.height,
+            });
+            toast.success(`Saved ${type.toUpperCase()} entity at (${entity.x}, ${entity.y})`, {
+              description: entity.elementLabel ? `On "${entity.elementLabel}" • id ${entity.id}` : `id ${entity.id}`,
+            });
+          } catch (err) {
+            toast.error(`Entity tag failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }}
         onOpenStepManagerModal={(coords) => {
-          const pctX = (coords.x / NATIVE_WIDTH) * 100;
-          const pctY = (coords.y / NATIVE_HEIGHT) * 100;
+          const { pctX, pctY } = toPercentPair(coords.x, coords.y);
           setRecordingClickPos({ x: coords.x, y: coords.y, pctX, pctY });
           setStepManagerClickedCoords({ x: coords.x, y: coords.y });
           setIsStepManagerOpen(true);
@@ -6205,36 +6199,10 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
           });
         }}
         onTriggerTestDriftEvent={() => {
-          const testX = Math.round(200 + Math.random() * 1200);
-          const testY = Math.round(150 + Math.random() * 700);
-          const shiftX = Math.round((Math.random() - 0.5) * 36);
-          const shiftY = Math.round((Math.random() - 0.5) * 36);
-          const driftDist = parseFloat(Math.hypot(shiftX, shiftY).toFixed(1));
-          const stepNum = sequence.length > 0 ? Math.floor(Math.random() * sequence.length) + 1 : 1;
-
-          logDriftAutoCorrection({
-            stepIndex: stepNum,
-            stepName: `Auto-Verified Target Action #${stepNum}`,
-            originalCoords: { x: testX, y: testY },
-            recalibratedCoords: { x: testX + shiftX, y: testY + shiftY },
-            driftDistancePx: driftDist,
-            driftDelta: { dx: shiftX, dy: shiftY },
-            recoveryBranch:
-              driftDist > 18
-                ? "ocr_landmark_anchor"
-                : driftDist > 10
-                ? "visual_template_offset"
-                : "cubic_bezier_morph",
-            confidenceScore: parseFloat((0.94 + Math.random() * 0.05).toFixed(2)),
-            targetElement: `UI Target Element @ (${testX}, ${testY})`,
-            diffScore: parseFloat((0.96 + Math.random() * 0.03).toFixed(2)),
-            reasoning: `Dynamic frame diff detected ${driftDist}px inter-frame layout displacement. Recalibrated trajectory spline to align with real-time target bounding anchor.`,
-            status: "auto_recalibrated",
-          });
-
-          toast.warning(`Frame Drift Detected (Δ${driftDist}px)`, {
-            description: `Auto-recalibrated target to (${testX + shiftX}, ${testY + shiftY}) with 98% confidence.`,
-          });
+          const entry = buildSyntheticDriftEntry(sequence.length);
+          logDriftAutoCorrection(entry);
+          const { title, description } = describeSyntheticDriftToast(entry);
+          toast.info(title, { description });
         }}
       />
 
@@ -6386,13 +6354,14 @@ export const LiveScreenHUD: React.FC<LiveScreenHUDProps> = ({
                   </div>
                 </div>
 
-                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                <div ref={stepListRef} className="space-y-2 max-h-60 overflow-y-auto pr-1">
                   {sequence.map((step, idx) => {
                     const isCur = step.id === activeStepId;
                     const isChecked = selectedStepIds.has(step.id);
                     return (
                       <div
                         key={`hud_drawer_step_${step.id || "step"}_${idx}`}
+                        data-step-id={step.id}
                         onClick={() => {
                           onSelectStep?.(step.id);
                           setForwardStepTriggerCount((prev) => prev + 1);

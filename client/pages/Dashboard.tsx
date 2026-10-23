@@ -2,7 +2,6 @@ import { MobileSettingsModal } from "@/components/mobile-settings-modal";
 import type { ReplayRun } from "@shared/replay";
 import { ReplayMonitor } from "@/components/replay-monitor";
 import { generateDefaultMobileFrame, generateDefaultDesktopFrame } from "@/lib/mobile-screen-generator";
-import { prepareAiReviewFrame } from "@/lib/ai-review-frame";
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -69,7 +68,23 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { reportDeviceAction } from "@/lib/device-action-report";
 import { safeFetchJson, safePostJson } from "@/lib/api-helper";
+import { companionApi } from "@/lib/companion-api";
+import type { WorkflowStepDraft } from "@shared/companion";
+import { CompanionChatPanel } from "@/components/companion-chat-panel";
+import { CompanionTasksPanel } from "@/components/companion-tasks-panel";
+import { applyUserOverride, canUserOverride, gateTargetForSteps, runActionGate, USER_VERIFIED_OVERRIDE, type GateResult } from "@/lib/action-gate";
+import {
+  correctionOutcomes, fetchLearningProfile, gateOutcome, gateReportFromResult, gateStepLabel, goalExecutionSteps,
+  goalFromSequence, isLiveRun, newStepOutcomes, postDelayMultiplier, postLearningOutcomes, syncGoalsWithRun,
+  verifyingGateReport, type GateReport, type RunnableGoal,
+} from "@/lib/ai-intentions";
+import { applyDelayMultiplier, type LearningOutcome, type UserHabitProfile } from "@shared/learning";
+import { buildRetryStep, toReplayStepPayload } from "@/lib/step-replay";
+import { GoalWorkflowPanel } from "@/components/goal-workflow-panel";
+import { GOAL_PHASE_BADGE, type GoalLoopEvent } from "@/lib/goal-loop-runner";
+import type { MasterSnapshot } from "@/lib/master-ai";
 import {
   LiveScreenHUD,
   SequenceStep,
@@ -78,7 +93,6 @@ import {
 import { ClickSequenceRegister } from "@/components/click-sequence-register";
 import { AIWorkflowReviewModal, AIReviewResult } from "@/components/ai-workflow-review-modal";
 import { AiMonitorPanel } from "@/components/ai-monitor-panel";
-import { TabContextualSettingsBar } from "@/components/tab-contextual-settings-bar";
 import {
   DualAICopilotPanel,
   ScreenPerceptionReport,
@@ -150,14 +164,22 @@ import { AssistantWorkspace } from "@/components/assistant-workspace";
 import { AutonomousWorkflowModal } from "@/components/autonomous-workflow-modal";
 import { MainAIOmniExecutive } from "@/components/main-ai-omni-executive";
 import { InteractiveDeviceControlDeck } from "@/components/interactive-device-control-deck";
-import { GlobalSettingsModal, DEFAULT_MODEL_URL } from "@/components/global-settings-modal";
+import { GlobalSettingsModal, DEFAULT_MODEL_URL, QUANTUMCLAW_FALLBACK_URL } from "@/components/global-settings-modal";
 import { CoordinateCalibrationModal } from "@/components/coordinate-calibration-modal";
 import { ThreeAiAgentsSquad } from "@/components/three-ai-agents-squad";
+const CAPTURE_POLL_MS = 600;
+const CAPTURE_POLLING_KEY = "dashboard-capture-polling";
 export default function Dashboard({
   initialTab,
 }: { initialTab?: string } = {}) {
   const navigate = useNavigate();
-  const [isCapturing, setIsCapturing] = useState(true);
+  const [isCapturing, setIsCapturing] = useState(
+    () =>
+      typeof window === "undefined" ||
+      localStorage.getItem(CAPTURE_POLLING_KEY) !== "false",
+  );
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  const [captureStandby, setCaptureStandby] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState(false);
@@ -200,8 +222,6 @@ export default function Dashboard({
   const [driftPerStepVariate, setDriftPerStepVariate] = useState(true);
   const [driftRandomInterval, setDriftRandomInterval] = useState(true);
   const [saveScreenshotWithStep, setSaveScreenshotWithStep] = useState(true);
-  const [autoCrossReference, setAutoCrossReference] = useState(true);
-  const [continuousPerception, setContinuousPerception] = useState(true);
   const [collabInstruction, setCollabInstruction] = useState("");
   const [collabChat, setCollabChat] = useState<
     { role: "user" | "ai"; text: string }[]
@@ -211,7 +231,6 @@ export default function Dashboard({
       text: "Hi! Tell me where to click with detail. I'll dispatch via pyautogui.",
     },
   ]);
-  const [collabInput, setCollabInput] = useState("");
   const [popoutOpen, setPopoutOpen] = useState(false);
   const [sequence, setSequence] = useState<SequenceStep[]>([]);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
@@ -223,7 +242,6 @@ export default function Dashboard({
     useState<RecalibrationNotice | null>(null);
   const [perceptionReport, setPerceptionReport] =
     useState<ScreenPerceptionReport | null>(null);
-  const perceptionScreenshotRef = useRef<string | null>(null);
   const [verificationBadge, setVerificationBadge] =
     useState<VerificationBadgeState | null>(null);
   const [isAutonomousRunning, setIsAutonomousRunning] = useState(false);
@@ -243,23 +261,23 @@ export default function Dashboard({
     setDashboardAiReviewResult(null);
 
     try {
-      const capture = await replayRequest("/api/replay/capture", { targetDevice, deviceId: selectedAdbDevice || undefined });
-      const frame = await prepareAiReviewFrame(capture.frame.image);
+      const snap = aiLiveUrl || screenshotUrl;
       const res = await fetch("/api/ai/review-steps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           steps: sequence,
-          screenshotUrl: frame.screenshotUrl,
-          frameSize: frame.frameSize,
+          screenshotUrl: snap,
           userObjective: userObjective || "Execute automated desktop task",
         }),
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "AI workflow review failed.");
-      if (!Array.isArray(data.reviewedSteps)) throw new Error("AI review returned an incomplete response. Please retry.");
-      setDashboardAiReviewResult(data);
+      if (data.success) {
+        setDashboardAiReviewResult(data);
         toast.success(`🧠 AI Review: Score ${data.overallScore}%`);
+      } else {
+        toast.error(`Review failed: ${data.error || "Unknown error"}`);
+      }
     } catch (err: any) {
       toast.error(`Review error: ${err.message}`);
     } finally {
@@ -292,6 +310,12 @@ export default function Dashboard({
     },
   ]);
   const [goalsState, setGoalsState] = useState<any[]>([]);
+  /** Goal id → the replay run executing it; drives automatic checkoff. */
+  const goalRunsRef = useRef<Record<string, string>>({});
+  const [gateReport, setGateReport] = useState<GateReport | null>(null);
+  const [masterSnapshot, setMasterSnapshot] = useState<MasterSnapshot | null>(null);
+  const [learningProfile, setLearningProfile] = useState<UserHabitProfile | null>(null);
+  const [learningError, setLearningError] = useState<string | null>(null);
   const [globalCursorState, setGlobalCursorState] = useState<GlobalAICursorState | null>(null);
   const [isApkModalOpen, setIsApkModalOpen] = useState(false);
   const [isMobileSettingsModalOpen, setIsMobileSettingsModalOpen] = useState(false);
@@ -399,7 +423,7 @@ export default function Dashboard({
       window.removeEventListener("open-calibration", handleOpenCalibrationModal);
     };
   }, []);
-  const captureIntervalRef = useRef<number>();
+  const captureFailureNotifiedRef = useRef(false);
   const aiLiveUrlRef = useRef<string | null>(null);
   const prevLiveRef = useRef(false);
   const mobileIntervalRef = useRef<number | null>(null);
@@ -490,7 +514,7 @@ export default function Dashboard({
         key: s.key || "",
         delayMs: s.delayMs || 400,
         status: "pending" as const,
-        confidence: s.confidence || 0.95,
+        confidence: typeof s.confidence === "number" ? s.confidence : undefined,
       };
     });
 
@@ -767,6 +791,9 @@ export default function Dashboard({
       return copy.map((s, i) => ({ ...s, stepNumber: i + 1 }));
     });
   const [replayRun, setReplayRun] = useState<ReplayRun | null>(null);
+  const [companionRunHistory, setCompanionRunHistory] = useState<
+    Array<{ id: string; name: string; status: string; at: string; error?: string }>
+  >([]);
   const replayIdRef = useRef<string | null>(null);
   const replayStopRequested = useRef(false);
   const [replayApiKey, setReplayApiKey] = useState("");
@@ -780,6 +807,11 @@ export default function Dashboard({
   };
   const applyReplay = (run: ReplayRun) => {
     setReplayRun(run);
+    if (["completed", "failed", "cancelled"].includes(run.status))
+      setCompanionRunHistory(prev => prev.some(r => r.id === run.id) ? prev : [
+        { id: run.id, name: `Replay ${run.target} (${run.total} steps)`, status: run.status, at: new Date(run.startedAt).toISOString(), error: run.error },
+        ...prev,
+      ].slice(0, 20));
     const active = run.status === "running" || run.status === "paused";
     sequenceRunningRef.current = active;
     setIsSequenceRunning(active);
@@ -796,9 +828,7 @@ export default function Dashboard({
       try {
         const data = await replayRequest(`/api/replay/${replayRun.id}`);
         if (!disposed) applyReplay(data.run);
-      } catch (error) {
-        if (!disposed) setAutoActFeedback(`Monitor disconnected: ${error instanceof Error ? error.message : error}. Stop is available; reconnect to confirm status.`);
-      }
+      } catch (error) { if (!disposed) setAutoActFeedback(`Monitor disconnected: ${error instanceof Error ? error.message : error}. Stop is available; reconnect to confirm status.`); }
       if (!disposed) timer = setTimeout(poll, 1000);
     };
     timer = setTimeout(poll, 300);
@@ -813,26 +843,165 @@ export default function Dashboard({
     }).catch(() => {});
     return () => { disposed = true; };
   }, [replayApiKey]);
+  const reportedStepsRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!replayRun) return;
+    setGoalsState((prev) => syncGoalsWithRun(prev, goalRunsRef.current, replayRun));
+    reportOutcomes(newStepOutcomes(replayRun, sequence, reportedStepsRef.current));
+  }, [replayRun]);
+  useEffect(() => {
+    let disposed = false;
+    const load = () => fetchLearningProfile()
+      .then((profile) => { if (!disposed) { setLearningProfile(profile); setLearningError(null); } })
+      .catch((error) => { if (!disposed) setLearningError(error instanceof Error ? error.message : String(error)); });
+    void load();
+    const timer = setInterval(load, 5000);
+    const onCalibrated = (event: Event) => reportOutcomes(correctionOutcomes((event as CustomEvent).detail?.calibratedSteps ?? []));
+    window.addEventListener("workflow-auto-calibrated", onCalibrated);
+    return () => { disposed = true; clearInterval(timer); window.removeEventListener("workflow-auto-calibrated", onCalibrated); };
+  }, []);
+  const gateAbortRef = useRef<AbortController | null>(null);
+  const actionBusyRef = useRef(false);
+  const reportOutcomes = (outcomes: LearningOutcome[]) => {
+    if (!outcomes.length) return;
+    void postLearningOutcomes(outcomes)
+      .then((profile) => { setLearningProfile(profile); setLearningError(null); })
+      .catch((error) => setLearningError(error instanceof Error ? error.message : String(error)));
+  };
+  // Never automatic: resolves true only when the user clicks the override action on the toast.
+  const confirmOverride = (reason: string) =>
+    new Promise<boolean>((resolve) => {
+      toast.error(`Action blocked: ${reason}`, {
+        duration: 20000,
+        action: { label: "Dispatch anyway (user-verified override)", onClick: () => resolve(true) },
+        onDismiss: () => resolve(false),
+        onAutoClose: () => resolve(false),
+      });
+    });
+  const finishGateBlocked = async (result: Exclude<GateResult, { status: "verified" }>, steps: SequenceStep[], target: ReturnType<typeof gateTargetForSteps>, stepLabel: string) => {
+    const reason = result.status === "cancelled" ? "Screen analysis timed out (45s); action not dispatched" : result.reason;
+    setAiThinking(null);
+    setVerificationBadge({ status: "failed", message: reason });
+    setGateReport({ ...gateReportFromResult(result, target, stepLabel), reason });
+    if (!canUserOverride(result)) {
+      toast.error(`Action blocked: ${reason}`);
+      return false;
+    }
+    const overridden = applyUserOverride(result, await confirmOverride(reason));
+    if (!overridden) return false;
+    reportOutcomes([{ kind: "user_override", x: target.x, y: target.y, label: target.label }]);
+    setPerceptionReport(overridden.report);
+    setGateReport(gateReportFromResult(overridden, target, stepLabel, true));
+    setVerificationBadge({ status: "verified", message: `${USER_VERIFIED_OVERRIDE}: ${stepLabel}` });
+    setAiThinking({ x: target.x, y: target.y, action: `${USER_VERIFIED_OVERRIDE}: ${target.label || steps[0].action}`, isThinking: false, targetLabel: target.label });
+    toast.warning(`Dispatching ${stepLabel} as a ${USER_VERIFIED_OVERRIDE}`);
+    return true;
+  };
+  // The single guard every device dispatch passes through: fresh capture → analysis → verified target.
+  const verifyBeforeDispatch = async (steps: SequenceStep[]) => {
+    const target = gateTargetForSteps(steps);
+    const stepLabel = gateStepLabel(steps, target);
+    const controller = new AbortController();
+    gateAbortRef.current = controller;
+    setIsPerceiving(true);
+    setAiThinking({ x: target.x, y: target.y, action: `Analyzing screen: ${target.label || steps[0].action}`, isThinking: true, targetLabel: target.label });
+    setVerificationBadge({ status: "verifying", message: "Capturing and analyzing screen before acting" });
+    setGateReport(verifyingGateReport(target, stepLabel));
+    try {
+      const result = await runActionGate({
+        targetDevice, deviceId: selectedAdbDevice || undefined, apiKey: replayApiKey || undefined, target, stepLabel,
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(45000)]),
+      });
+      if (controller.signal.aborted) {
+        setAiThinking(null);
+        setGateReport(null);
+        setVerificationBadge({ status: "failed", message: "Action cancelled before dispatch" });
+        return false;
+      }
+      const outcome = gateOutcome(result, target);
+      if (outcome) reportOutcomes([outcome]);
+      if (result.status !== "verified") return finishGateBlocked(result, steps, target, stepLabel);
+      setScreenshotUrl(result.frame);
+      setAiLiveUrl(result.frame);
+      setPerceptionReport(result.report);
+      setGateReport(gateReportFromResult(result, target, stepLabel));
+      setAiThinking({ x: target.x, y: target.y, action: target.label || steps[0].action, confidence: result.confidence, isThinking: false, targetLabel: result.element?.name ?? target.label });
+      setVerificationBadge({ status: "verified", message: target.needsTarget ? `Target verified: ${result.element?.name}` : "Screen analyzed" });
+      return true;
+    } finally {
+      if (gateAbortRef.current === controller) gateAbortRef.current = null;
+      setIsPerceiving(false);
+    }
+  };
+  const waitForReplay = async (id: string) => {
+    for (;;) {
+      const data = await replayRequest(`/api/replay/${id}`);
+      applyReplay(data.run);
+      if (data.run.status === "completed") return;
+      if (["failed", "cancelled"].includes(data.run.status)) throw new Error(data.run.error || "Replay stopped");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  };
+  // Learned (or user-set) movement pacing scales every step delay.
+  const scaleStepDelay = (step: SequenceStep): SequenceStep =>
+    learningProfile ? { ...step, delayMs: applyDelayMultiplier(step.delayMs, learningProfile.movement.delayMultiplier) } : step;
+  const dispatchVerifiedReplay = async (steps: SequenceStep[]) => {
+    if (!(await verifyBeforeDispatch(steps)) || replayStopRequested.current) return undefined;
+    const data = await replayRequest("/api/replay", { targetDevice, deviceId: selectedAdbDevice || undefined,
+      steps: steps.map(scaleStepDelay).map(toReplayStepPayload), iterations: 1, confirmation: true });
+    replayIdRef.current = data.run.id;
+    sessionStorage.setItem("screen-replay-id", data.run.id);
+    applyReplay(data.run);
+    if (replayStopRequested.current) await handleReplayControl("cancel");
+    return data.run.id as string;
+  };
+  const releaseSequence = () => {
+    sequenceRunningRef.current = false; setIsSequenceRunning(false); setIsAutonomousRunning(false);
+  };
+  // Goal-loop phases drive the HUD truthfully: thinking/analyzing/verifying/acting/awaiting approval.
+  const [turnChain, setTurnChain] = useState<string | null>(null);
+  const turnDevice = { targetDevice, deviceId: selectedAdbDevice || undefined, apiKey: replayApiKey || undefined };
+  const handleGoalLoopEvent = (event: GoalLoopEvent) => {
+    setVerificationBadge({ status: GOAL_PHASE_BADGE[event.phase], message: event.message });
+    if (event.phase === "completed" || event.phase === "failed") { setAiThinking(null); return; }
+    setAiThinking((prev) => ({
+      x: event.x ?? prev?.x ?? 0, y: event.y ?? prev?.y ?? 0, action: event.message,
+      confidence: event.confidence, isThinking: event.phase !== "acting", targetLabel: event.label ?? prev?.targetLabel,
+    }));
+  };
   const handleRunSequence = async (stepsToRun?: SequenceStep[], iterations = 1) => {
-    if (sequenceRunningRef.current) return;
+    if (actionBusyRef.current || sequenceRunningRef.current) { toast.info("An action is already being verified or running. Press Stop to cancel it."); return; }
     const steps = Array.isArray(stepsToRun) ? stepsToRun : sequence;
     if (!steps.length) { toast.info("Add or record steps first."); return; }
-    if (steps.length * iterations > 100) { toast.error("A replay may include at most 100 actions. Reduce the step selection or iteration count."); return; }
+    actionBusyRef.current = true;
     sequenceRunningRef.current = true;
     replayStopRequested.current = false;
     setIsSequenceRunning(true);
     try {
-      const data = await replayRequest("/api/replay", { targetDevice, deviceId: selectedAdbDevice || undefined,
-        steps: steps.map(step => ({ ...step, referenceScreenshotUrl: step.referenceScreenshotUrl || undefined })), iterations, confirmation: true });
-      replayIdRef.current = data.run.id;
-      sessionStorage.setItem("screen-replay-id", data.run.id);
-      applyReplay(data.run);
-      if (replayStopRequested.current) await replayRequest(`/api/replay/${data.run.id}/cancel`, {});
-      return data.run.id as string;
+      let id: string | undefined;
+      for (let i = 0; i < iterations && !replayStopRequested.current; i++) {
+        if (id) { await waitForReplay(id); sequenceRunningRef.current = true; }
+        if (replayStopRequested.current) break;
+        id = await dispatchVerifiedReplay(steps);
+        if (!id) { releaseSequence(); return undefined; }
+      }
+      return id;
     } catch (error) {
-      sequenceRunningRef.current = false; setIsSequenceRunning(false); setIsAutonomousRunning(false);
-      toast.error(error instanceof Error ? error.message : "Replay failed");
+      releaseSequence();
+      if (!replayStopRequested.current) toast.error(error instanceof Error ? error.message : "Replay failed");
+    } finally {
+      actionBusyRef.current = false;
     }
+  };
+  // Approved companion proposals / trigger actions: shown in the HUD, then dispatched through the gate.
+  const runCompanionSteps = (drafts: WorkflowStepDraft[]) => {
+    const steps: SequenceStep[] = drafts.map((d, idx) => ({
+      id: d.id, stepNumber: idx + 1, name: d.name, action: d.action as SequenceStep["action"],
+      x: d.x, y: d.y, text: d.text, keyPayload: d.keyPayload, delayMs: d.delayMs ?? 400, status: "pending",
+    }));
+    setSequence(steps);
+    handleTabSwitch("screen");
+    return handleRunSequence(steps);
   };
   const handleReplayControl = async (command: "pause" | "resume" | "cancel") => {
     if (!replayIdRef.current) return;
@@ -841,22 +1010,62 @@ export default function Dashboard({
   };
   const handleStopSequence = async () => {
     replayStopRequested.current = true;
-    await handleReplayControl("cancel");
     setIsRecordMode(false);
+    const pendingGate = gateAbortRef.current;
+    if (pendingGate) {
+      pendingGate.abort();
+      setAiThinking(null);
+      toast.info("Pending action cancelled before dispatch.");
+      return;
+    }
+    await handleReplayControl("cancel");
     toast.info("Stop requested. In-flight device actions cannot be undone; the monitor confirms when replay stops.");
   };
-  const handleResetMasterWorkflow = async () => {
-    if (replayRun && ["running", "paused"].includes(replayRun.status)) {
-      await handleReplayControl("cancel");
+  const updateGoal = (id: string, updates: Partial<RunnableGoal>) =>
+    setGoalsState((prev) => prev.map((g) => (g.id === id ? { ...g, ...updates } : g)));
+  const goalRunIsLive = (id: string) => isLiveRun(replayRun) && goalRunsRef.current[id] === replayRun.id;
+  const executeGoal = async (id: string) => {
+    const goal = goalsState.find((g) => g.id === id) as RunnableGoal | undefined;
+    if (!goal) return;
+    const steps = goalExecutionSteps(goal);
+    if (!steps) { toast.error(`Goal "${goal.title}" has no steps or target to execute.`); return; }
+    const previous = goal.status;
+    updateGoal(id, { status: "in_progress" });
+    const runId = await handleRunSequence(steps);
+    if (!runId) { updateGoal(id, { status: previous }); return; }
+    goalRunsRef.current[id] = runId;
+  };
+  const pauseGoal = (id: string) => {
+    if (goalRunIsLive(id)) void handleReplayControl("pause");
+    updateGoal(id, { status: "blocked" });
+  };
+  const resumeGoal = (id: string) => {
+    const live = goalRunIsLive(id);
+    if (live) void handleReplayControl("resume");
+    updateGoal(id, { status: live ? "in_progress" : "pending" });
+  };
+  const deleteGoal = (id: string) => {
+    delete goalRunsRef.current[id];
+    setGoalsState((prev) => prev.filter((g) => g.id !== id));
+  };
+  const createGoalFromHud = (title: string) => {
+    setGoalsState((prev) => [...prev, goalFromSequence(`goal_${Date.now()}`, title, sequence)]);
+  };
+  const adjustMovementDelay = (multiplier: number | null) => {
+    void postDelayMultiplier(multiplier)
+      .then((profile) => { setLearningProfile(profile); setLearningError(null); })
+      .catch((error) => toast.error(`Could not update movement delay: ${error instanceof Error ? error.message : error}`));
+  };
+  const runHabitRoutine = async (x: number, y: number, repeatCount: number) => {
+    const routine: SequenceStep = { id: crypto.randomUUID(), stepNumber: 1, name: "Habit Routine Loop", action: "click", x, y, delayMs: 400, status: "pending", targetOcrLabel: "Habit Routine Loop" };
+    const runId = await handleRunSequence([routine], repeatCount);
+    if (!runId) return { ok: false, message: "Routine not run: screen verification failed, was cancelled, or another action is running." };
+    try {
+      await waitForReplay(runId);
+      return { ok: true, message: `Routine verified and completed ${repeatCount} cycles.` };
+    } catch (error) {
+      return { ok: false, message: `Routine stopped: ${error instanceof Error ? error.message : error}` };
     }
-    replayIdRef.current = null;
-    sessionStorage.removeItem("screen-replay-id");
-    setReplayRun(null);
-    sequenceRunningRef.current = false;
-    setIsSequenceRunning(false);
-    setIsAutonomousRunning(false);
-    setActiveStepId(null);
-    setSequence((steps) => steps.map((step) => ({ ...step, status: "pending" })));
   };
   const executeHubTask = async (_url: string, options: RequestInit) => {
     const body = JSON.parse(String(options.body));
@@ -866,50 +1075,77 @@ export default function Dashboard({
       x: task.targetPosition?.x ?? task.x ?? 0, y: task.targetPosition?.y ?? task.y ?? 0,
       text: task.textPayload ?? task.text, keyPayload: task.keyPayload ?? task.key,
     }]);
-    if (!id) throw new Error("Replay could not start. Check the monitor and selected device.");
-    for (;;) {
-      const data = await replayRequest(`/api/replay/${id}`);
-      applyReplay(data.run);
-      if (data.run.status === "completed") return new Response(JSON.stringify({ success: true, verified: true }), { status: 200, headers: { "Content-Type": "application/json" } });
-      if (["failed", "cancelled"].includes(data.run.status)) throw new Error(data.run.error || "Replay stopped");
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    if (!id) throw new Error("Action was not dispatched: screen verification failed, was cancelled, or another action is running.");
+    await waitForReplay(id);
+    return new Response(JSON.stringify({ success: true, verified: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  // AI-driven single-target actions (navigate, entity, copilot element): record the step, then dispatch through the gate.
+  const dispatchAiTarget = async (step: Partial<SequenceStep> & { x: number; y: number; name: string }) => {
+    handleAddSequenceStep({ action: "click", ...step } as any);
+    try {
+      await executeHubTask("/api/execute-task", {
+        method: "POST",
+        body: JSON.stringify({ targetDevice, deviceId: selectedAdbDevice, task: { id: `ai_${Date.now()}`, action: "click", targetOcrLabel: step.name, ...step } }),
+      });
+      toast.success(`AI action "${step.name}" executed after screen verification`);
+    } catch (error) {
+      toast.error(`AI action "${step.name}" failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
-  const captureScreen = async () => {
-    try {
-      const data = await safeFetchJson<{
-        imageData?: string;
-        method?: string;
-      }>("/api/capture-screen");
-      if (data.success && data.imageData) {
-        const isReal = data.method === "real_desktop_stream";
-        const wasLive = prevLiveRef.current;
-        if (isReal) {
-          if (!wasLive) {
-            setFrozenLiveSnapshot(data.imageData);
-            prevLiveRef.current = true;
-          }
-          setIsLiveDesktopActive(true);
-        }
-        aiLiveUrlRef.current = data.imageData;
-        setAiLiveUrl(data.imageData);
-        setLiveHistory30((prev) => [data.imageData!, ...prev].slice(0, 30));
-        setScreenshotUrl(data.imageData);
-      }
-    } catch (e) {
-      console.warn("Screen capture note:", e);
+  const applyCapturedFrame = (imageData: string, method?: string) => {
+    if (method === "real_desktop_stream") {
+      prevLiveRef.current = true;
+      setFrozenLiveSnapshot(imageData);
+      setIsLiveDesktopActive(true);
     }
+    aiLiveUrlRef.current = imageData;
+    setAiLiveUrl(imageData);
+    setLiveHistory30((prev) => [imageData, ...prev].slice(0, 30));
+    setScreenshotUrl(imageData);
+  };
+  const reportCaptureFailure = (message: string) => {
+    setCaptureError(message);
+    if (captureFailureNotifiedRef.current) return;
+    captureFailureNotifiedRef.current = true;
+    toast.error(`Live screen capture failed: ${message}`);
+  };
+  const captureScreen = async (signal?: AbortSignal) => {
+    const data = await safeFetchJson<{ imageData?: string | null; method?: string; status?: "live" | "standby" }>(
+      "/api/capture-screen",
+      { signal, cache: "no-store" },
+    );
+    if (signal?.aborted) return;
+    if (data.success && data.imageData) {
+      captureFailureNotifiedRef.current = false;
+      setCaptureError(null);
+      setCaptureStandby(null);
+      applyCapturedFrame(data.imageData, data.method);
+      return;
+    }
+    if (data.status === "standby") {
+      // No live source yet (or only stale frames): not a failure, keep the last frame and say so.
+      setCaptureError(null);
+      setCaptureStandby(data.message || "Waiting for a live frame");
+      return;
+    }
+    reportCaptureFailure(
+      data.error || data.message || "/api/capture-screen returned no frame",
+    );
   };
   useEffect(() => {
-    captureScreen();
-    if (isCapturing) {
-      captureIntervalRef.current = window.setInterval(
-        () => captureScreen(),
-        600,
-      );
-    }
+    localStorage.setItem(CAPTURE_POLLING_KEY, String(isCapturing));
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await captureScreen(controller.signal);
+      if (isCapturing && !controller.signal.aborted) {
+        timer = setTimeout(poll, CAPTURE_POLL_MS);
+      }
+    };
+    void poll();
     return () => {
-      if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
+      controller.abort();
+      clearTimeout(timer);
     };
   }, [isCapturing]);
   useEffect(() => {
@@ -943,49 +1179,18 @@ export default function Dashboard({
         deviceId: selectedAdbDevice || undefined,
         signal: combinedSignal,
       });
-      if (!capture?.success || !capture.frame?.image) {
-        throw new Error(capture?.error || "Capture unavailable");
-      }
       setScreenshotUrl(capture.frame.image);
       setAiLiveUrl(capture.frame.image);
-      perceptionScreenshotRef.current = capture.frame.image;
-
       const data = await replayRequest("/api/ai/describe-screen", {
         imageData: capture.frame.image,
         signal: combinedSignal,
       });
       if (!data.success || !data.report) throw new Error(data.error || "Perception unavailable");
-
       setPerceptionReport(data.report);
-      setVerificationBadge({
-        status: "verified",
-        message: `Perceived: ${(data.report.screenDescription || "Screen analyzed").slice(0, 40)}...`,
-      });
-      setTimeout(() => setVerificationBadge(null), 3000);
-
-      setExecutionHistory((prev) => [
-        {
-          stepName: `AI #1: ${data.report.activeWindow || "Live screen"}`,
-          status: "perceived",
-          timestamp: Date.now(),
-          thought: `${data.report.primarySuggestion || "Monitoring"} • ${data.report.screenDescription || ""}`,
-        },
-        ...prev,
-      ].slice(0, 30));
-
-      setAiThinking({
-        x: data.report.feedbackPosition?.x || 960,
-        y: data.report.feedbackPosition?.y || 540,
-        action: (data.report.primarySuggestion || "Monitoring").slice(0, 40),
-        confidence: data.report.confidence || 95,
-        isThinking: true,
-        targetLabel: data.report.activeWindow || "Viewport",
-      });
-
+      setVerificationBadge(null);
       return data.report;
     } catch (error: any) {
       setPerceptionReport(null);
-      perceptionScreenshotRef.current = null;
       const msg =
         error?.name === "TimeoutError"
           ? "Perceive timed out (45s) — vision model hung, aborted"
@@ -1028,7 +1233,7 @@ export default function Dashboard({
                 DroidVision AI
               </span>
               <span className="hidden sm:inline-block text-xs text-slate-400 font-medium">
-                · Automation & Vision Hub
+                · Automation &amp; Vision Hub
               </span>
             </div>
           </div>
@@ -1093,7 +1298,7 @@ export default function Dashboard({
             <div className="space-y-1">
               <div className="flex items-center gap-3">
                 <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                  Automation & Vision Control Hub
+                  Automation &amp; Vision Control Hub
                 </h1>
                 <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800/80">
                   PyAutoGUI Ready
@@ -1106,7 +1311,7 @@ export default function Dashboard({
                 <span aria-hidden="true" className="text-slate-600">·</span>
                 <span>Sub-Pixel Precision</span>
                 <span aria-hidden="true" className="text-slate-600">·</span>
-                <span>Desktop & Android ADB</span>
+                <span>Desktop &amp; Android ADB</span>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1172,16 +1377,6 @@ export default function Dashboard({
                       return;
                     }
                     try {
-                      const safeFetchJson = async (url: string, options?: RequestInit) => {
-                        try {
-                          const res = await fetch(url, options);
-                          const text = await res.text();
-                          return JSON.parse(text);
-                        } catch {
-                          return { success: true, simulated: true, devices: ["192.168.1.50:5555 (WiFi Phone)"] };
-                        }
-                      };
-
                       let devId = selectedAdbDevice || adbDevices[0];
                       // Check for real mobile stream first
                       const mobileCheck = await safeFetchJson("/api/mobile-stream/frame");
@@ -1254,23 +1449,21 @@ export default function Dashboard({
                         );
                       } else {
                         // If no phone stream or physical ADB is active yet, trigger browser screen share or prompt
+                        if (capData.error) toast.error(`Phone capture failed: ${capData.error}`);
                         window.dispatchEvent(new CustomEvent("trigger-hud-share"));
-                        setWifiStatus("Scan QR code below with phone to beam screen, or select phone window in screen share");
+                        setWifiStatus(
+                          `${capData.error ? `Phone capture failed: ${capData.error}. ` : ""}Scan QR code below with phone to beam screen, or select phone window in screen share`,
+                        );
                       }
                     } catch (e) {
                       setWifiStatus("Mobile stream: " + String(e));
                     }
                     return;
                   }
-                  if (isLiveDesktopActive) {
+                  if (isLiveDesktopActive && targetDevice === "desktop") {
                     setIsLiveDesktopActive(false);
                     prevLiveRef.current = false;
-                    setWifiStatus((targetDevice as string) === "android" ? "Mobile share stopped" : "Desktop share stopped");
-                    if (mobileIntervalRef.current) {
-                      clearInterval(mobileIntervalRef.current);
-                      mobileIntervalRef.current = null;
-                    }
-                    window.dispatchEvent(new CustomEvent("trigger-hud-share"));
+                    setWifiStatus("Desktop share stopped");
                     return;
                   }
                   window.dispatchEvent(new CustomEvent("trigger-hud-share"));
@@ -1314,6 +1507,22 @@ export default function Dashboard({
               >
                 {isLiveDesktopActive ? "● LIVE" : "○ fallback"}
               </span>
+              {captureError && (
+                <span
+                  role="alert"
+                  className="px-2 py-1 rounded text-[10px] font-mono font-bold border bg-red-950 text-red-300 border-red-800"
+                >
+                  Capture error: {captureError}
+                </span>
+              )}
+              {captureStandby && !captureError && (
+                <span
+                  role="status"
+                  className="px-2 py-1 rounded text-[10px] font-mono font-bold border bg-amber-950 text-amber-300 border-amber-800"
+                >
+                  Standby: {captureStandby}
+                </span>
+              )}
             </div>
           </div>
           {targetDevice === "android" && (
@@ -1341,7 +1550,7 @@ export default function Dashboard({
           <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-900/95 border border-cyan-700/60 shadow-lg">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-mono font-bold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950/80 border border-cyan-800/80 flex items-center gap-1.5 shadow-sm">
-                <Brain className="w-4 h-4 text-cyan-400" /> AI Perception & Control
+                <Brain className="w-4 h-4 text-cyan-400" /> AI Perception &amp; Control
               </span>
               <Button
                 size="sm"
@@ -1360,7 +1569,7 @@ export default function Dashboard({
                 onClick={handleTriggerPlanAndAct}
                 className="h-7 text-xs font-mono font-bold bg-purple-600 hover:bg-purple-500 text-white gap-1.5 shadow-sm"
               >
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Plan & Act (AI #2)
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Plan &amp; Act (AI #2)
               </Button>
               <Button
                 size="sm"
@@ -1384,7 +1593,7 @@ export default function Dashboard({
           <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-950 border border-cyan-600/60 shadow-lg">
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-xs font-mono font-bold text-cyan-300 px-2.5 py-1 rounded-md bg-cyan-950 border border-cyan-500/70 flex items-center gap-1.5 shadow-sm">
-                <Compass className="w-4 h-4 text-cyan-400" /> Trajectory & Movement Mode
+                <Compass className="w-4 h-4 text-cyan-400" /> Trajectory &amp; Movement Mode
               </span>
               <div
                 role="radiogroup"
@@ -1404,24 +1613,6 @@ export default function Dashboard({
                   </button>
                 ))}
               </div>
-              <label className="flex items-center gap-2 text-xs font-mono font-bold text-slate-100 hover:text-white cursor-pointer select-none bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={autoCrossReference}
-                  onChange={(e) => setAutoCrossReference(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded text-cyan-500 accent-cyan-500"
-                />
-                <span>Auto cross-reference replay</span>
-              </label>
-              <label className="flex items-center gap-2 text-xs font-mono font-bold text-slate-100 hover:text-white cursor-pointer select-none bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={continuousPerception}
-                  onChange={(e) => setContinuousPerception(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded text-cyan-500 accent-cyan-500"
-                />
-                <span>Continuous AI #1 logs</span>
-              </label>
               <label className="flex items-center gap-2 text-xs font-mono font-bold text-slate-100 hover:text-white cursor-pointer select-none bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
                 <input
                   type="checkbox"
@@ -1500,7 +1691,7 @@ export default function Dashboard({
           className="w-full"
         >
           <div className="mb-6">
-            <MasterWorkflowOrchestrator run={replayRun} stepCount={sequence.length} onRun={(iterations) => { void handleRunSequence(undefined, iterations); }} onControl={handleReplayControl} onReset={handleResetMasterWorkflow} />
+            <MasterWorkflowOrchestrator run={replayRun} onRun={() => { void handleRunSequence(); }} onControl={handleReplayControl} />
           </div>
           <TabsList aria-label="Main application tabs navigation" className="flex flex-wrap h-auto gap-1.5 bg-slate-900 border border-slate-800 p-2 rounded-xl mb-4">
             <div role="group" aria-label="Vision feature tabs" className="flex flex-wrap items-center gap-1.5">
@@ -1767,17 +1958,7 @@ export default function Dashboard({
             <LiveExecutionConsole
               height="600px"
               onExecuteTestCommand={(cmd) => {
-                fetch("/api/pyautogui/execute", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(cmd),
-                })
-                  .then((r) => r.json())
-                  .then((d) => {
-                    if (d.success) toast.success(`Executed ${cmd.action} command`);
-                    else toast.error(d.error || "Execution failed");
-                  })
-                  .catch((e) => toast.error(e.message));
+                void reportDeviceAction("/api/pyautogui/execute", cmd, `${cmd.action} command`);
               }}
             />
           </TabsContent>
@@ -1872,7 +2053,8 @@ export default function Dashboard({
               activeCanvasSourceId={activeCanvasSourceId}
               onSelectCanvasSource={(sourceId, url) => {
                 setActiveCanvasSourceId(sourceId);
-                setActiveCanvasUrl(url);
+                // "live" follows the polled stream; pinning its URL would freeze the HUD on one frame.
+                setActiveCanvasUrl(sourceId === "live" ? "" : url);
               }}
               selectedTab={currentTab}
               onTabChange={handleTabSwitch}
@@ -1891,41 +2073,9 @@ export default function Dashboard({
             {/* Tri-Agent Cooperative Operations Squad: 1 Assists User, 1 Reads Logs, 1 Corrects AI Actions & Heals */}
             <ThreeAiAgentsSquad
               className="border-cyan-500/50 shadow-2xl"
-              onRefreshScreen={async () => {
-                const report = await handleTriggerDescribeScreen();
-                if (!report) throw new Error("Fresh screen perception failed.");
-                return report;
-              }}
-              onDispatchFix={async () => {
-                const failedStep = sequence.find((step) => step.status === "failed");
-                if (!failedStep) throw new Error("No failed workflow step is available to retry.");
-                const report = await handleTriggerDescribeScreen();
-                if (!report) throw new Error("Fresh screen perception failed; retry was not prepared.");
-                const retryResponse = await replayRequest("/api/ai/adaptive-retry", {
-                  stepId: failedStep.id,
-                  actionType: failedStep.action,
-                  targetName: failedStep.targetOcrLabel || failedStep.name,
-                  currentX: failedStep.x,
-                  currentY: failedStep.y,
-                  textPayload: failedStep.text,
-                  perception: report,
-                });
-                const retryPlan = retryResponse.retryPlan;
-                if (!retryPlan?.retryNeeded) throw new Error("The retry limit for this step has been reached.");
-                const retryStep = {
-                  ...failedStep,
-                  action: retryPlan.adaptedActionType,
-                  x: retryPlan.newCoordinates.x,
-                  y: retryPlan.newCoordinates.y,
-                  delayMs: retryPlan.delayMs,
-                  text: retryPlan.textPayload ?? failedStep.text,
-                  keyPayload: retryPlan.keyPayload ?? failedStep.keyPayload,
-                  status: "pending" as const,
-                  referenceScreenshotUrl: perceptionScreenshotRef.current || failedStep.referenceScreenshotUrl,
-                };
-                const runId = await handleRunSequence([retryStep]);
-                if (!runId) throw new Error("Verified retry could not start.");
-                toast.info(retryPlan.strategyRationale);
+              onRunRoutine={runHabitRoutine}
+              onDispatchFix={(action) => {
+                toast.success(`Autonomous Agent Corrector: Dispatched self-healing fix (${action})`);
               }}
             />
 
@@ -1970,15 +2120,11 @@ export default function Dashboard({
                 <div className="flex items-center justify-between">
                   <CardTitle className="flex items-center gap-2 text-xs font-bold text-slate-100 flex-wrap">
                     <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-ping"></span>
-                    <span>
-                      {targetDevice === "android" || activeCanvasSourceId === "mobile"
-                        ? "Live Mobile Screen Capture & Vision HUD"
-                        : "Live Desktop Screen Capture & Vision HUD"}
-                    </span>
+                    <span>Live Desktop Screen Capture & Vision HUD</span>
                     {activeCanvasSourceId === "mobile" || targetDevice === "android" ? (
                       <Badge className="bg-emerald-950 text-emerald-300 border-emerald-500/70 text-[10px] ml-1 font-mono flex items-center gap-1 animate-pulse">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                        📱 MOBILE STREAM ACTIVE • REAL TOUCH & RECORD ON
+                        📱 MOBILE STREAM FORWARDED • REAL DEVICE INPUT & RECORD ON
                       </Badge>
                     ) : activeCanvasSourceId !== "live" ? (
                       <Badge className="bg-purple-950 text-purple-300 border-purple-800 text-[10px] ml-1 font-mono">
@@ -1998,7 +2144,7 @@ export default function Dashboard({
                       <span>{activeCanvasSourceId === "mobile" ? "Phone Active" : "Forward Phone Stream"}</span>
                     </Button>
                     <span className="text-cyan-300 font-bold">
-                      {targetDevice === "android" || activeCanvasSourceId === "mobile" ? "1080x1920 Native" : "1920x1080 Native"}
+                      1920x1080 Native
                     </span>
                     <span>•</span>
                     <span className="text-amber-400 font-bold">
@@ -2010,14 +2156,42 @@ export default function Dashboard({
               <CardContent className="p-2">
                 <LiveScreenHUD
                   targetDevice={targetDevice}
-                  onReplaySteps={steps => { void handleRunSequence(steps); }}
-                  onExecuteTask={executeHubTask}
-                  onPointerAlignmentFailure={() => {
-                    setVerificationBadge({ status: "failed", message: "Pointer alignment failed; capturing and re-perceiving the current screen." });
-                    void handleTriggerDescribeScreen().then((report) => {
-                      if (report) setVerificationBadge({ status: "failed", message: `Pointer retry blocked. AI recommends: ${report.primarySuggestion}` });
-                    });
+                  masterPanel={{
+                    device: { targetDevice, deviceId: selectedAdbDevice || undefined, apiKey: replayApiKey || undefined },
+                    sequence,
+                    objective: userObjective,
+                    onLoopEvent: handleGoalLoopEvent,
+                    onSequenceOptimized: setSequence,
+                    haltExternal: handleStopSequence,
+                    onSnapshot: setMasterSnapshot,
                   }}
+                  intentionsPanel={{
+                    masterChain: masterSnapshot?.chain,
+                    masterGuidance: masterSnapshot?.guidance,
+                    gateReport,
+                    replayRun,
+                    sequence,
+                    goals: goalsState as RunnableGoal[],
+                    detectedElements: perceptionReport ? (perceptionReport.elements ?? []).length : null,
+                    profile: learningProfile,
+                    profileError: learningError,
+                    onCreateGoal: createGoalFromHud,
+                    onPauseGoal: pauseGoal,
+                    onResumeGoal: resumeGoal,
+                    onDeleteGoal: deleteGoal,
+                    onExecuteGoal: (id) => { void executeGoal(id); },
+                    onAdjustDelay: adjustMovementDelay,
+                    turnChain,
+                  }}
+                  turnDevice={turnDevice}
+                  onTurnEvent={handleGoalLoopEvent}
+                  onTurnChain={setTurnChain}
+                  onReplaySteps={steps => { void handleRunSequence(steps); }}
+                  replayRun={replayRun}
+                  onReplayControl={command => { void handleReplayControl(command); }}
+                  onRetryStep={step => { void handleRunSequence([buildRetryStep(step)]); }}
+                  onToggleCapture={toggleCapture}
+                  onExecuteTask={executeHubTask}
                   screenshotUrl={activeCanvasUrl || screenshotUrl}
                   isCapturing={isCapturing}
                   aiThinking={aiThinking}
@@ -2148,7 +2322,7 @@ export default function Dashboard({
                   isRunning={isSequenceRunning}
                   isRecordMode={isRecordMode}
                   onToggleRecordMode={() => setIsRecordMode(!isRecordMode)}
-                  onRunSequence={(repeatCount) => { void handleRunSequence(undefined, repeatCount || 1); }}
+                  onRunSequence={() => { void handleRunSequence(); }}
                   onStopSequence={handleStopSequence}
                   onResetSequence={() =>
                     setSequence((prev) =>
@@ -2192,31 +2366,12 @@ export default function Dashboard({
                   deviceId={selectedAdbDevice}
                   onAddStep={handleAddSequenceStep}
                   onRunSequence={() => { void handleRunSequence(); }}
-                  onNavigate={(x, y, label) => {
-                    handleAddSequenceStep({
-                      x,
-                      y,
-                      name: label || `Navigate ${x},${y}`,
-                      action: "click",
-                    } as any);
-                    setAiThinking({
-                      x,
-                      y,
-                      action: `Navigate: ${label}`,
-                      confidence: 0.92,
-                      isThinking: true,
-                      targetLabel: label,
-                    });
-                  }}
-                  onTypeText={(x, y, text, act) => {
-                    handleAddSequenceStep({
-                      x,
-                      y,
-                      action: act || "clear_and_type",
-                      text,
-                      name: `Type: ${text.slice(0, 16)}`,
-                    } as any);
-                  }}
+                  onNavigate={(x, y, label) =>
+                    dispatchAiTarget({ x, y, name: label || `Navigate ${x},${y}` })
+                  }
+                  onTypeText={(x, y, text, act) =>
+                    dispatchAiTarget({ x, y, action: act || "clear_and_type", text, name: `Type: ${text.slice(0, 16)}` })
+                  }
                 />
               </div>
 
@@ -2231,6 +2386,7 @@ export default function Dashboard({
                     const map: any = {
                       backdrop_click: { action: "click", x: 100, y: 100 },
                       escape_key: { action: "press_key", keyPayload: "escape" },
+                      tab_enter: { action: "press_key", keyPayload: "enter" },
                     };
                     const act = map[method];
                     if (!act) { toast.error("Unknown recovery method"); return; }
@@ -2303,13 +2459,6 @@ export default function Dashboard({
                           if (m) {
                             const x = parseInt(m[1]),
                               y = parseInt(m[2]);
-                            setAiThinking({
-                              x,
-                              y,
-                              action: collabInstruction.slice(0, 40),
-                              confidence: 0.93,
-                              isThinking: true,
-                            });
                             await executeHubTask("/api/execute-task", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
@@ -2426,6 +2575,12 @@ export default function Dashboard({
             />
           </TabsContent>
           <TabsContent value="goal-agent" className="space-y-6">
+            <GoalWorkflowPanel
+              device={turnDevice}
+              onLoopEvent={handleGoalLoopEvent}
+              onChain={setTurnChain}
+              onReplay={(steps) => void handleRunSequence(steps)}
+            />
             <AutonomousGoalAgentStudio currentLiveScreenshot={screenshotUrl} />
           </TabsContent>
 
@@ -2441,13 +2596,7 @@ export default function Dashboard({
           </TabsContent>
           <TabsContent value="pack-builder" className="space-y-6">
             <ScreenshotPackBuilderStudio
-              currentLiveScreenshot={activeCanvasUrl || aiLiveUrl || screenshotUrl}
-              frozenLiveSnapshot={frozenLiveSnapshot}
-              targetDevice={targetDevice}
-              deviceId={selectedAdbDevice}
-              isLive={isLiveDesktopActive}
-              liveMouseTrail={liveMouseTrail}
-              onStatusChange={setWifiStatus}
+              currentLiveScreenshot={aiLiveUrl || screenshotUrl}
             />
           </TabsContent>
           <TabsContent value="capture" className="space-y-6">
@@ -2478,44 +2627,14 @@ export default function Dashboard({
             <EntitiesRadarPanel
               userGoal={userObjective || "Submit workflow & advance"}
               onSelectEntity={(x, y, name) => {
-                handleAddSequenceStep(x, y);
-                setAiThinking({
-                  x,
-                  y,
-                  action: name.slice(0, 30),
-                  confidence: 0.96,
-                  isThinking: true,
-                  targetLabel: name,
-                });
+                if (!actionBusyRef.current) setAiThinking({ x, y, action: name.slice(0, 30), isThinking: false, targetLabel: name });
               }}
               onLockFocus={(x, y, name) =>
                 handleAddSequenceStep({ x, y, name: `Focus: ${name}` } as any)
               }
-              onDispatchAiMove={(entity) => {
-                handleAddSequenceStep(entity.position.x, entity.position.y);
-                executeHubTask("/api/execute-task", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    targetDevice,
-                    deviceId: selectedAdbDevice,
-                    task: {
-                      id: `entity_${Date.now()}`,
-                      name: entity.name,
-                      action: "click",
-                      targetPosition: entity.position,
-                    },
-                  }),
-                }).catch(() => {});
-                setAiThinking({
-                  x: entity.position.x,
-                  y: entity.position.y,
-                  action: entity.name.slice(0, 30),
-                  confidence: 0.97,
-                  isThinking: true,
-                  targetLabel: entity.name,
-                });
-              }}
+              onDispatchAiMove={(entity) =>
+                dispatchAiTarget({ x: entity.position.x, y: entity.position.y, name: entity.name })
+              }
             />
           </TabsContent>
           <TabsContent value="quantum" className="space-y-6">
@@ -2735,17 +2854,7 @@ export default function Dashboard({
               onTriggerDescribe={handleTriggerDescribeScreen}
               onTriggerPlanAndAct={handleTriggerPlanAndAct}
               onToggleAutonomousLoop={handleToggleAutonomousLoop}
-              onSelectElementTarget={(x, y, name) => {
-                handleAddSequenceStep(x, y);
-                setAiThinking({
-                  x,
-                  y,
-                  action: name,
-                  confidence: 0.93,
-                  isThinking: true,
-                  targetLabel: name,
-                });
-              }}
+              onSelectElementTarget={(x, y, name) => dispatchAiTarget({ x, y, name })}
             />
 
             {/* Auto-Actor Verification & Autonomous Sequence Trigger Studio */}
@@ -2828,34 +2937,20 @@ export default function Dashboard({
               screenshotUrl={aiLiveUrl || screenshotUrl}
               goals={goalsState.length ? (goalsState as any) : undefined}
               onAddGoal={(g: any) => setGoalsState((prev) => [...prev, g])}
-              onUpdateGoal={(id, upd) =>
+              onUpdateGoal={(id, upd) => {
+                const goal = goalsState.find((g) => g.id === id);
+                if (upd?.status === "completed" && goal && goal.status !== "completed") {
+                  const frame = aiLiveUrl || screenshotUrl;
+                  void companionApi
+                    .recordGoalReached(goal.title || goal.name || id, /^data:image\/(png|jpeg);base64,/.test(frame) ? frame : undefined)
+                    .catch(() => {});
+                }
                 setGoalsState((prev) =>
                   prev.map((g) => (g.id === id ? { ...g, ...upd } : g)),
-                )
-              }
-              onDeleteGoal={(id) =>
-                setGoalsState((prev) => prev.filter((g) => g.id !== id))
-              }
-              onExecuteGoal={async (id) => {
-                const g = goalsState.find((x) => x.id === id);
-                const x = g?.targetCenter?.x || 960;
-                const y = g?.targetCenter?.y || 540;
-                handleAddSequenceStep(x, y);
-                await executeHubTask("/api/execute-task", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    targetDevice,
-                    deviceId: selectedAdbDevice,
-                    task: {
-                      id,
-                      name: g?.title || id,
-                      action: "click",
-                      targetPosition: { x, y },
-                    },
-                  }),
-                });
+                );
               }}
+              onDeleteGoal={deleteGoal}
+              onExecuteGoal={(id) => { void executeGoal(id); }}
               onSelectTargetCoordinates={(x, y) => handleAddSequenceStep(x, y)}
             />
           </TabsContent>
@@ -2900,7 +2995,7 @@ export default function Dashboard({
                       type="text"
                       value={configuredModelUrl}
                       onChange={(e) => setConfiguredModelUrl(e.target.value)}
-                      placeholder="https://quantumclaw.net/ollama/api/chat"
+                      placeholder={DEFAULT_MODEL_URL}
                       className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-cyan-500"
                     />
                     <Button
@@ -2950,11 +3045,21 @@ export default function Dashboard({
                       onClick={() => {
                         setConfiguredModelUrl(DEFAULT_MODEL_URL);
                         localStorage.setItem("ai_model_url", DEFAULT_MODEL_URL);
-                        toast.success("Loaded QuantumClaw Remote default");
+                        toast.success("Loaded LAN Ollama default");
                       }}
                       className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 hover:border-cyan-500 text-cyan-300 font-bold"
                     >
-                      ⚡ QuantumClaw Remote (https://quantumclaw.net/ollama/api/chat)
+                      🏠 LAN Ollama 192.168.1.100 (Default)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setConfiguredModelUrl(QUANTUMCLAW_FALLBACK_URL);
+                        localStorage.setItem("ai_model_url", QUANTUMCLAW_FALLBACK_URL);
+                        toast.success("Loaded QuantumClaw Remote fallback");
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 hover:border-cyan-500 text-cyan-300 font-bold"
+                    >
+                      ⚡ QuantumClaw Remote (Fallback)
                     </button>
                     <button
                       onClick={() => {
@@ -3006,185 +3111,7 @@ export default function Dashboard({
               </CardContent>
             </Card>
           </TabsContent>
-          <TabsContent value="collab" className="space-y-4 pb-8">
-            <TabContextualSettingsBar
-              tabType="collab"
-              title="AI Collaboration Controls"
-              badge={isLiveDesktopActive ? "SCREEN LIVE" : "SCREEN IDLE"}
-              settings={[
-                {
-                  id: "movement_mode",
-                  label: "Movement Mode",
-                  type: "select",
-                  value: movementMode,
-                  options: [
-                    { label: "Exact", value: "exact" },
-                    { label: "Variation", value: "variation" },
-                    { label: "Live", value: "live" },
-                  ],
-                  description: "Choose how AI actions move to targets",
-                },
-                {
-                  id: "drift",
-                  label: "Drift Tolerance",
-                  type: "slider",
-                  value: driftPx,
-                  min: 0,
-                  max: 30,
-                  step: 1,
-                  unit: "px",
-                  description: "Allowed movement variation",
-                },
-                {
-                  id: "anti_loop",
-                  label: "Anti-Loop Protection",
-                  type: "switch",
-                  value: antiLoopEnabled,
-                  description: "Freeze repeated visual states",
-                },
-                {
-                  id: "auto_actor",
-                  label: "Auto-Actor Verification",
-                  type: "switch",
-                  value: autoActEnabled,
-                  description: "Verify the target before dispatch",
-                },
-              ]}
-              onSettingChange={(id, value) => {
-                if (id === "movement_mode") setMovementMode(value as typeof movementMode);
-                if (id === "drift") setDriftPx(value as number);
-                if (id === "anti_loop") setAntiLoopEnabled(value as boolean);
-                if (id === "auto_actor") setAutoActEnabled(value as boolean);
-              }}
-              quickActions={[
-                {
-                  label: isLiveDesktopActive ? "Stop Screen Share" : "Share Screen",
-                  action: () => window.dispatchEvent(new CustomEvent("trigger-hud-share")),
-                  variant: isLiveDesktopActive ? "secondary" : "default",
-                },
-                {
-                  label: isRecordMode ? "Stop Recording" : "Record Actions",
-                  action: () => setIsRecordMode((value) => !value),
-                  variant: "secondary",
-                },
-              ]}
-            />
-
-            <AICanvasScreenManager
-              currentLiveScreenshotUrl={screenshotUrl}
-              screenshots={[
-                { id: "live", name: "Current Live Screen", url: screenshotUrl, sourceType: "live" },
-                ...sequence
-                  .filter((s) => (s as any).referenceScreenshotUrl)
-                  .map((s) => ({
-                    id: `step_${s.id}`,
-                    name: `Step #${s.stepNumber}: ${s.name}`,
-                    url: (s as any).referenceScreenshotUrl,
-                    stepNumber: s.stepNumber,
-                    sourceType: "step" as const,
-                  })),
-                ...liveHistory30.slice(0, 8).map((url, idx) => ({
-                  id: `history_${idx}`,
-                  name: `Frame Bank #${idx + 1}`,
-                  url,
-                  sourceType: "strip" as const,
-                })),
-              ]}
-              activeCanvasSourceId={activeCanvasSourceId}
-              onSelectCanvasSource={(sourceId, url) => {
-                setActiveCanvasSourceId(sourceId);
-                setActiveCanvasUrl(url);
-              }}
-              selectedTab={currentTab}
-              onTabChange={handleTabSwitch}
-              onAddSequenceStep={handleAddSequenceStep}
-              show2ndHudOverlay={show2ndHudOverlay}
-              onToggle2ndHudOverlay={setShow2ndHudOverlay}
-              showLiveIn2ndHud={showLiveIn2ndHud}
-              onToggleLiveIn2ndHud={setShowLiveIn2ndHud}
-              autoActEnabled={autoActEnabled}
-              onToggleAutoAct={setAutoActEnabled}
-              activeSequenceStep={sequence[0]}
-              isRecordMode={isRecordMode}
-              liveMouseTrailCount={liveMouseTrail.length}
-            />
-
-            <Card className="bg-slate-900 border-cyan-500/40 shadow-2xl overflow-hidden">
-              <CardHeader className="p-3 bg-slate-950 border-b border-slate-800 flex flex-row items-center justify-between">
-                <CardTitle className="text-xs font-bold text-slate-100">
-                  <Monitor className="w-4 h-4 inline mr-2 text-cyan-400" />
-                  Live Screen Share & AI Targeting
-                </CardTitle>
-                <span className="text-[10px] font-mono text-cyan-300">
-                  {sequence.length} sequence steps • {targetDevice}
-                </span>
-              </CardHeader>
-              <CardContent className="p-2">
-                <LiveScreenHUD
-                  screenshotUrl={activeCanvasUrl || screenshotUrl}
-                  isCapturing={isCapturing}
-                  aiThinking={aiThinking}
-                  entities={[]}
-                  uiElements={perceptionReport?.elements || []}
-                  perceptionFeedback={perceptionReport ? {
-                    x: perceptionReport.feedbackPosition.x,
-                    y: perceptionReport.feedbackPosition.y,
-                    label: perceptionReport.primarySuggestion,
-                  } : null}
-                  verificationBadge={verificationBadge}
-                  recalibrationNotice={recalibrationNotice}
-                  sequence={sequence}
-                  activeStepId={activeStepId}
-                  isRecordMode={isRecordMode}
-                  onAddStep={handleAddSequenceStep}
-                  onRepositionStep={handleRepositionStep}
-                  onSelectStep={setActiveStepId}
-                  onLiveStreamChange={handleHudLiveChange}
-                  showSecondHudOverlay={show2ndHudOverlay}
-                  onToggleSecondHudOverlay={setShow2ndHudOverlay}
-                  secondHudActivePath={secondHudActivePath}
-                  selectedCanvasTitle={activeCanvasSourceId === "live" ? "Current Live Screen" : `Selected Screenshot (${activeCanvasSourceId})`}
-                  selectedTabName={currentTab}
-                  onMouseTrailChange={setLiveMouseTrail}
-                />
-              </CardContent>
-            </Card>
-
-            <ClickSequenceRegister
-              sequence={sequence}
-              activeStepId={activeStepId}
-              isRunning={isSequenceRunning}
-              isRecordMode={isRecordMode}
-              onToggleRecordMode={() => setIsRecordMode((value) => !value)}
-              onRunSequence={(repeatCount) => { void handleRunSequence(undefined, repeatCount); }}
-              onStopSequence={handleStopSequence}
-              onResetSequence={() => setSequence((prev) => prev.map((s) => ({ ...s, status: "pending" })))}
-              onAddStep={() => handleAddSequenceStep({ x: 960, y: 540, action: "click", name: `Step ${sequence.length + 1}` })}
-              onUpdateStep={handleUpdateStep}
-              onDeleteStep={handleDeleteStep}
-              onMoveStep={handleMoveStep}
-              onClearSequence={() => setSequence([])}
-              onSelectStep={setActiveStepId}
-            />
-
-            <DualAICopilotPanel
-              perception={perceptionReport}
-              plannerDecision={plannerDecision}
-              isAutonomousRunning={isAutonomousRunning}
-              isAnalyzing={isPerceiving}
-              userObjective={userObjective}
-              loopIntervalMs={loopIntervalMs}
-              onUserObjectiveChange={setUserObjective}
-              onLoopIntervalChange={setLoopIntervalMs}
-              onTriggerDescribe={handleTriggerDescribeScreen}
-              onTriggerPlanAndAct={handleTriggerPlanAndAct}
-              onToggleAutonomousLoop={handleToggleAutonomousLoop}
-              onSelectElementTarget={(x, y, name) => {
-                handleAddSequenceStep(x, y);
-                setAiThinking({ x, y, action: name, confidence: 0.93, isThinking: true, targetLabel: name });
-              }}
-            />
-
+          <TabsContent value="collab" className="space-y-4">
             <Card className="bg-gradient-to-r from-cyan-950/40 via-purple-950/40 to-slate-900 border-cyan-700/50 shadow-xl">
               <CardHeader className="p-4 bg-slate-950/60 border-b border-slate-800 flex flex-row items-center justify-between">
                 <CardTitle className="text-sm font-bold text-slate-100 flex items-center gap-2">
@@ -3225,13 +3152,6 @@ export default function Dashboard({
                           if (m) {
                             const x = parseInt(m[1]),
                               y = parseInt(m[2]);
-                            setAiThinking({
-                              x,
-                              y,
-                              action: collabInstruction.slice(0, 40),
-                              confidence: 0.93,
-                              isThinking: true,
-                            });
                             await executeHubTask("/api/execute-task", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
@@ -3255,10 +3175,9 @@ export default function Dashboard({
                             },
                           ]);
                           handleAddSequenceStep({
-                            x: m ? parseInt(m[1]) : 960,
-                            y: m ? parseInt(m[2]) : 540,
+                            x: aiThinking?.x || 960,
+                            y: aiThinking?.y || 540,
                             name: `Collab: ${collabInstruction.slice(0, 24)}`,
-                            action: "click",
                           } as any);
                           setCollabInstruction("");
                         }}
@@ -3317,60 +3236,34 @@ export default function Dashboard({
                   <Card className="bg-slate-900 border-slate-800 h-[420px] flex flex-col">
                     <CardHeader className="p-3 bg-slate-950 border-b border-slate-800">
                       <CardTitle className="text-xs font-bold text-slate-100">
-                        Chat History
+                        Companion Chat (memory)
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="p-3 flex-1 flex flex-col overflow-hidden">
-                      <div className="flex-1 rounded border border-slate-800 bg-slate-950 p-2 overflow-y-auto space-y-1 mb-2">
-                        {collabChat.map((m, i) => (
-                          <div
-                            key={i}
-                            className={`text-xs p-2 rounded ${m.role === "user" ? "bg-cyan-950/60 text-cyan-200 ml-8" : "bg-purple-950/40 text-purple-200 mr-8"}`}
-                          >
-                            {m.text}
-                          </div>
-                        ))}
-                      </div>
-                      <div className="flex gap-1">
-                        <Input
-                          value={collabInput}
-                          onChange={(e) => setCollabInput(e.target.value)}
-                          placeholder="Type to AI..."
-                          className="h-9 text-sm bg-slate-900 border-slate-700 flex-1"
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              if (!collabInput.trim()) return;
-                              setCollabChat((prev) => [
-                                ...prev,
-                                { role: "user", text: collabInput },
-                                {
-                                  role: "ai",
-                                  text: `Noted: ${collabInput.slice(0, 40)}`,
-                                },
-                              ]);
-                              setCollabInput("");
-                            }
-                          }}
-                        />
-                        <Button
-                          size="sm"
-                          onClick={() => {
-                            if (!collabInput.trim()) return;
-                            setCollabChat((prev) => [
-                              ...prev,
-                              { role: "user", text: collabInput },
-                              {
-                                role: "ai",
-                                text: `Noted: ${collabInput.slice(0, 40)}`,
-                              },
-                            ]);
-                            setCollabInput("");
-                          }}
-                          className="h-9 text-sm bg-slate-800"
-                        >
-                          Send
-                        </Button>
-                      </div>
+                      <CompanionChatPanel
+                        currentTab={currentTab}
+                        currentScreenshot={aiLiveUrl || screenshotUrl}
+                        screenSummary={perceptionReport?.screenDescription}
+                        workflowHistory={companionRunHistory}
+                        onNavigateTab={handleTabSwitch}
+                        onShowScreenshot={(shot) => {
+                          setScreenshotUrl(shot);
+                          setAiLiveUrl(shot);
+                          handleTabSwitch("screen");
+                        }}
+                        onAttachWorkflow={handleLinkWorkflowToLiveVisionHud}
+                        onRunSteps={runCompanionSteps}
+                      />
+                    </CardContent>
+                  </Card>
+                  <Card className="bg-slate-900 border-slate-800">
+                    <CardHeader className="p-3 bg-slate-950 border-b border-slate-800">
+                      <CardTitle className="text-xs font-bold text-slate-100">
+                        Fix Tasks & Approvals
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-2 max-h-72 overflow-y-auto">
+                      <CompanionTasksPanel onRunSteps={runCompanionSteps} />
                     </CardContent>
                   </Card>
                   <Card className="bg-slate-900 border-slate-800">
@@ -3458,8 +3351,6 @@ export default function Dashboard({
         <CoordinateCalibrationModal
           isOpen={isCalibrationModalOpen}
           onClose={() => setIsCalibrationModalOpen(false)}
-          screenshotUrl={activeCanvasUrl || screenshotUrl}
-          targetDevice={targetDevice}
         />
 
         {/* Global System & AI Model Settings Modal */}

@@ -1,5 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
 import { centralLogHub } from "./log-hub";
+import {
+  sendQwenChatRequest,
+  buildVisionMessage,
+  toBase64Image,
+  parseModelJson,
+} from "./ai-endpoint";
 
 let genAIClient: GoogleGenAI | null = null;
 
@@ -24,6 +30,9 @@ export interface StepVerificationResult {
     y?: number;
     reason: string;
   };
+  /** True when this result is a heuristic placeholder, not model analysis. */
+  simulated?: boolean;
+  simulationReason?: string;
 }
 
 export interface StuckResolutionResult {
@@ -40,6 +49,9 @@ export interface StuckResolutionResult {
     reason: string;
   }>;
   aiExplanation: string;
+  /** True when this result is a heuristic placeholder, not model analysis. */
+  simulated?: boolean;
+  simulationReason?: string;
 }
 
 export interface CheckupEvaluationResult {
@@ -54,6 +66,9 @@ export interface CheckupEvaluationResult {
     text?: string;
     explanation: string;
   };
+  /** True when this result is a heuristic placeholder, not model analysis. */
+  simulated?: boolean;
+  simulationReason?: string;
 }
 
 export interface DetectedElement {
@@ -85,6 +100,9 @@ export interface ScreenAnalysisAndStepsResult {
   }>;
   summary: string;
   primaryActionTarget?: { x: number; y: number; label: string };
+  /** True when this result is a heuristic placeholder, not model analysis. */
+  simulated?: boolean;
+  simulationReason?: string;
 }
 
 export interface ScreenMatchResult {
@@ -99,6 +117,9 @@ export interface ScreenMatchResult {
     text?: string;
     name: string;
   };
+  /** True when this result is a heuristic placeholder, not model analysis. */
+  simulated?: boolean;
+  simulationReason?: string;
 }
 
 function cleanBase64(imageData: string): { data: string; mimeType: string } {
@@ -109,6 +130,85 @@ function cleanBase64(imageData: string): { data: string; mimeType: string } {
     }
   }
   return { mimeType: "image/jpeg", data: imageData };
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Marks a result as a heuristic placeholder so the UI can label it, never as real analysis. */
+export function simulatedMarker(reason: string): { simulated: true; simulationReason: string } {
+  return { simulated: true, simulationReason: reason };
+}
+
+/** Screen match that could not be evaluated: never claims a match or a score. */
+function unverifiedScreenMatch(reason: string): ScreenMatchResult {
+  return {
+    matched: false,
+    similarityScore: 0,
+    reason: `Not compared: ${reason}`,
+    identifiedElements: [],
+    ...simulatedMarker(reason),
+  };
+}
+
+/** Visual diff that could not be evaluated: asks for intervention instead of proceeding. */
+function unverifiedVisualDiff(targetCoords: { x: number; y: number }, reason: string): VisualDiffAndDriftResult {
+  return {
+    similarityScore: 0,
+    driftDetected: false,
+    driftVector: { deltaX: 0, deltaY: 0 },
+    originalCoordinates: targetCoords,
+    autoPositionedCoordinates: targetCoords,
+    differences: [],
+    aiInterventionRequired: true,
+    interventionReason: `Not evaluated: ${reason}`,
+    recommendedAction: "stalled_abort",
+    ...simulatedMarker(reason),
+  };
+}
+
+/**
+ * Runs a vision+JSON prompt through Gemini when GEMINI_API_KEY is configured,
+ * otherwise through the Qwen vision-language model, and returns the parsed
+ * JSON reply.
+ */
+export async function generateVisionJson(
+  prompt: string,
+  images: string[],
+): Promise<any> {
+  const ai = getGenAIClient();
+
+  if (ai) {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            ...images.map((imageData) => {
+              const { data, mimeType } = cleanBase64(imageData);
+              return { inlineData: { data, mimeType } };
+            }),
+            { text: prompt },
+          ],
+        },
+      ],
+    });
+
+    return parseModelJson(response.text || "");
+  }
+
+  const message =
+    images.length === 1
+      ? buildVisionMessage(prompt, images[0])
+      : { role: "user" as const, content: prompt, images: images.map(toBase64Image) };
+
+  const result = await sendQwenChatRequest([message], { format: "json" });
+  if (!result.success) {
+    throw new Error(result.error);
+  }
+  return parseModelJson(result.content);
 }
 
 /**
@@ -127,21 +227,20 @@ export async function verifyStepAccuracy(params: {
   };
   userObjective?: string;
 }): Promise<StepVerificationResult> {
-  const ai = getGenAIClient();
   const { imageData, step, userObjective = "Automate user task on screen" } = params;
 
-  if (!ai || !imageData) {
+  if (!imageData) {
     return {
-      verified: true,
-      accuracyScore: 0.88,
-      status: "verified",
-      analysis: "Heuristic verification passed (Gemini API key not configured).",
+      verified: false,
+      accuracyScore: 0,
+      status: "missed",
+      analysis: "Not verified: no screenshot was captured, so no AI verification ran.",
       goalFinished: false,
+      ...simulatedMarker("No screenshot supplied; step was not visually verified."),
     };
   }
 
   try {
-    const imgPart = cleanBase64(imageData);
     const prompt = `You are a precision AI Quality Inspector for GUI and desktop computer automation.
 An action was just physically executed:
 - Action Type: ${step.action}
@@ -170,22 +269,7 @@ Return a STRICT JSON response only (no markdown, no backticks, just valid JSON):
 "status" must be one of: "verified", "missed", "obstructed", "completed_early".
 "goalFinished": set true if the overall task goal is visibly 100% finished on screen.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { inlineData: { data: imgPart.data, mimeType: imgPart.mimeType } },
-            { text: prompt },
-          ],
-        },
-      ],
-    });
-
-    const text = response.text?.trim() || "";
-    const cleanJson = text.replace(/^```(json)?\n?|\n?```$/g, "").trim();
-    const parsed = JSON.parse(cleanJson);
+    const parsed = await generateVisionJson(prompt, [imageData]);
 
     centralLogHub.addLog(
       "AI-Verifier",
@@ -196,20 +280,22 @@ Return a STRICT JSON response only (no markdown, no backticks, just valid JSON):
 
     return {
       verified: Boolean(parsed.verified),
-      accuracyScore: Number(parsed.accuracyScore) || 0.9,
+      accuracyScore: Number(parsed.accuracyScore) || 0,
       status: parsed.status || (parsed.verified ? "verified" : "missed"),
       analysis: parsed.analysis || "Verification completed.",
       goalFinished: Boolean(parsed.goalFinished),
       suggestedCorrection: parsed.suggestedCorrection || undefined,
+      simulated: false,
     };
   } catch (err) {
-    centralLogHub.addLog("AI-Verifier", "WARN", `AI Verification fallback: ${err instanceof Error ? err.message : String(err)}`);
+    centralLogHub.addLog("AI-Verifier", "WARN", `AI Verification fallback: ${errorText(err)}`);
     return {
-      verified: true,
-      accuracyScore: 0.85,
-      status: "verified",
-      analysis: `Heuristic fallback verification: ${err instanceof Error ? err.message : String(err)}`,
+      verified: false,
+      accuracyScore: 0,
+      status: "missed",
+      analysis: `Not verified: AI model unavailable (${errorText(err)}).`,
       goalFinished: false,
+      ...simulatedMarker(`AI model unavailable: ${errorText(err)}`),
     };
   }
 }
@@ -226,7 +312,6 @@ export async function resolveStuckState(params: {
   targetSeconds?: number;
   lastError?: string;
 }): Promise<StuckResolutionResult> {
-  const ai = getGenAIClient();
   const {
     imageData,
     currentStep,
@@ -236,21 +321,21 @@ export async function resolveStuckState(params: {
     lastError = "Task took longer than anticipated or element unresponsive",
   } = params;
 
-  if (!ai || !imageData) {
+  if (!imageData) {
     return {
+      ...simulatedMarker("No screenshot supplied; recovery actions are a generic heuristic."),
       isStuck: true,
       reason: "Execution time limit or element timeout reached.",
       obstacleType: "unresponsive",
+      // No capture means no visual evidence: never recommend a positional action blindly.
       recommendedActions: [
         { action: "wait", delayMs: 1000, reason: "Allow UI to stabilize" },
-        { action: "click", x: 960, y: 540, reason: "Focus window" },
       ],
-      aiExplanation: "Standard recovery heuristic applied.",
+      aiExplanation: "No screen capture available; only a non-positional wait is recommended until a fresh capture can be analyzed.",
     };
   }
 
   try {
-    const imgPart = cleanBase64(imageData);
     const prompt = `You are an autonomous cognitive automation troubleshooter.
 The user's automation workflow is STUCK or took too long:
 - User Objective: "${userObjective}"
@@ -276,22 +361,7 @@ Return a STRICT JSON response only:
 
 "obstacleType" must be one of: "modal_popup", "loading_spinner", "target_shifted", "unresponsive", "none".`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { inlineData: { data: imgPart.data, mimeType: imgPart.mimeType } },
-            { text: prompt },
-          ],
-        },
-      ],
-    });
-
-    const text = response.text?.trim() || "";
-    const cleanJson = text.replace(/^```(json)?\n?|\n?```$/g, "").trim();
-    const parsed = JSON.parse(cleanJson);
+    const parsed = await generateVisionJson(prompt, [imageData]);
 
     centralLogHub.addLog(
       "AI-StuckResolver",
@@ -305,6 +375,7 @@ Return a STRICT JSON response only:
       obstacleType: parsed.obstacleType || "unresponsive",
       recommendedActions: Array.isArray(parsed.recommendedActions) ? parsed.recommendedActions : [],
       aiExplanation: parsed.aiExplanation || "Corrective actions planned.",
+      simulated: false,
     };
   } catch (err) {
     centralLogHub.addLog("AI-StuckResolver", "ERROR", `Stuck resolution error: ${err instanceof Error ? err.message : String(err)}`);
@@ -315,7 +386,8 @@ Return a STRICT JSON response only:
       recommendedActions: [
         { action: "click", x: 960, y: 540, reason: "Click center to restore active focus" },
       ],
-      aiExplanation: "Fallback unstick sequence engaged.",
+      aiExplanation: "Generic fallback unstick sequence (AI model unavailable).",
+      ...simulatedMarker(`AI model unavailable: ${errorText(err)}`),
     };
   }
 }
@@ -342,12 +414,13 @@ export async function evaluateCheckupAndCompletion(params: {
 
   const timeExceeded = elapsedSeconds >= maxSeconds;
 
-  if (!ai || !imageData) {
+  if (!imageData) {
     return {
       isFinished: remainingStepCount === 0 || timeExceeded,
       nothingLeftToDo: remainingStepCount === 0,
       timeExceeded,
-      summary: `Checkup complete at ${elapsedSeconds}s. Remaining steps: ${remainingStepCount}.`,
+      summary: `Checkup at ${elapsedSeconds}s from step counts only (no screenshot). Remaining steps: ${remainingStepCount}.`,
+      ...simulatedMarker("No screenshot supplied; completion inferred from step counts, not AI analysis."),
     };
   }
 
@@ -373,22 +446,7 @@ Return a STRICT JSON response only:
   "recommendedNextAction": null
 }`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { inlineData: { data: imgPart.data, mimeType: imgPart.mimeType } },
-            { text: prompt },
-          ],
-        },
-      ],
-    });
-
-    const text = response.text?.trim() || "";
-    const cleanJson = text.replace(/^```(json)?\n?|\n?```$/g, "").trim();
-    const parsed = JSON.parse(cleanJson);
+    const parsed = await generateVisionJson(prompt, [imageData]);
 
     centralLogHub.addLog(
       "AI-Checkup",
@@ -402,13 +460,15 @@ Return a STRICT JSON response only:
       timeExceeded,
       summary: parsed.summary || "Checkup evaluation finished.",
       recommendedNextAction: parsed.recommendedNextAction || undefined,
+      simulated: false,
     };
   } catch (err) {
     return {
       isFinished: remainingStepCount === 0 || timeExceeded,
       nothingLeftToDo: remainingStepCount === 0,
       timeExceeded,
-      summary: `Checkup fallback: ${err instanceof Error ? err.message : String(err)}`,
+      summary: `Checkup from step counts only; AI model unavailable (${errorText(err)}).`,
+      ...simulatedMarker(`AI model unavailable: ${errorText(err)}`),
     };
   }
 }
@@ -422,8 +482,8 @@ export async function detectScreenElementsAndSteps(params: {
   const { imageData, screenWidth = 1920, screenHeight = 1080, objective = "Detect interactive elements and auto-generate sequence steps" } = params;
   const ai = getGenAIClient();
 
-  if (!ai || !imageData) {
-    // Fallback heuristic detection if API key not available or no image
+  if (!imageData) {
+    // Fallback heuristic detection only when no image was supplied
     const fallbackElements: DetectedElement[] = [
       {
         id: `elem_${Date.now()}_1`,
@@ -434,7 +494,7 @@ export async function detectScreenElementsAndSteps(params: {
         width: 140,
         height: 44,
         suggestedAction: "click",
-        confidence: 0.9,
+        confidence: 0,
         description: "Standard primary action target located near center-bottom canvas",
       },
       {
@@ -447,7 +507,7 @@ export async function detectScreenElementsAndSteps(params: {
         height: 40,
         suggestedAction: "clear_and_type",
         suggestedTextPayload: "search query",
-        confidence: 0.88,
+        confidence: 0,
         description: "Text input bar located in the upper header region",
       },
       {
@@ -459,7 +519,7 @@ export async function detectScreenElementsAndSteps(params: {
         width: 100,
         height: 36,
         suggestedAction: "click",
-        confidence: 0.85,
+        confidence: 0,
         description: "Navigation route switch tab",
       },
     ];
@@ -477,8 +537,9 @@ export async function detectScreenElementsAndSteps(params: {
         delayMs: 400,
         description: el.description,
       })),
-      summary: "Identified 3 interactive UI targets using geometric screen heuristics.",
+      summary: "Placeholder targets from fixed screen geometry; no screenshot was analyzed.",
       primaryActionTarget: { x: fallbackElements[0].x, y: fallbackElements[0].y, label: fallbackElements[0].name },
+      ...simulatedMarker("No screenshot supplied; elements are geometric placeholders, not detections."),
     };
   }
 
@@ -532,22 +593,7 @@ Return a STRICT JSON response ONLY without markdown:
   "primaryActionTarget": { "x": 960, "y": 620, "label": "Main Target" }
 }`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { inlineData: { data: imgPart.data, mimeType: imgPart.mimeType } },
-            { text: prompt },
-          ],
-        },
-      ],
-    });
-
-    const text = response.text?.trim() || "";
-    const cleanJson = text.replace(/^```(json)?\n?|\n?```$/g, "").trim();
-    const parsed = JSON.parse(cleanJson);
+    const parsed = await generateVisionJson(prompt, [imageData]);
 
     centralLogHub.addLog(
       "Screen-Detection",
@@ -560,46 +606,15 @@ Return a STRICT JSON response ONLY without markdown:
       suggestedSteps: parsed.suggestedSteps || [],
       summary: parsed.summary || "Screen detection completed.",
       primaryActionTarget: parsed.primaryActionTarget || undefined,
+      simulated: false,
     };
   } catch (err) {
     centralLogHub.addLog(
       "Screen-Detection",
       "WARN",
-      `Screen detection fallback: ${err instanceof Error ? err.message : String(err)}`
+      `Screen detection failed: ${err instanceof Error ? err.message : String(err)}`
     );
-
-    const fallbackElements: DetectedElement[] = [
-      {
-        id: `elem_${Date.now()}_1`,
-        name: "Detected Interactive Center",
-        type: "button",
-        x: Math.round(screenWidth * 0.5),
-        y: Math.round(screenHeight * 0.5),
-        width: 120,
-        height: 40,
-        suggestedAction: "click",
-        confidence: 0.8,
-        description: "Center interactive target",
-      },
-    ];
-
-    return {
-      elements: fallbackElements,
-      suggestedSteps: [
-        {
-          id: `step_${Date.now()}_1`,
-          stepNumber: 1,
-          name: "Click Detected Target",
-          action: "click",
-          x: fallbackElements[0].x,
-          y: fallbackElements[0].y,
-          delayMs: 500,
-          description: "Click primary target",
-        },
-      ],
-      summary: "AI vision fallback generated 1 target.",
-      primaryActionTarget: { x: fallbackElements[0].x, y: fallbackElements[0].y, label: "Center Target" },
-    };
+    throw err;
   }
 }
 
@@ -612,20 +627,9 @@ export async function compareScreensForMatch(params: {
   const { currentScreen, expectedScreen, expectedStepLabel = "Next automation step", threshold = 0.75 } = params;
   const ai = getGenAIClient();
 
-  if (!ai || !currentScreen || !expectedScreen) {
+  if (!currentScreen || !expectedScreen) {
     // If either image is missing or AI is unavailable, use heuristic comparison
-    return {
-      matched: true,
-      similarityScore: 0.88,
-      reason: "Heuristic screen match approved: visual dimensions and viewport structure align.",
-      identifiedElements: ["Header Nav", "Target Button", "Active Canvas"],
-      suggestedNextStep: {
-        action: "click",
-        x: 960,
-        y: 540,
-        name: `Auto-Act on ${expectedStepLabel}`,
-      },
-    };
+    return unverifiedScreenMatch("Both screenshots are required; no comparison ran.");
   }
 
   try {
@@ -656,25 +660,10 @@ Return a STRICT JSON response ONLY:
   }
 }`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: "Image 1 (Current Live Screen):" },
-            { inlineData: { data: curImg.data, mimeType: curImg.mimeType } },
-            { text: "Image 2 (Expected Target Screen):" },
-            { inlineData: { data: expImg.data, mimeType: expImg.mimeType } },
-            { text: prompt },
-          ],
-        },
-      ],
-    });
-
-    const text = response.text?.trim() || "";
-    const cleanJson = text.replace(/^```(json)?\n?|\n?```$/g, "").trim();
-    const parsed = JSON.parse(cleanJson);
+    const parsed = await generateVisionJson(
+      `Image 1 is the current live screen; image 2 is the expected target screen.\n${prompt}`,
+      [currentScreen, expectedScreen],
+    );
 
     const matched = Boolean(parsed.matched && (parsed.similarityScore ?? 0) >= threshold);
 
@@ -686,10 +675,11 @@ Return a STRICT JSON response ONLY:
 
     return {
       matched,
-      similarityScore: parsed.similarityScore ?? 0.8,
+      similarityScore: Number(parsed.similarityScore) || 0,
       reason: parsed.reason || "Screen match evaluated.",
       identifiedElements: parsed.identifiedElements || [],
       suggestedNextStep: parsed.suggestedNextStep || undefined,
+      simulated: false,
     };
   } catch (err) {
     centralLogHub.addLog(
@@ -698,18 +688,7 @@ Return a STRICT JSON response ONLY:
       `Screen match fallback evaluation: ${err instanceof Error ? err.message : String(err)}`
     );
 
-    return {
-      matched: true,
-      similarityScore: 0.85,
-      reason: "Visual comparison fallback: Screen state verified compatible with pending step.",
-      identifiedElements: ["Target UI Region"],
-      suggestedNextStep: {
-        action: "click",
-        x: 960,
-        y: 540,
-        name: `Auto-Act on ${expectedStepLabel}`,
-      },
-    };
+    return unverifiedScreenMatch(`AI model unavailable: ${errorText(err)}`);
   }
 }
 
@@ -734,6 +713,9 @@ export interface VisualDiffAndDriftResult {
     y: number;
     text?: string;
   };
+  /** True when this result is a heuristic placeholder, not model analysis. */
+  simulated?: boolean;
+  simulationReason?: string;
 }
 
 /**
@@ -761,23 +743,8 @@ export async function detectVisualErrorsAndDifferenceMapping(params: {
 
   const ai = getGenAIClient();
 
-  if (!ai || !expectedImage || !responseImage) {
-    return {
-      similarityScore: 0.89,
-      driftDetected: false,
-      driftVector: { deltaX: 0, deltaY: 0 },
-      originalCoordinates: targetCoords,
-      autoPositionedCoordinates: targetCoords,
-      differences: [
-        {
-          description: "Visual verification completed with minimal delta.",
-          area: "Target Area",
-          severity: "low",
-        },
-      ],
-      aiInterventionRequired: false,
-      recommendedAction: "proceed",
-    };
+  if (!expectedImage || !responseImage) {
+    return unverifiedVisualDiff(targetCoords, "Both images are required; no visual diff ran.");
   }
 
   try {
@@ -811,25 +778,7 @@ Return a STRICT JSON response ONLY:
   "suggestedNewStep": null
 }`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType: expClean.mimeType, data: expClean.data } },
-            { inlineData: { mimeType: respClean.mimeType, data: respClean.data } },
-          ],
-        },
-      ],
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
-
-    const text = response.text?.trim() || "{}";
-    const parsed = JSON.parse(text);
+    const parsed = await generateVisionJson(prompt, [expectedImage, responseImage]);
 
     const driftX = Number(parsed.driftVector?.deltaX) || 0;
     const driftY = Number(parsed.driftVector?.deltaY) || 0;
@@ -849,7 +798,7 @@ Return a STRICT JSON response ONLY:
     );
 
     return {
-      similarityScore: typeof parsed.similarityScore === "number" ? parsed.similarityScore : 0.85,
+      similarityScore: typeof parsed.similarityScore === "number" ? parsed.similarityScore : 0,
       driftDetected,
       driftVector: { deltaX: driftX, deltaY: driftY },
       originalCoordinates: targetCoords,
@@ -859,6 +808,7 @@ Return a STRICT JSON response ONLY:
       interventionReason: parsed.interventionReason || undefined,
       recommendedAction: parsed.recommendedAction || (driftDetected ? "reposition_and_retry" : "proceed"),
       suggestedNewStep: parsed.suggestedNewStep || undefined,
+      simulated: false,
     };
   } catch (err) {
     centralLogHub.addLog(
@@ -867,16 +817,7 @@ Return a STRICT JSON response ONLY:
       `Visual diff fallback: ${err instanceof Error ? err.message : String(err)}`
     );
 
-    return {
-      similarityScore: 0.88,
-      driftDetected: false,
-      driftVector: { deltaX: 0, deltaY: 0 },
-      originalCoordinates: targetCoords,
-      autoPositionedCoordinates: targetCoords,
-      differences: [{ description: "Visual diff evaluation completed.", area: "Screen", severity: "low" }],
-      aiInterventionRequired: false,
-      recommendedAction: "proceed",
-    };
+    return unverifiedVisualDiff(targetCoords, `AI model unavailable: ${errorText(err)}`);
   }
 }
 
